@@ -3,13 +3,13 @@ import {
   Color3,
   Color4,
   DirectionalLight,
+  HemisphericLight,
   LinesMesh,
   Matrix,
   Mesh,
   MeshBuilder,
   MirrorTexture,
   PBRMaterial,
-  Plane,
   PointLight,
   PointerEventTypes,
   Scene,
@@ -44,6 +44,9 @@ interface PlotVisual {
 interface PointLightVisual {
   light: PointLight;
   gizmo: Mesh;
+  pickShell: Mesh;
+  halo: Mesh;
+  starLines: LinesMesh[];
   shadow: ShadowGenerator | null;
 }
 
@@ -59,6 +62,10 @@ type DragState =
       objectId: string;
       mode: 'z';
       startPosition: Vector3;
+      fixedX: number;
+      fixedY: number;
+      zOffset: number;
+      fallbackScale: number;
       startClientY: number;
     };
 
@@ -66,12 +73,15 @@ export class SceneController {
   private engine: WebGPUEngine | null = null;
   private scene: Scene | null = null;
   private camera: ArcRotateCamera | null = null;
+  private ambientLight: HemisphericLight | null = null;
   private directionalLight: DirectionalLight | null = null;
   private directionalShadow: ShadowGenerator | null = null;
-  private plotRoot = new TransformNode('plots-root');
-  private lightRoot = new TransformNode('lights-root');
+  private plotRoot: TransformNode | null = null;
+  private lightRoot: TransformNode | null = null;
   private groundMesh: Mesh | null = null;
   private gridMesh: Mesh | null = null;
+  private xyGridLines: LinesMesh[] = [];
+  private xyGridKey = '';
   private axesMeshes: LinesMesh[] = [];
   private groundMirror: MirrorTexture | null = null;
   private plotVisuals = new Map<string, PlotVisual>();
@@ -82,10 +92,14 @@ export class SceneController {
   private qualityProgressCounter = 0;
   private lastQualitySignature = '';
   private meshHashCache = new Map<string, string>();
+  private disposed = false;
+  private renderLoopFailed = false;
+  private engineInitialized = false;
 
   constructor(private readonly canvas: HTMLCanvasElement) {}
 
   async init(): Promise<void> {
+    this.disposed = false;
     if (!(navigator as Navigator & { gpu?: GPU }).gpu) {
       throw new Error('WebGPU is not available in this browser');
     }
@@ -96,6 +110,11 @@ export class SceneController {
       stencil: true,
     });
     await this.engine.initAsync();
+    this.engineInitialized = true;
+    if (this.disposed) {
+      this.safeDisposeEngine();
+      throw new Error('Viewport initialization was canceled');
+    }
 
     this.scene = new Scene(this.engine);
     this.scene.clearColor = new Color4(0, 0, 0, 0);
@@ -118,6 +137,12 @@ export class SceneController {
       pointerInput.panningMouseButton = -1;
     }
 
+    this.ambientLight = new HemisphericLight('ambient-hemi', new Vector3(0, 0, 1), this.scene);
+    this.ambientLight.intensity = 0.35;
+    this.ambientLight.diffuse = Color3.White();
+    this.ambientLight.specular = Color3.White().scale(0.15);
+    this.ambientLight.groundColor = new Color3(0.08, 0.08, 0.1);
+
     this.directionalLight = new DirectionalLight('sun', new Vector3(-0.6, -0.4, -1).normalize(), this.scene);
     this.directionalLight.position = new Vector3(10, 10, 18);
     this.directionalShadow = new ShadowGenerator(2048, this.directionalLight);
@@ -132,14 +157,27 @@ export class SceneController {
     this.canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 
     this.engine.runRenderLoop(() => {
-      this.tickQualityCounter();
-      this.scene?.render();
+      if (this.renderLoopFailed || this.disposed) {
+        return;
+      }
+      try {
+        this.tickQualityCounter();
+        this.scene?.render();
+      } catch (error) {
+        this.renderLoopFailed = true;
+        const message = error instanceof Error ? error.message : 'Unknown Babylon render error';
+        useAppStore.getState().setStatusMessage(`Render loop error: ${message}`);
+        this.engine?.stopRenderLoop();
+        console.error('Scene render loop failed', error);
+      }
     });
 
     window.addEventListener('resize', this.handleResize);
   }
 
   dispose(): void {
+    this.disposed = true;
+    this.engine?.stopRenderLoop();
     window.removeEventListener('resize', this.handleResize);
     this.pointerObserver && this.scene?.onPointerObservable.remove(this.pointerObserver);
     this.pointerObserver = null;
@@ -152,20 +190,32 @@ export class SceneController {
     this.plotVisuals.clear();
     for (const visual of this.pointLightVisuals.values()) {
       visual.shadow?.dispose();
+      visual.pickShell.dispose(false, true);
+      visual.halo.dispose(false, true);
+      visual.starLines.forEach((line) => line.dispose(false, true));
       visual.gizmo.dispose(false, true);
       visual.light.dispose();
     }
     this.pointLightVisuals.clear();
     this.axesMeshes.forEach((m) => m.dispose(false, true));
     this.axesMeshes = [];
+    this.xyGridLines.forEach((m) => m.dispose(false, true));
+    this.xyGridLines = [];
+    this.xyGridKey = '';
     this.gridMesh?.dispose(false, true);
     this.groundMesh?.dispose(false, true);
-    this.plotRoot.dispose();
-    this.lightRoot.dispose();
-    this.scene?.dispose();
-    this.engine?.dispose();
+    this.plotRoot?.dispose();
+    this.lightRoot?.dispose();
+    this.ambientLight?.dispose();
+    try {
+      this.scene?.dispose();
+    } catch (error) {
+      console.warn('Scene dispose failed', error);
+    }
+    this.safeDisposeEngine();
     this.scene = null;
     this.engine = null;
+    this.engineInitialized = false;
   }
 
   getApi(): ViewportApi {
@@ -203,16 +253,26 @@ export class SceneController {
       return;
     }
 
+    if (this.ambientLight) {
+      const ambientColor = color3(state.scene.ambient.color);
+      this.ambientLight.intensity = state.scene.ambient.intensity;
+      this.ambientLight.diffuse = ambientColor;
+      this.ambientLight.specular = ambientColor.scale(0.15);
+      this.ambientLight.groundColor = ambientColor.scale(0.08);
+      this.ambientLight.setEnabled(state.scene.ambient.intensity > 0);
+    }
+
     this.directionalLight.diffuse = color3(state.scene.directional.color);
     this.directionalLight.specular = color3(state.scene.directional.color);
     this.directionalLight.intensity = state.scene.directional.intensity;
-    this.directionalLight.setDirectionToTarget(
-      new Vector3(
-        -state.scene.directional.direction.x,
-        -state.scene.directional.direction.y,
-        -state.scene.directional.direction.z,
-      ),
-    );
+    const dir = vec3(state.scene.directional.direction);
+    if (dir.lengthSquared() > 1e-8) {
+      dir.normalize();
+      this.directionalLight.direction.copyFrom(dir);
+      // Keep shadow/light position aligned with the direction vector relative to camera target.
+      const target = this.camera?.target ?? Vector3.ZeroReadOnly;
+      this.directionalLight.position.copyFrom(target.subtract(dir.scale(24)));
+    }
     this.directionalLight.setEnabled(state.scene.directional.castShadows || state.scene.directional.intensity > 0);
 
     const clear = state.scene.backgroundMode === 'solid' ? state.scene.backgroundColor : state.scene.gradientBottomColor;
@@ -223,9 +283,14 @@ export class SceneController {
         : `linear-gradient(${state.scene.gradientTopColor}, ${state.scene.gradientBottomColor})`;
 
     this.groundMesh.isVisible = state.scene.groundPlaneVisible;
-    this.groundMesh.scaling = new Vector3(state.scene.groundPlaneSize, state.scene.groundPlaneSize, 1);
-    this.gridMesh.isVisible = state.scene.gridVisible;
-    this.gridMesh.scaling = new Vector3(state.scene.gridExtent, state.scene.gridExtent, 1);
+    // Babylon ground geometry is created in local XZ; in our z-up app that means
+    // we rotate it into XY and scale X/Z to keep it square.
+    this.groundMesh.scaling = new Vector3(state.scene.groundPlaneSize, 1, state.scene.groundPlaneSize);
+    // GridMaterial on a rotated ground is unreliable for an XY grid in this z-up scene.
+    // We render explicit XY grid line meshes instead and keep this mesh hidden.
+    this.gridMesh.isVisible = false;
+    this.gridMesh.scaling = new Vector3(state.scene.gridExtent, 1, state.scene.gridExtent);
+    this.syncXYGridLines(state);
 
     const groundMaterial = this.groundMesh.material;
     if (groundMaterial instanceof PBRMaterial) {
@@ -238,12 +303,17 @@ export class SceneController {
 
     const gridMaterial = this.gridMesh.material;
     if (gridMaterial instanceof GridMaterial) {
-      gridMaterial.mainColor = color3(state.scene.groundPlaneColor);
-      gridMaterial.lineColor = new Color3(0.15, 0.2, 0.3);
+      // Keep grid readable when the ground plane is hidden.
+      gridMaterial.mainColor = state.scene.groundPlaneVisible
+        ? color3(state.scene.groundPlaneColor)
+        : new Color3(0.08, 0.1, 0.14);
+      gridMaterial.lineColor = state.scene.groundPlaneVisible
+        ? new Color3(0.15, 0.2, 0.3)
+        : new Color3(0.72, 0.8, 0.95);
       gridMaterial.gridRatio = Math.max(0.05, state.scene.gridSpacing);
       gridMaterial.opacity = clamp01(state.scene.gridLineOpacity);
       gridMaterial.majorUnitFrequency = 5;
-      gridMaterial.minorUnitVisibility = 0.3;
+      gridMaterial.minorUnitVisibility = state.scene.groundPlaneVisible ? 0.3 : 0.45;
     }
 
     const axesVisible = state.scene.axesVisible;
@@ -261,38 +331,91 @@ export class SceneController {
     const pointLights = state.objects.filter((o): o is PointLightObject => o.type === 'point_light');
     const seen = new Set<string>();
 
-    pointLights.forEach((lightObj, index) => {
+    pointLights.forEach((lightObj) => {
       seen.add(lightObj.id);
       let visual = this.pointLightVisuals.get(lightObj.id);
       if (!visual) {
         const light = new PointLight(`point-${lightObj.id}`, vec3(lightObj.position), this.scene!);
-        const gizmo = MeshBuilder.CreateSphere(`gizmo-${lightObj.id}`, { diameter: 0.25 }, this.scene!);
+        const gizmo = MeshBuilder.CreateSphere(`gizmo-${lightObj.id}`, { diameter: 0.16, segments: 12 }, this.scene!);
         gizmo.parent = this.lightRoot;
         gizmo.metadata = { selectableId: lightObj.id, selectableType: 'point_light' };
         gizmo.isPickable = true;
         const mat = new StandardMaterial(`gizmo-mat-${lightObj.id}`, this.scene!);
         mat.emissiveColor = new Color3(1, 0.8, 0.4);
+        mat.specularColor = Color3.Black();
         mat.disableLighting = true;
         gizmo.material = mat;
+
+        const pickShell = MeshBuilder.CreateSphere(`gizmo-pick-${lightObj.id}`, { diameter: 1.1, segments: 6 }, this.scene!);
+        pickShell.parent = gizmo;
+        pickShell.metadata = { selectableId: lightObj.id, selectableType: 'point_light' };
+        pickShell.isPickable = true;
+        pickShell.visibility = 0.001;
+        pickShell.renderingGroupId = 2;
+        const pickMat = new StandardMaterial(`gizmo-pick-mat-${lightObj.id}`, this.scene!);
+        pickMat.alpha = 0;
+        pickMat.disableLighting = true;
+        pickMat.specularColor = Color3.Black();
+        pickShell.material = pickMat;
+
+        const halo = MeshBuilder.CreateSphere(`gizmo-halo-${lightObj.id}`, { diameter: 0.38, segments: 8 }, this.scene!);
+        halo.parent = gizmo;
+        halo.isPickable = false;
+        halo.renderingGroupId = 1;
+        const haloMat = new StandardMaterial(`gizmo-halo-mat-${lightObj.id}`, this.scene!);
+        haloMat.emissiveColor = new Color3(1, 0.8, 0.4);
+        haloMat.specularColor = Color3.Black();
+        haloMat.alpha = 0.28;
+        haloMat.wireframe = true;
+        haloMat.disableLighting = true;
+        halo.material = haloMat;
+
+        const starColor = new Color3(1, 0.8, 0.4);
+        const starLines: LinesMesh[] = [];
+        const lineSegments: Vector3[][] = [
+          [new Vector3(-0.34, 0, 0), new Vector3(0.34, 0, 0)],
+          [new Vector3(0, -0.34, 0), new Vector3(0, 0.34, 0)],
+          [new Vector3(0, 0, -0.34), new Vector3(0, 0, 0.34)],
+        ];
+        lineSegments.forEach((points, idx) => {
+          const line = MeshBuilder.CreateLines(`gizmo-star-${lightObj.id}-${idx}`, { points }, this.scene!);
+          line.parent = gizmo;
+          line.isPickable = false;
+          line.color = starColor.clone();
+          line.alpha = 0.9;
+          starLines.push(line);
+        });
+
+        // Point-light shadow maps are temporarily disabled for startup compatibility.
         let shadow: ShadowGenerator | null = null;
-        if (index < 2) {
-          shadow = new ShadowGenerator(1024, light);
-          shadow.usePercentageCloserFiltering = true;
-          shadow.bias = 0.001;
-          shadow.normalBias = 0.02;
-        }
-        visual = { light, gizmo, shadow };
+        visual = { light, gizmo, pickShell, halo, starLines, shadow };
         this.pointLightVisuals.set(lightObj.id, visual);
       }
 
       visual.light.setEnabled(lightObj.visible);
       visual.gizmo.isVisible = lightObj.visible;
+      visual.pickShell.isVisible = lightObj.visible;
+      visual.halo.isVisible = lightObj.visible;
+      visual.starLines.forEach((line) => {
+        line.isVisible = lightObj.visible;
+      });
       visual.light.position.copyFrom(vec3(lightObj.position));
       visual.gizmo.position.copyFrom(vec3(lightObj.position));
       visual.light.diffuse = color3(lightObj.color);
       visual.light.specular = color3(lightObj.color);
       visual.light.intensity = lightObj.intensity;
       visual.light.range = lightObj.range;
+      const coreMat = visual.gizmo.material as StandardMaterial | null;
+      if (coreMat) {
+        coreMat.emissiveColor = color3(lightObj.color).scale(0.9).add(new Color3(0.1, 0.1, 0.1));
+      }
+      const haloMat = visual.halo.material as StandardMaterial | null;
+      if (haloMat) {
+        haloMat.emissiveColor = color3(lightObj.color);
+      }
+      visual.starLines.forEach((line) => {
+        line.color = color3(lightObj.color);
+      });
       if (visual.shadow) {
         visual.shadow.getShadowMap()?.renderList?.length;
       }
@@ -301,6 +424,9 @@ export class SceneController {
     for (const [id, visual] of this.pointLightVisuals.entries()) {
       if (!seen.has(id)) {
         visual.shadow?.dispose();
+        visual.pickShell.dispose(false, true);
+        visual.halo.dispose(false, true);
+        visual.starLines.forEach((line) => line.dispose(false, true));
         visual.gizmo.dispose(false, true);
         visual.light.dispose();
         this.pointLightVisuals.delete(id);
@@ -473,6 +599,9 @@ export class SceneController {
     pbr.subSurface.indexOfRefraction = Math.max(1, plot.material.ior);
     pbr.separateCullingPass = plot.material.opacity < 0.95;
     pbr.backFaceCulling = false;
+    // Generated parametric/implicit meshes may have arbitrary winding (and users may
+    // view the back side). Two-sided lighting prevents the \"lit side is dark\" issue.
+    pbr.twoSidedLighting = true;
     pbr.environmentIntensity = 0.9;
   }
 
@@ -484,10 +613,24 @@ export class SceneController {
     }
     for (const [id, visual] of this.pointLightVisuals.entries()) {
       const mat = visual.gizmo.material as StandardMaterial | null;
+      const haloMat = visual.halo.material as StandardMaterial | null;
+      const selected = id === selectedId;
+      const accent = selected ? new Color3(1, 0.95, 0.3) : new Color3(1, 0.75, 0.35);
       if (mat) {
-        mat.emissiveColor = id === selectedId ? new Color3(1, 0.95, 0.3) : new Color3(1, 0.75, 0.35);
+        mat.emissiveColor = accent;
       }
-      visual.gizmo.scaling.setAll(id === selectedId ? 1.4 : 1);
+      if (haloMat) {
+        haloMat.emissiveColor = accent;
+        haloMat.alpha = selected ? 0.45 : 0.28;
+      }
+      visual.starLines.forEach((line) => {
+        line.color = accent;
+        line.alpha = selected ? 1 : 0.9;
+      });
+      const distance = this.camera ? Vector3.Distance(this.camera.position, visual.gizmo.position) : 10;
+      const baseScale = clamp(distance * 0.03, 0.75, 3.5);
+      const selectedScale = selected ? 1.25 : 1;
+      visual.gizmo.scaling.setAll(baseScale * selectedScale);
     }
   }
 
@@ -500,7 +643,8 @@ export class SceneController {
     this.groundMesh = MeshBuilder.CreateGround('ground', { width: 1, height: 1, subdivisions: 1 }, this.scene);
     this.groundMesh.position.z = 0;
     this.groundMesh.rotationQuaternion = null;
-    this.groundMesh.rotation = new Vector3(0, 0, 0);
+    // Rotate Babylon's default XZ ground into the app's XY ground plane (z-up world).
+    this.groundMesh.rotation = new Vector3(Math.PI / 2, 0, 0);
     const groundMaterial = new PBRMaterial('ground-pbr', this.scene);
     groundMaterial.albedoColor = new Color3(0.95, 0.93, 0.9);
     groundMaterial.roughness = 0.35;
@@ -512,6 +656,8 @@ export class SceneController {
 
     this.gridMesh = MeshBuilder.CreateGround('grid', { width: 1, height: 1, subdivisions: 1 }, this.scene);
     this.gridMesh.position.z = 0.002;
+    this.gridMesh.rotationQuaternion = null;
+    this.gridMesh.rotation = new Vector3(Math.PI / 2, 0, 0);
     const gridMaterial = new GridMaterial('grid-mat', this.scene);
     gridMaterial.backFaceCulling = false;
     gridMaterial.majorUnitFrequency = 5;
@@ -521,12 +667,10 @@ export class SceneController {
     this.gridMesh.material = gridMaterial;
     this.gridMesh.isPickable = false;
 
+    // Temporarily disable MirrorTexture creation on startup for WebGPU compatibility.
     this.groundMirror?.dispose();
-    this.groundMirror = new MirrorTexture('ground-mirror', 1024, this.scene, true);
-    this.groundMirror.mirrorPlane = new Plane(0, 0, -1, 0.001);
-    this.groundMirror.renderList = [];
-    groundMaterial.reflectionTexture = this.groundMirror;
-    groundMaterial.reflectionTexture.level = 0.5;
+    this.groundMirror = null;
+    groundMaterial.reflectionTexture = null;
   }
 
   private createAxes(length: number): void {
@@ -545,6 +689,70 @@ export class SceneController {
     z.isPickable = false;
 
     this.axesMeshes = [x, y, z];
+  }
+
+  private syncXYGridLines(state: Pick<AppState, 'scene'>): void {
+    if (!this.scene) return;
+
+    const extent = Math.max(0.5, state.scene.gridExtent);
+    const minSpacing = Math.max(0.05, state.scene.gridSpacing);
+    const maxLineCount = 240;
+    const lineCountEstimate = Math.ceil((2 * extent) / minSpacing) + 1;
+    const spacing = lineCountEstimate > maxLineCount ? (2 * extent) / maxLineCount : minSpacing;
+    const key = `${extent.toFixed(4)}|${spacing.toFixed(4)}`;
+
+    if (this.xyGridKey !== key) {
+      this.xyGridLines.forEach((line) => line.dispose(false, true));
+      this.xyGridLines = [];
+      this.xyGridKey = key;
+
+      const z = 0.0025;
+      const start = -extent;
+      const end = extent;
+      const steps = Math.max(1, Math.floor((end - start) / spacing));
+
+      for (let i = 0; i <= steps; i += 1) {
+        const v = start + i * spacing;
+        const clamped = i === steps ? end : v;
+
+        const vertical = MeshBuilder.CreateLines(
+          `xy-grid-x-${i}`,
+          { points: [new Vector3(clamped, start, z), new Vector3(clamped, end, z)] },
+          this.scene,
+        );
+        vertical.isPickable = false;
+        this.xyGridLines.push(vertical);
+
+        const horizontal = MeshBuilder.CreateLines(
+          `xy-grid-y-${i}`,
+          { points: [new Vector3(start, clamped, z), new Vector3(end, clamped, z)] },
+          this.scene,
+        );
+        horizontal.isPickable = false;
+        this.xyGridLines.push(horizontal);
+      }
+    }
+
+    const baseColor = state.scene.groundPlaneVisible
+      ? new Color3(0.15, 0.2, 0.3)
+      : new Color3(0.72, 0.8, 0.95);
+    const majorColor = state.scene.groundPlaneVisible
+      ? new Color3(0.25, 0.32, 0.46)
+      : new Color3(0.88, 0.93, 1.0);
+    const opacity = clamp01(state.scene.gridLineOpacity);
+    const visible = state.scene.gridVisible;
+
+    const spacingForMajor = Math.max(0.05, spacing);
+    for (const line of this.xyGridLines) {
+      line.isVisible = visible;
+      line.alpha = opacity;
+      // Classify major lines from their constant coordinate encoded in the first point.
+      const p = line.getVerticesData('position');
+      const coord = p ? (Math.abs(p[0] - p[3]) < 1e-6 ? p[0] : p[1]) : 0;
+      const majorIndex = Math.round(coord / spacingForMajor);
+      const isMajor = Number.isFinite(majorIndex) && majorIndex % 5 === 0;
+      line.color = isMajor ? majorColor : baseColor;
+    }
   }
 
   private attachInputHandlers(): void {
@@ -610,10 +818,16 @@ export class SceneController {
 
     const startPosition = selected.type === 'plot' ? vec3(selected.transform.position) : vec3(selected.position);
     if (event.shiftKey) {
+      const ray = this.scene.createPickingRay(this.scene.pointerX, this.scene.pointerY, Matrix.Identity(), this.camera);
+      const axisZ = closestZOnVerticalAxisToRay(ray, startPosition.x, startPosition.y);
       this.dragState = {
         objectId: selectableId,
         mode: 'z',
         startPosition,
+        fixedX: startPosition.x,
+        fixedY: startPosition.y,
+        zOffset: axisZ === null ? 0 : startPosition.z - axisZ,
+        fallbackScale: this.camera.radius * 0.005,
         startClientY: event.clientY,
       };
       this.canvas.setPointerCapture(event.pointerId);
@@ -657,7 +871,7 @@ export class SceneController {
 
       if (this.cameraDrag.mode === 'orbit') {
         this.camera.alpha -= dx * 0.01;
-        this.camera.beta = clamp(this.camera.beta + dy * 0.01, 0.1, Math.PI - 0.1);
+        this.camera.beta = clamp(this.camera.beta - dy * 0.01, 0.1, Math.PI - 0.1);
       } else {
         const panScale = this.camera.radius * 0.002;
         const right = this.camera.getDirection(new Vector3(1, 0, 0));
@@ -681,10 +895,16 @@ export class SceneController {
       const pos = this.dragState.startPosition.add(delta);
       useAppStore.getState().setObjectPosition(current.id, { x: pos.x, y: pos.y, z: pos.z });
     } else {
-      const dy = event.clientY - this.dragState.startClientY;
-      const dz = -dy * this.camera.radius * 0.005;
       const pos = this.dragState.startPosition.clone();
-      pos.z += dz;
+      const ray = this.scene.createPickingRay(this.scene.pointerX, this.scene.pointerY, Matrix.Identity(), this.camera);
+      const axisZ = closestZOnVerticalAxisToRay(ray, this.dragState.fixedX, this.dragState.fixedY);
+      if (axisZ === null) {
+        const dy = event.clientY - this.dragState.startClientY;
+        const dz = -dy * this.dragState.fallbackScale;
+        pos.z += dz;
+      } else {
+        pos.z = axisZ + this.dragState.zOffset;
+      }
       useAppStore.getState().setObjectPosition(current.id, { x: pos.x, y: pos.y, z: pos.z });
     }
   }
@@ -708,6 +928,16 @@ export class SceneController {
   private readonly handleResize = () => {
     this.engine?.resize();
   };
+
+  private safeDisposeEngine(): void {
+    if (!this.engine) return;
+    try {
+      // Babylon WebGPU dispose can throw if initialization was interrupted mid-flight.
+      this.engine.dispose();
+    } catch (error) {
+      console.warn('Engine dispose failed (ignored)', error, { engineInitialized: this.engineInitialized });
+    }
+  }
 }
 
 function buildGeometryKey(plot: PlotObject): string {
@@ -740,6 +970,35 @@ function rayPlaneIntersectZ(ray: { origin: Vector3; direction: Vector3 }, z: num
   const t = (z - ray.origin.z) / dz;
   if (t < 0) return null;
   return ray.origin.add(ray.direction.scale(t));
+}
+
+function closestZOnVerticalAxisToRay(
+  ray: { origin: Vector3; direction: Vector3 },
+  x: number,
+  y: number,
+): number | null {
+  const d = ray.direction;
+  const o = ray.origin;
+  const a = new Vector3(x, y, 0);
+
+  // Axis line is A(t) = (x, y, 0) + t * (0,0,1)
+  const dd = Vector3.Dot(d, d);
+  const dk = d.z;
+  const rhs1 = d.x * (a.x - o.x) + d.y * (a.y - o.y) + d.z * (a.z - o.z);
+  const rhs2 = a.z - o.z;
+  const det = dd - dk * dk;
+  if (Math.abs(det) < 1e-8) {
+    return null;
+  }
+  let s = (rhs1 - rhs2 * dk) / det;
+  if (!Number.isFinite(s)) {
+    return null;
+  }
+  if (s < 0) {
+    s = 0;
+  }
+  const t = rhs2 + dk * s;
+  return Number.isFinite(t) ? t : null;
 }
 
 async function exportCanvasPng(canvas: HTMLCanvasElement, filename: string): Promise<void> {

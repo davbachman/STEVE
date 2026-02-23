@@ -302,7 +302,13 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   selectObject: (id) => set((state) => ({ ...state, selectedId: id })),
 
-  setStatusMessage: (message) => set((state) => ({ ...state, ui: { ...state.ui, statusMessage: message } })),
+  setStatusMessage: (message) =>
+    set((state) => {
+      if (state.ui.statusMessage === message) {
+        return state;
+      }
+      return { ...state, ui: { ...state.ui, statusMessage: message } };
+    }),
 
   addPlot: (template) =>
     set((state) => {
@@ -344,9 +350,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         const plot = draft.objects[idx] as PlotObject;
         plot.equation = coerceEquationSpec(plot.equation, rawText);
       });
-      next.historyPast = [...state.historyPast, snapshotOf(state)];
-      next.historyFuture = [];
-      return next;
+      return {
+        ...next,
+        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyFuture: [],
+      };
     }),
 
   setPlotClassificationOverride: (id, kind) =>
@@ -359,9 +367,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         const draftPlot = draft.objects[idx] as PlotObject;
         draftPlot.equation = coerceEquationSpec(draftPlot.equation, rawText, kind);
       });
-      next.historyPast = [...state.historyPast, snapshotOf(state)];
-      next.historyFuture = [];
-      return next;
+      return {
+        ...next,
+        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyFuture: [],
+      };
     }),
 
   updatePlotSpec: (id, updater) =>
@@ -372,9 +382,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         const plot = draft.objects[idx] as PlotObject;
         plot.equation = updater(plot.equation);
       });
-      next.historyPast = [...state.historyPast, snapshotOf(state)];
-      next.historyFuture = [];
-      return next;
+      return {
+        ...next,
+        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyFuture: [],
+      };
     }),
 
   updatePlotMaterial: (id, patch) =>
@@ -385,9 +397,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         const plot = draft.objects[idx] as PlotObject;
         plot.material = { ...plot.material, ...patch };
       });
-      next.historyPast = [...state.historyPast, snapshotOf(state)];
-      next.historyFuture = [];
-      return next;
+      return {
+        ...next,
+        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyFuture: [],
+      };
     }),
 
   applyMaterialPreset: (id, presetName) =>
@@ -400,9 +414,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         const plot = draft.objects[idx] as PlotObject;
         plot.material = { ...preset };
       });
-      next.historyPast = [...state.historyPast, snapshotOf(state)];
-      next.historyFuture = [];
-      return next;
+      return {
+        ...next,
+        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyFuture: [],
+      };
     }),
 
   updateScene: (patch) =>
@@ -587,10 +603,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     }),
 
   markQualityProgress: (samples, running) =>
-    set((state) => ({
-      ...state,
-      render: { ...state.render, qualityCurrentSamples: samples, qualityRunning: running },
-    })),
+    set((state) => {
+      if (state.render.qualityCurrentSamples === samples && state.render.qualityRunning === running) {
+        return state;
+      }
+      return {
+        ...state,
+        render: { ...state.render, qualityCurrentSamples: samples, qualityRunning: running },
+      };
+    }),
 }));
 
 function moveSelected(state: AppState, delta: { dx: number; dy: number; dz: number }): AppState {

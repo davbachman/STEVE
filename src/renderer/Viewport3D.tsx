@@ -12,26 +12,31 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
   const controllerRef = useRef<SceneController | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const sceneState = useAppStore((s) => ({
-    scene: s.scene,
-    render: s.render,
-    objects: s.objects,
-    selectedId: s.selectedId,
-  }));
+  const scene = useAppStore((s) => s.scene);
+  const render = useAppStore((s) => s.render);
+  const objects = useAppStore((s) => s.objects);
+  const selectedId = useAppStore((s) => s.selectedId);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     let disposed = false;
-    const controller = new SceneController(canvas);
+    let controller: SceneController;
+    try {
+      controller = new SceneController(canvas);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to initialize viewport');
+      onApiReady?.(null);
+      return;
+    }
     controllerRef.current = controller;
 
     void controller
       .init()
       .then(() => {
         if (disposed) return;
-        controller.sync(sceneState as Pick<AppState, 'scene' | 'render' | 'objects' | 'selectedId'>);
+        controller.sync({ scene, render, objects, selectedId } as Pick<AppState, 'scene' | 'render' | 'objects' | 'selectedId'>);
         onApiReady?.(controller.getApi());
       })
       .catch((err) => {
@@ -43,15 +48,19 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
     return () => {
       disposed = true;
       onApiReady?.(null);
-      controller.dispose();
+      try {
+        controller.dispose();
+      } catch (err) {
+        console.error('Viewport cleanup failed', err);
+      }
       controllerRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    controllerRef.current?.sync(sceneState as Pick<AppState, 'scene' | 'render' | 'objects' | 'selectedId'>);
-  }, [sceneState]);
+    controllerRef.current?.sync({ scene, render, objects, selectedId } as Pick<AppState, 'scene' | 'render' | 'objects' | 'selectedId'>);
+  }, [scene, render, objects, selectedId]);
 
   return (
     <div className="viewport-shell">
@@ -63,12 +72,12 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
           <p>Use a desktop browser with WebGPU enabled (Chrome/Edge/Safari Technology Preview).</p>
         </div>
       ) : null}
-      {sceneState.render.mode === 'quality' ? (
+      {render.mode === 'quality' ? (
         <div className="viewport-overlay viewport-overlay--quality">
           <div>Quality Render Mode (progressive prototype)</div>
           <div>
-            Samples: {sceneState.render.qualityCurrentSamples} / {sceneState.render.qualitySamplesTarget}
-            {sceneState.render.qualityRunning ? ' (running)' : ' (idle)'}
+            Samples: {render.qualityCurrentSamples} / {render.qualitySamplesTarget}
+            {render.qualityRunning ? ' (running)' : ' (idle)'}
           </div>
           <div>Path-traced quality mode is scaffolded; current build uses a progressive placeholder counter.</div>
         </div>
