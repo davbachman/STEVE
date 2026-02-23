@@ -5,7 +5,9 @@ import type {
   EquationSpec,
   HistorySnapshot,
   PlotObject,
+  PointLightObject,
   ProjectFileV1,
+  RenderDiagnostics,
   SceneObject,
   SceneSettings,
   RenderSettings,
@@ -37,6 +39,7 @@ interface AppStateShape {
     statusMessage: string | null;
     qualityModeImplemented: boolean;
   };
+  renderDiagnostics: RenderDiagnostics;
   historyPast: HistorySnapshot[];
   historyFuture: HistorySnapshot[];
 }
@@ -52,6 +55,7 @@ interface AppActions {
   updatePlotSpec: (id: UUID, updater: (spec: EquationSpec) => EquationSpec) => void;
   updatePlotMaterial: (id: UUID, patch: Partial<PlotObject['material']>) => void;
   applyMaterialPreset: (id: UUID, presetName: string) => void;
+  updatePointLight: (id: UUID, patch: Partial<PointLightObject>) => void;
   updateScene: (patch: Partial<SceneSettings>) => void;
   updateSceneNested: <K extends keyof SceneSettings>(key: K, value: SceneSettings[K]) => void;
   updateRender: (patch: Partial<RenderSettings>) => void;
@@ -68,9 +72,26 @@ interface AppActions {
   undo: () => void;
   redo: () => void;
   markQualityProgress: (samples: number, running: boolean) => void;
+  setRenderDiagnostics: (diagnostics: Partial<RenderDiagnostics>) => void;
 }
 
 export type AppState = AppStateShape & AppActions;
+
+function defaultRenderDiagnostics(): RenderDiagnostics {
+  return {
+    webgpuReady: false,
+    plotCount: 0,
+    pointLightCount: 0,
+    directionalShadowEnabled: false,
+    pointShadowsEnabled: 0,
+    pointShadowLimit: 0,
+    shadowReceiver: 'none',
+    transparentPlotCount: 0,
+    shadowMapResolution: 0,
+    pointShadowMode: 'off',
+    pointShadowCapability: 'unknown',
+  };
+}
 
 function initialState(): AppStateShape {
   return {
@@ -84,6 +105,7 @@ function initialState(): AppStateShape {
       statusMessage: null,
       qualityModeImplemented: false,
     },
+    renderDiagnostics: defaultRenderDiagnostics(),
     historyPast: [],
     historyFuture: [],
   };
@@ -289,8 +311,21 @@ function normalizeImportedProject(project: ProjectFileV1): ProjectFileV1 {
   return {
     schemaVersion: 1,
     appVersion: project.appVersion ?? APP_VERSION,
-    scene: { ...defaultSceneSettings(), ...project.scene },
-    render: { ...defaultRenderSettings(), ...project.render, qualityCurrentSamples: 0, qualityRunning: false },
+    scene: {
+      ...defaultSceneSettings(),
+      ...project.scene,
+      ambient: { ...defaultSceneSettings().ambient, ...project.scene.ambient },
+      directional: { ...defaultSceneSettings().directional, ...project.scene.directional },
+      shadow: { ...defaultSceneSettings().shadow, ...(project.scene as Partial<SceneSettings>).shadow },
+      defaultGraphBounds: project.scene.defaultGraphBounds ?? structuredClone(defaultSceneSettings().defaultGraphBounds),
+    },
+    render: {
+      ...defaultRenderSettings(),
+      ...project.render,
+      qualityCurrentSamples: 0,
+      qualityRunning: false,
+      showDiagnostics: project.render?.showDiagnostics ?? defaultRenderSettings().showDiagnostics,
+    },
     objects: project.objects ?? [],
   };
 }
@@ -413,6 +448,21 @@ export const useAppStore = create<AppState>((set, get) => ({
       const next = produce(state, (draft) => {
         const plot = draft.objects[idx] as PlotObject;
         plot.material = { ...preset };
+      });
+      return {
+        ...next,
+        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyFuture: [],
+      };
+    }),
+
+  updatePointLight: (id, patch) =>
+    set((state) => {
+      const idx = state.objects.findIndex((obj) => obj.id === id && obj.type === 'point_light');
+      if (idx === -1) return state;
+      const next = produce(state, (draft) => {
+        const light = draft.objects[idx] as PointLightObject;
+        Object.assign(light, patch);
       });
       return {
         ...next,
@@ -566,6 +616,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       render: normalized.render,
       objects: normalized.objects,
       selectedId: null,
+      renderDiagnostics: defaultRenderDiagnostics(),
       historyPast: [],
       historyFuture: [],
       ui: { ...state.ui, statusMessage: 'Project loaded' },
@@ -612,6 +663,18 @@ export const useAppStore = create<AppState>((set, get) => ({
         render: { ...state.render, qualityCurrentSamples: samples, qualityRunning: running },
       };
     }),
+
+  setRenderDiagnostics: (diagnostics) =>
+    set((state) => {
+      const next = { ...state.renderDiagnostics, ...diagnostics };
+      if (shallowDiagnosticsEqual(state.renderDiagnostics, next)) {
+        return state;
+      }
+      return {
+        ...state,
+        renderDiagnostics: next,
+      };
+    }),
 }));
 
 function moveSelected(state: AppState, delta: { dx: number; dy: number; dz: number }): AppState {
@@ -638,4 +701,20 @@ function countPlots(objects: SceneObject[]): number {
 
 function countLights(objects: SceneObject[]): number {
   return objects.filter((obj) => obj.type === 'point_light').length;
+}
+
+function shallowDiagnosticsEqual(a: RenderDiagnostics, b: RenderDiagnostics): boolean {
+  return (
+    a.webgpuReady === b.webgpuReady &&
+    a.plotCount === b.plotCount &&
+    a.pointLightCount === b.pointLightCount &&
+    a.directionalShadowEnabled === b.directionalShadowEnabled &&
+    a.pointShadowsEnabled === b.pointShadowsEnabled &&
+    a.pointShadowLimit === b.pointShadowLimit &&
+    a.shadowReceiver === b.shadowReceiver &&
+    a.transparentPlotCount === b.transparentPlotCount &&
+    a.shadowMapResolution === b.shadowMapResolution &&
+    a.pointShadowMode === b.pointShadowMode &&
+    a.pointShadowCapability === b.pointShadowCapability
+  );
 }

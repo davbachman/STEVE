@@ -4,6 +4,7 @@ import { Viewport3D } from './renderer/Viewport3D';
 import type { ViewportApi } from './renderer/SceneController';
 import { useAutosave } from './hooks/useAutosave';
 import { useAppStore } from './state/store';
+import { createBuiltInTestScene } from './testing/testScenes';
 import { ObjectListPanel } from './ui/components/ObjectListPanel';
 import { InspectorPanel } from './ui/components/InspectorPanel';
 import { TopBar } from './ui/components/TopBar';
@@ -16,8 +17,19 @@ export default function App() {
   const undo = useAppStore((s) => s.undo);
   const redo = useAppStore((s) => s.redo);
   const selectObject = useAppStore((s) => s.selectObject);
+  const replaceProject = useAppStore((s) => s.replaceProject);
+  const setStatusMessage = useAppStore((s) => s.setStatusMessage);
 
   useAutosave();
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const testScene = params.get('testScene');
+    if (testScene === 'shadow-regression' || testScene === 'point-shadow-regression') {
+      replaceProject(createBuiltInTestScene(testScene));
+      setStatusMessage(`Loaded test scene: ${testScene}`);
+    }
+  }, [replaceProject, setStatusMessage]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

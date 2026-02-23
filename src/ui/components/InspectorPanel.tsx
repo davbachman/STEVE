@@ -173,14 +173,62 @@ function LightingTab({ selected }: { selected: PlotObject | PointLightObject | n
       </label>
       <RangeField label="Intensity" min={0} max={4} step={0.01} value={scene.directional.intensity} onChange={(v) => updateScene({ directional: { ...scene.directional, intensity: v } })} />
       <NumberTriplet
-        label="Direction"
+        label="Direction (points toward scene)"
         value={scene.directional.direction}
         onChange={(value) => updateScene({ directional: { ...scene.directional, direction: value } })}
       />
+      <div className="inspector-note">Directional vector uses “light rays travel in this direction” semantics (points toward the scene).</div>
       <label className="checkbox-row">
         <input type="checkbox" checked={scene.directional.castShadows} onChange={(e) => updateScene({ directional: { ...scene.directional, castShadows: e.target.checked } })} />
         Cast shadows
       </label>
+
+      <h3>Shadows</h3>
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={scene.shadow.directionalShadowEnabled}
+          onChange={(e) => updateScene({ shadow: { ...scene.shadow, directionalShadowEnabled: e.target.checked } })}
+        />
+        Directional shadows enabled
+      </label>
+      <label>
+        Point Shadows
+        <select
+          value={scene.shadow.pointShadowMode}
+          onChange={(e) =>
+            updateScene({ shadow: { ...scene.shadow, pointShadowMode: e.target.value as typeof scene.shadow.pointShadowMode } })
+          }
+        >
+          <option value="off">Off</option>
+          <option value="auto">Auto</option>
+          <option value="on">On (try)</option>
+        </select>
+      </label>
+      <RangeField
+        label="Point shadow max lights"
+        min={0}
+        max={4}
+        step={1}
+        value={scene.shadow.pointShadowMaxLights}
+        onChange={(v) => updateScene({ shadow: { ...scene.shadow, pointShadowMaxLights: Math.round(v) } })}
+      />
+      <RangeField
+        label="Shadow map resolution"
+        min={256}
+        max={4096}
+        step={256}
+        value={scene.shadow.shadowMapResolution}
+        onChange={(v) => updateScene({ shadow: { ...scene.shadow, shadowMapResolution: Math.round(v) } })}
+      />
+      <RangeField
+        label="Shadow softness"
+        min={0}
+        max={1}
+        step={0.01}
+        value={scene.shadow.shadowSoftness}
+        onChange={(v) => updateScene({ shadow: { ...scene.shadow, shadowSoftness: v } })}
+      />
 
       {selected?.type === 'point_light' ? (
         <div className="inspector-note">Selected point light can also be edited in the Object tab.</div>
@@ -232,6 +280,14 @@ function SceneTab() {
         <input type="checkbox" checked={scene.gridVisible} onChange={(e) => updateScene({ gridVisible: e.target.checked })} />
         XY grid
       </label>
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={scene.shadow.gridShadowReceiverEnabled}
+          onChange={(e) => updateScene({ shadow: { ...scene.shadow, gridShadowReceiverEnabled: e.target.checked } })}
+        />
+        Grid shadow receiver
+      </label>
       <RangeField label="Grid Extent" min={1} max={80} step={1} value={scene.gridExtent} onChange={(v) => updateScene({ gridExtent: v })} />
       <RangeField label="Grid Spacing" min={0.1} max={10} step={0.1} value={scene.gridSpacing} onChange={(v) => updateScene({ gridSpacing: v })} />
       <RangeField label="Grid Opacity" min={0} max={1} step={0.01} value={scene.gridLineOpacity} onChange={(v) => updateScene({ gridLineOpacity: v })} />
@@ -248,6 +304,7 @@ function SceneTab() {
 function RenderTab() {
   const render = useAppStore((s) => s.render);
   const updateRender = useAppStore((s) => s.updateRender);
+  const diagnostics = useAppStore((s) => s.renderDiagnostics);
   return (
     <div className="inspector-section">
       <h3>Render</h3>
@@ -281,6 +338,19 @@ function RenderTab() {
         <input type="checkbox" checked={render.denoise} onChange={(e) => updateRender({ denoise: e.target.checked })} />
         Denoise (future)
       </label>
+      <label className="checkbox-row">
+        <input type="checkbox" checked={render.showDiagnostics} onChange={(e) => updateRender({ showDiagnostics: e.target.checked })} />
+        Render diagnostics overlay
+      </label>
+      {render.showDiagnostics ? (
+        <div className="inspector-note">
+          <div>Plots: {diagnostics.plotCount}</div>
+          <div>Point lights: {diagnostics.pointLightCount}</div>
+          <div>Point shadows: {diagnostics.pointShadowsEnabled}/{diagnostics.pointShadowLimit} ({diagnostics.pointShadowMode})</div>
+          <div>Shadow receiver: {diagnostics.shadowReceiver}</div>
+          <div>Point shadow capability: {diagnostics.pointShadowCapability}</div>
+        </div>
+      ) : null}
       <div className="inspector-note">
         Interactive rendering includes PBR, shadows, ground reflections, and transmission approximations. Progressive path tracing is scaffolded and not fully implemented yet.
       </div>
@@ -329,6 +399,7 @@ function ImplicitEditor({ plot }: { plot: PlotObject }) {
 }
 
 function PointLightTabFields({ light }: { light: PointLightObject }) {
+  const updatePointLight = useAppStore((s) => s.updatePointLight);
   return (
     <div className="inspector-section">
       <label>
@@ -336,25 +407,17 @@ function PointLightTabFields({ light }: { light: PointLightObject }) {
         <input
           type="color"
           value={light.color}
-          onChange={(e) => mutatePointLight(light.id, { color: e.target.value })}
+          onChange={(e) => updatePointLight(light.id, { color: e.target.value })}
         />
       </label>
-      <RangeField label="Intensity" min={0} max={100} step={1} value={light.intensity} onChange={(v) => mutatePointLight(light.id, { intensity: v })} />
-      <RangeField label="Range" min={1} max={100} step={1} value={light.range} onChange={(v) => mutatePointLight(light.id, { range: v })} />
+      <RangeField label="Intensity" min={0} max={100} step={1} value={light.intensity} onChange={(v) => updatePointLight(light.id, { intensity: v })} />
+      <RangeField label="Range" min={1} max={100} step={1} value={light.range} onChange={(v) => updatePointLight(light.id, { range: v })} />
       <label className="checkbox-row">
-        <input type="checkbox" checked={light.castShadows} onChange={(e) => mutatePointLight(light.id, { castShadows: e.target.checked })} />
+        <input type="checkbox" checked={light.castShadows} onChange={(e) => updatePointLight(light.id, { castShadows: e.target.checked })} />
         Cast shadows
       </label>
     </div>
   );
-}
-
-function mutatePointLight(id: string, patch: Partial<PointLightObject>): void {
-  const state = useAppStore.getState();
-  useAppStore.setState({
-    ...state,
-    objects: state.objects.map((obj) => (obj.id === id && obj.type === 'point_light' ? { ...obj, ...patch } : obj)),
-  });
 }
 
 function BoundsEditor({ objectId }: { objectId?: string } = {}) {

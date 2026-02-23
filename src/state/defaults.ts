@@ -157,6 +157,14 @@ export const defaultSceneSettings = (): SceneSettings => ({
     intensity: 1.2,
     castShadows: true,
   },
+  shadow: {
+    directionalShadowEnabled: true,
+    pointShadowMode: 'auto',
+    pointShadowMaxLights: 2,
+    shadowMapResolution: 2048,
+    shadowSoftness: 0.6,
+    gridShadowReceiverEnabled: true,
+  },
 });
 
 export const defaultRenderSettings = (): RenderSettings => ({
@@ -169,6 +177,7 @@ export const defaultRenderSettings = (): RenderSettings => ({
   denoise: false,
   qualityRunning: false,
   qualityCurrentSamples: 0,
+  showDiagnostics: false,
 });
 
 function analyzedSource(rawText: string) {

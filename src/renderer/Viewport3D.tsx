@@ -16,6 +16,7 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
   const render = useAppStore((s) => s.render);
   const objects = useAppStore((s) => s.objects);
   const selectedId = useAppStore((s) => s.selectedId);
+  const diagnostics = useAppStore((s) => s.renderDiagnostics);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -80,6 +81,22 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
             {render.qualityRunning ? ' (running)' : ' (idle)'}
           </div>
           <div>Path-traced quality mode is scaffolded; current build uses a progressive placeholder counter.</div>
+        </div>
+      ) : null}
+      {render.showDiagnostics ? (
+        <div className="viewport-overlay viewport-overlay--diagnostics">
+          <div><strong>Renderer Diagnostics</strong></div>
+          <div>WebGPU: {diagnostics.webgpuReady ? 'ready' : 'not ready'}</div>
+          <div>Plots: {diagnostics.plotCount}</div>
+          <div>Point lights: {diagnostics.pointLightCount}</div>
+          <div>Directional shadows: {diagnostics.directionalShadowEnabled ? 'on' : 'off'}</div>
+          <div>
+            Point shadows: {diagnostics.pointShadowsEnabled}/{diagnostics.pointShadowLimit} ({diagnostics.pointShadowMode})
+          </div>
+          <div>Receiver: {diagnostics.shadowReceiver}</div>
+          <div>Transparent plots: {diagnostics.transparentPlotCount}</div>
+          <div>Shadow map: {diagnostics.shadowMapResolution}px</div>
+          <div>Point shadow support: {diagnostics.pointShadowCapability}</div>
         </div>
       ) : null}
     </div>

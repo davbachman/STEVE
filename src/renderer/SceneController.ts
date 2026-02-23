@@ -26,7 +26,7 @@ import {
 import { GridMaterial } from '@babylonjs/materials/grid';
 import type { AppState } from '../state/store';
 import { useAppStore } from '../state/store';
-import type { PlotObject, PointLightObject } from '../types/contracts';
+import type { PlotObject, PointLightObject, RenderDiagnostics } from '../types/contracts';
 import { compilePlotObject } from '../math/compile';
 import { buildImplicitMeshFromScalarField } from '../math/mesh/implicitMarchingTetra';
 import { buildSurfaceMesh, sampleCurve } from '../math/mesh/parametric';
@@ -48,6 +48,7 @@ interface PointLightVisual {
   halo: Mesh;
   starLines: LinesMesh[];
   shadow: ShadowGenerator | null;
+  shadowEnabled: boolean;
 }
 
 type DragState =
@@ -80,6 +81,7 @@ export class SceneController {
   private lightRoot: TransformNode | null = null;
   private groundMesh: Mesh | null = null;
   private gridMesh: Mesh | null = null;
+  private gridShadowCatcherMesh: Mesh | null = null;
   private xyGridLines: LinesMesh[] = [];
   private xyGridKey = '';
   private axesMeshes: LinesMesh[] = [];
@@ -95,6 +97,7 @@ export class SceneController {
   private disposed = false;
   private renderLoopFailed = false;
   private engineInitialized = false;
+  private pointShadowCapability: 'unknown' | 'available' | 'unavailable' = 'unknown';
 
   constructor(private readonly canvas: HTMLCanvasElement) {}
 
@@ -118,6 +121,7 @@ export class SceneController {
 
     this.scene = new Scene(this.engine);
     this.scene.clearColor = new Color4(0, 0, 0, 0);
+    this.scene.shadowsEnabled = true;
 
     this.plotRoot = new TransformNode('plots-root', this.scene);
     this.lightRoot = new TransformNode('lights-root', this.scene);
@@ -145,10 +149,10 @@ export class SceneController {
 
     this.directionalLight = new DirectionalLight('sun', new Vector3(-0.6, -0.4, -1).normalize(), this.scene);
     this.directionalLight.position = new Vector3(10, 10, 18);
-    this.directionalShadow = new ShadowGenerator(2048, this.directionalLight);
-    this.directionalShadow.usePercentageCloserFiltering = true;
-    this.directionalShadow.bias = 0.001;
-    this.directionalShadow.normalBias = 0.02;
+    this.directionalLight.autoCalcShadowZBounds = true;
+    this.directionalLight.shadowMinZ = 0.1;
+    this.directionalLight.shadowMaxZ = 200;
+    this.ensureDirectionalShadowGenerator(2048, 0.6);
 
     this.createGroundAndGrid();
     this.createAxes(6);
@@ -173,6 +177,7 @@ export class SceneController {
     });
 
     window.addEventListener('resize', this.handleResize);
+    useAppStore.getState().setRenderDiagnostics({ webgpuReady: true });
   }
 
   dispose(): void {
@@ -203,6 +208,7 @@ export class SceneController {
     this.xyGridLines = [];
     this.xyGridKey = '';
     this.gridMesh?.dispose(false, true);
+    this.gridShadowCatcherMesh?.dispose(false, true);
     this.groundMesh?.dispose(false, true);
     this.plotRoot?.dispose();
     this.lightRoot?.dispose();
@@ -216,6 +222,7 @@ export class SceneController {
     this.scene = null;
     this.engine = null;
     this.engineInitialized = false;
+    useAppStore.getState().setRenderDiagnostics({ webgpuReady: false });
   }
 
   getApi(): ViewportApi {
@@ -236,6 +243,7 @@ export class SceneController {
     this.syncLights(state);
     this.syncPlots(state);
     this.syncSelection(state.selectedId);
+    this.syncRenderDiagnostics(state);
 
     const sceneSignature = JSON.stringify({
       objects: state.objects,
@@ -252,6 +260,10 @@ export class SceneController {
     if (!this.scene || !this.directionalLight || !this.groundMesh || !this.gridMesh) {
       return;
     }
+    this.ensureDirectionalShadowGenerator(
+      clamp(Math.round(state.scene.shadow.shadowMapResolution), 256, 4096),
+      clamp01(state.scene.shadow.shadowSoftness),
+    );
 
     if (this.ambientLight) {
       const ambientColor = color3(state.scene.ambient.color);
@@ -273,7 +285,31 @@ export class SceneController {
       const target = this.camera?.target ?? Vector3.ZeroReadOnly;
       this.directionalLight.position.copyFrom(target.subtract(dir.scale(24)));
     }
-    this.directionalLight.setEnabled(state.scene.directional.castShadows || state.scene.directional.intensity > 0);
+    // Use a fixed frustum size in our z-up graphing space to avoid auto-fit misses.
+    const graphBounds = state.scene.defaultGraphBounds;
+    const graphSpanX = Math.abs(graphBounds.max.x - graphBounds.min.x);
+    const graphSpanY = Math.abs(graphBounds.max.y - graphBounds.min.y);
+    const graphSpanZ = Math.abs(graphBounds.max.z - graphBounds.min.z);
+    const shadowFrustumSize = Math.max(
+      12,
+      state.scene.gridExtent * 2.4,
+      state.scene.groundPlaneSize * 2.4,
+      graphSpanX * 1.8,
+      graphSpanY * 1.8,
+    );
+    this.directionalLight.shadowFrustumSize = shadowFrustumSize;
+    this.directionalLight.shadowMinZ = 0.1;
+    this.directionalLight.shadowMaxZ = Math.max(40, graphSpanZ * 6, shadowFrustumSize * 2);
+    this.directionalLight.shadowOrthoScale = 0.2;
+    this.directionalLight.setEnabled(state.scene.directional.intensity > 0 || state.scene.directional.castShadows);
+    const directionalShadowsActive = state.scene.directional.castShadows && state.scene.shadow.directionalShadowEnabled;
+    this.directionalLight.shadowEnabled = directionalShadowsActive;
+    if (this.directionalShadow) {
+      const shadowMap = this.directionalShadow.getShadowMap();
+      if (shadowMap) {
+        shadowMap.refreshRate = directionalShadowsActive ? 1 : 0;
+      }
+    }
 
     const clear = state.scene.backgroundMode === 'solid' ? state.scene.backgroundColor : state.scene.gradientBottomColor;
     this.scene.clearColor = Color4.FromColor3(color3(clear), 0);
@@ -283,6 +319,7 @@ export class SceneController {
         : `linear-gradient(${state.scene.gradientTopColor}, ${state.scene.gradientBottomColor})`;
 
     this.groundMesh.isVisible = state.scene.groundPlaneVisible;
+    this.groundMesh.receiveShadows = directionalShadowsActive;
     // Babylon ground geometry is created in local XZ; in our z-up app that means
     // we rotate it into XY and scale X/Z to keep it square.
     this.groundMesh.scaling = new Vector3(state.scene.groundPlaneSize, 1, state.scene.groundPlaneSize);
@@ -291,6 +328,18 @@ export class SceneController {
     this.gridMesh.isVisible = false;
     this.gridMesh.scaling = new Vector3(state.scene.gridExtent, 1, state.scene.gridExtent);
     this.syncXYGridLines(state);
+      if (this.gridShadowCatcherMesh) {
+      this.gridShadowCatcherMesh.scaling = new Vector3(state.scene.gridExtent, 1, state.scene.gridExtent);
+      this.gridShadowCatcherMesh.isVisible =
+        !state.scene.groundPlaneVisible && state.scene.gridVisible && state.scene.shadow.gridShadowReceiverEnabled;
+      this.gridShadowCatcherMesh.receiveShadows = directionalShadowsActive;
+        const catcherMaterial = this.gridShadowCatcherMesh.material;
+        if (catcherMaterial instanceof StandardMaterial) {
+          catcherMaterial.alpha = state.scene.gridVisible && state.scene.shadow.gridShadowReceiverEnabled
+          ? clamp(0.12 + state.scene.gridLineOpacity * 0.18, 0.12, 0.34)
+          : 0;
+        }
+      }
 
     const groundMaterial = this.groundMesh.material;
     if (groundMaterial instanceof PBRMaterial) {
@@ -326,10 +375,26 @@ export class SceneController {
   }
 
   private syncLights(state: Pick<AppState, 'scene' | 'objects'>): void {
-    if (!this.scene || !this.directionalShadow) return;
+    if (!this.scene) return;
 
     const pointLights = state.objects.filter((o): o is PointLightObject => o.type === 'point_light');
     const seen = new Set<string>();
+    const interactiveQuality = useAppStore.getState().render.interactiveQuality;
+    const selectedId = useAppStore.getState().selectedId;
+    const shadowSettings = state.scene.shadow;
+    const allowPointShadows =
+      shadowSettings.pointShadowMode === 'on'
+      || (shadowSettings.pointShadowMode === 'auto' && interactiveQuality !== 'performance');
+    const pointShadowLimit = allowPointShadows ? clamp(Math.round(shadowSettings.pointShadowMaxLights), 0, 4) : 0;
+    const pointShadowCandidates = pointLights
+      .filter((light) => light.visible && light.castShadows && light.intensity > 0)
+      .sort((a, b) => {
+        if (a.id === selectedId) return -1;
+        if (b.id === selectedId) return 1;
+        return b.intensity - a.intensity;
+      })
+      .slice(0, pointShadowLimit);
+    const pointShadowIds = new Set(pointShadowCandidates.map((light) => light.id));
 
     pointLights.forEach((lightObj) => {
       seen.add(lightObj.id);
@@ -386,13 +451,11 @@ export class SceneController {
           starLines.push(line);
         });
 
-        // Point-light shadow maps are temporarily disabled for startup compatibility.
-        let shadow: ShadowGenerator | null = null;
-        visual = { light, gizmo, pickShell, halo, starLines, shadow };
+        visual = { light, gizmo, pickShell, halo, starLines, shadow: null, shadowEnabled: false };
         this.pointLightVisuals.set(lightObj.id, visual);
       }
 
-      visual.light.setEnabled(lightObj.visible);
+      visual.light.setEnabled(lightObj.visible && lightObj.intensity > 0);
       visual.gizmo.isVisible = lightObj.visible;
       visual.pickShell.isVisible = lightObj.visible;
       visual.halo.isVisible = lightObj.visible;
@@ -405,6 +468,8 @@ export class SceneController {
       visual.light.specular = color3(lightObj.color);
       visual.light.intensity = lightObj.intensity;
       visual.light.range = lightObj.range;
+      visual.light.shadowMinZ = 0.1;
+      visual.light.shadowMaxZ = Math.max(2, lightObj.range);
       const coreMat = visual.gizmo.material as StandardMaterial | null;
       if (coreMat) {
         coreMat.emissiveColor = color3(lightObj.color).scale(0.9).add(new Color3(0.1, 0.1, 0.1));
@@ -416,9 +481,51 @@ export class SceneController {
       visual.starLines.forEach((line) => {
         line.color = color3(lightObj.color);
       });
-      if (visual.shadow) {
-        visual.shadow.getShadowMap()?.renderList?.length;
+
+      const shouldUseShadow =
+        pointShadowIds.has(lightObj.id)
+        && shadowSettings.pointShadowMode !== 'off'
+        && this.pointShadowCapability !== 'unavailable';
+
+      if (shouldUseShadow && !visual.shadow) {
+        try {
+          visual.shadow = new ShadowGenerator(
+            clamp(Math.round(shadowSettings.shadowMapResolution), 256, 4096),
+            visual.light,
+          );
+          this.configureShadowGenerator(visual.shadow, clamp01(shadowSettings.shadowSoftness));
+          this.pointShadowCapability = 'available';
+        } catch (error) {
+          this.pointShadowCapability = 'unavailable';
+          visual.shadow?.dispose();
+          visual.shadow = null;
+          useAppStore.getState().setStatusMessage('Point-light shadows unavailable on this WebGPU/browser configuration');
+          console.warn('Point-light shadow generator creation failed', error);
+        }
       }
+      if (shouldUseShadow && visual.shadow) {
+        const desiredSize = clamp(Math.round(shadowSettings.shadowMapResolution), 256, 4096);
+        const currentSize = visual.shadow.getShadowMap()?.getSize()?.width;
+        if (currentSize !== desiredSize) {
+          visual.shadow.dispose();
+          visual.shadow = new ShadowGenerator(desiredSize, visual.light);
+        }
+      }
+      if (!shouldUseShadow && visual.shadow) {
+        visual.shadow.dispose();
+        visual.shadow = null;
+      }
+      if (visual.shadow) {
+        const map = visual.shadow.getShadowMap();
+        if (map) {
+          map.refreshRate = shouldUseShadow ? 1 : 0;
+          map.renderList = map.renderList ?? [];
+          map.renderList.length = 0;
+        }
+        this.configureShadowGenerator(visual.shadow, clamp01(shadowSettings.shadowSoftness));
+      }
+      visual.light.shadowEnabled = Boolean(visual.shadow && shouldUseShadow);
+      visual.shadowEnabled = Boolean(visual.shadow && shouldUseShadow);
     });
 
     for (const [id, visual] of this.pointLightVisuals.entries()) {
@@ -435,9 +542,28 @@ export class SceneController {
   }
 
   private syncPlots(state: Pick<AppState, 'scene' | 'objects'>): void {
-    if (!this.scene || !this.directionalShadow) return;
+    if (!this.scene) return;
     const plots = state.objects.filter((obj): obj is PlotObject => obj.type === 'plot');
     const seen = new Set<string>();
+    const directionalShadowsActive = Boolean(
+      this.directionalShadow && state.scene.directional.castShadows && state.scene.shadow.directionalShadowEnabled,
+    );
+    if (this.directionalShadow) {
+      const shadowMap = this.directionalShadow.getShadowMap();
+      if (shadowMap) {
+        shadowMap.renderList = shadowMap.renderList ?? [];
+        shadowMap.renderList.length = 0;
+      }
+    }
+    for (const pointLight of this.pointLightVisuals.values()) {
+      if (pointLight.shadow) {
+        const map = pointLight.shadow.getShadowMap();
+        if (map) {
+          map.renderList = map.renderList ?? [];
+          map.renderList.length = 0;
+        }
+      }
+    }
 
     for (const plot of plots) {
       seen.add(plot.id);
@@ -462,11 +588,15 @@ export class SceneController {
       visual.root.parent = this.plotRoot;
       visual.root.isVisible = plot.visible;
       visual.root.position.copyFrom(vec3(plot.transform.position));
-      visual.root.receiveShadows = true;
+      visual.root.receiveShadows = directionalShadowsActive || this.hasAnyPointLightShadowsEnabled();
       this.applyPlotMaterial(plot, visual.root);
-      this.directionalShadow.addShadowCaster(visual.root, true);
+      if (plot.visible && directionalShadowsActive && this.directionalShadow) {
+        this.directionalShadow.addShadowCaster(visual.root, true);
+      }
       for (const pointLight of this.pointLightVisuals.values()) {
-        pointLight.shadow?.addShadowCaster(visual.root, true);
+        if (plot.visible && pointLight.shadowEnabled) {
+          pointLight.shadow?.addShadowCaster(visual.root, true);
+        }
       }
       for (const wire of visual.wireframeLines) {
         wire.isVisible = plot.visible && Boolean(plot.material.wireframeVisible);
@@ -485,6 +615,18 @@ export class SceneController {
 
     if (this.groundMirror) {
       this.groundMirror.renderList = [...this.plotVisuals.values()].map((visual) => visual.root);
+    }
+
+    if (this.groundMesh) {
+      this.groundMesh.receiveShadows = state.scene.groundPlaneVisible && (directionalShadowsActive || this.hasAnyPointLightShadowsEnabled());
+    }
+    if (this.gridShadowCatcherMesh) {
+      this.gridShadowCatcherMesh.receiveShadows = Boolean(
+        !state.scene.groundPlaneVisible
+        && state.scene.gridVisible
+        && state.scene.shadow.gridShadowReceiverEnabled
+        && (directionalShadowsActive || this.hasAnyPointLightShadowsEnabled()),
+      );
     }
   }
 
@@ -597,12 +739,17 @@ export class SceneController {
     pbr.subSurface.isRefractionEnabled = plot.material.transmission > 0.05;
     pbr.subSurface.refractionIntensity = clamp01(plot.material.transmission);
     pbr.subSurface.indexOfRefraction = Math.max(1, plot.material.ior);
-    pbr.separateCullingPass = plot.material.opacity < 0.95;
+    const isTransparent = plot.material.opacity < 0.98 || plot.material.transmission > 0.05;
+    pbr.separateCullingPass = isTransparent;
     pbr.backFaceCulling = false;
     // Generated parametric/implicit meshes may have arbitrary winding (and users may
     // view the back side). Two-sided lighting prevents the \"lit side is dark\" issue.
     pbr.twoSidedLighting = true;
     pbr.environmentIntensity = 0.9;
+    pbr.forceDepthWrite = !isTransparent;
+    pbr.needDepthPrePass = isTransparent;
+    mesh.renderingGroupId = isTransparent ? 1 : 0;
+    mesh.alphaIndex = isTransparent ? stableAlphaIndex(plot.id) : 0;
   }
 
   private syncSelection(selectedId: string | null): void {
@@ -639,6 +786,7 @@ export class SceneController {
 
     this.groundMesh?.dispose(false, true);
     this.gridMesh?.dispose(false, true);
+    this.gridShadowCatcherMesh?.dispose(false, true);
 
     this.groundMesh = MeshBuilder.CreateGround('ground', { width: 1, height: 1, subdivisions: 1 }, this.scene);
     this.groundMesh.position.z = 0;
@@ -666,6 +814,21 @@ export class SceneController {
     gridMaterial.opacity = 0.25;
     this.gridMesh.material = gridMaterial;
     this.gridMesh.isPickable = false;
+
+    this.gridShadowCatcherMesh = MeshBuilder.CreateGround('grid-shadow-catcher', { width: 1, height: 1, subdivisions: 1 }, this.scene);
+    this.gridShadowCatcherMesh.position.z = 0.0012;
+    this.gridShadowCatcherMesh.rotationQuaternion = null;
+    this.gridShadowCatcherMesh.rotation = new Vector3(Math.PI / 2, 0, 0);
+    this.gridShadowCatcherMesh.isPickable = false;
+    this.gridShadowCatcherMesh.receiveShadows = true;
+    this.gridShadowCatcherMesh.renderingGroupId = 0;
+    const catcherMat = new StandardMaterial('grid-shadow-catcher-mat', this.scene);
+    catcherMat.diffuseColor = new Color3(0.9, 0.92, 0.98);
+    catcherMat.specularColor = Color3.Black();
+    catcherMat.emissiveColor = Color3.Black();
+    catcherMat.alpha = 0.2;
+    catcherMat.backFaceCulling = false;
+    this.gridShadowCatcherMesh.material = catcherMat;
 
     // Temporarily disable MirrorTexture creation on startup for WebGPU compatibility.
     this.groundMirror?.dispose();
@@ -909,6 +1072,86 @@ export class SceneController {
     }
   }
 
+  private ensureDirectionalShadowGenerator(resolution: number, softness: number): void {
+    if (!this.directionalLight) return;
+    const targetSize = clamp(Math.round(resolution), 256, 4096);
+    const currentSize = this.directionalShadow?.getShadowMap()?.getSize()?.width;
+    if (!this.directionalShadow || currentSize !== targetSize) {
+      this.directionalShadow?.dispose();
+      this.directionalShadow = new ShadowGenerator(targetSize, this.directionalLight);
+    }
+    this.configureShadowGenerator(this.directionalShadow, softness);
+  }
+
+  private configureShadowGenerator(shadow: ShadowGenerator, softness: number): void {
+    const s = clamp01(softness);
+    const isCubeShadow = shadow.getLight().needCube();
+    // Directional shadows need more bias to avoid acne/striping on smooth surfaces.
+    // Point (cube) shadows are more sensitive; keep bias lower and prefer compatibility over filtering.
+    if (isCubeShadow) {
+      shadow.bias = 0.00005 + s * 0.0002;
+      shadow.normalBias = 0.0006 + s * 0.0024;
+      shadow.setDarkness(0.28);
+      shadow.frustumEdgeFalloff = 0.05;
+      shadow.forceBackFacesOnly = false;
+      // Filtering modes on cube shadows can be inconsistent across WebGPU drivers.
+      // Use unfiltered shadows first for correctness/visibility.
+      shadow.usePercentageCloserFiltering = false;
+      shadow.usePoissonSampling = false;
+    } else {
+      shadow.bias = 0.00008 + s * 0.00035;
+      shadow.normalBias = 0.0012 + s * 0.0065;
+      shadow.setDarkness(0.22);
+      shadow.frustumEdgeFalloff = 0.1;
+      // Back-face shadow casting reduces surface acne on thin parametric meshes.
+      shadow.forceBackFacesOnly = true;
+      shadow.usePercentageCloserFiltering = true;
+      shadow.usePoissonSampling = false;
+    }
+    shadow.filteringQuality = s > 0.66 ? ShadowGenerator.QUALITY_HIGH : ShadowGenerator.QUALITY_MEDIUM;
+    if (shadow.getShadowMap()) {
+      shadow.getShadowMap()!.refreshRate = 1;
+    }
+  }
+
+  private hasAnyPointLightShadowsEnabled(): boolean {
+    for (const visual of this.pointLightVisuals.values()) {
+      if (visual.shadowEnabled) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private syncRenderDiagnostics(state: Pick<AppState, 'scene' | 'objects'>): void {
+    const plots = state.objects.filter((o): o is PlotObject => o.type === 'plot');
+    const pointLights = state.objects.filter((o): o is PointLightObject => o.type === 'point_light');
+    const pointShadowsEnabled = Array.from(this.pointLightVisuals.values()).filter((v) => v.shadowEnabled).length;
+    const directionalShadowEnabled = Boolean(
+      state.scene.directional.castShadows && state.scene.shadow.directionalShadowEnabled && this.directionalShadow,
+    );
+    const transparentPlotCount = plots.filter((plot) => plot.material.opacity < 0.98 || plot.material.transmission > 0.05).length;
+    const shadowReceiver: RenderDiagnostics['shadowReceiver'] = state.scene.groundPlaneVisible
+      ? 'ground'
+      : state.scene.gridVisible && state.scene.shadow.gridShadowReceiverEnabled
+        ? 'grid'
+        : 'none';
+
+    useAppStore.getState().setRenderDiagnostics({
+      webgpuReady: Boolean(this.engine && this.scene),
+      plotCount: plots.length,
+      pointLightCount: pointLights.length,
+      directionalShadowEnabled,
+      pointShadowsEnabled,
+      pointShadowLimit: state.scene.shadow.pointShadowMaxLights,
+      shadowReceiver,
+      transparentPlotCount,
+      shadowMapResolution: state.scene.shadow.shadowMapResolution,
+      pointShadowMode: state.scene.shadow.pointShadowMode,
+      pointShadowCapability: this.pointShadowCapability,
+    });
+  }
+
   private tickQualityCounter(): void {
     const { render, markQualityProgress } = useAppStore.getState();
     if (render.mode !== 'quality') {
@@ -962,6 +1205,15 @@ function clamp(value: number, min: number, max: number): number {
 
 function clamp01(value: number): number {
   return clamp(value, 0, 1);
+}
+
+function stableAlphaIndex(id: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i += 1) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return Math.abs(h % 1000);
 }
 
 function rayPlaneIntersectZ(ray: { origin: Vector3; direction: Vector3 }, z: number): Vector3 | null {

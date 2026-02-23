@@ -147,6 +147,17 @@ export interface AmbientLightSettings {
   intensity: number;
 }
 
+export type PointShadowMode = 'off' | 'auto' | 'on';
+
+export interface ShadowSettings {
+  directionalShadowEnabled: boolean;
+  pointShadowMode: PointShadowMode;
+  pointShadowMaxLights: number;
+  shadowMapResolution: number;
+  shadowSoftness: number; // 0..1
+  gridShadowReceiverEnabled: boolean;
+}
+
 export interface SceneSettings {
   backgroundMode: 'solid' | 'gradient';
   backgroundColor: string;
@@ -167,6 +178,7 @@ export interface SceneSettings {
   defaultGraphBounds: Bounds3D;
   ambient: AmbientLightSettings;
   directional: DirectionalLightSettings;
+  shadow: ShadowSettings;
 }
 
 export interface RenderSettings {
@@ -179,6 +191,7 @@ export interface RenderSettings {
   denoise: boolean;
   qualityRunning: boolean;
   qualityCurrentSamples: number;
+  showDiagnostics: boolean;
 }
 
 export type SceneObject = PlotObject | PointLightObject;
@@ -207,18 +220,55 @@ export interface ParseClassifyResult {
   warning?: string;
 }
 
+export type WorkerJobPriority = 'preview' | 'refine' | 'interactive' | 'background';
+
 export type WorkerRequest =
-  | { type: 'parse_and_classify'; objectId: UUID; rawText: string }
-  | { type: 'build_parametric_mesh'; objectId: UUID; spec: ParametricSurfaceSpec | ExplicitSurfaceSpec }
-  | { type: 'build_curve_mesh'; objectId: UUID; spec: ParametricCurveSpec }
-  | { type: 'build_implicit_mesh'; objectId: UUID; spec: ImplicitSurfaceSpec; priority: 'preview' | 'refine' }
-  | { type: 'cancel_jobs'; objectId: UUID };
+  | { type: 'parse_and_classify'; jobId: UUID; objectId: UUID; rawText: string }
+  | {
+      type: 'build_parametric_mesh';
+      jobId: UUID;
+      objectId: UUID;
+      spec: ParametricSurfaceSpec | ExplicitSurfaceSpec;
+      priority: WorkerJobPriority;
+    }
+  | { type: 'build_curve_mesh'; jobId: UUID; objectId: UUID; spec: ParametricCurveSpec; priority: WorkerJobPriority }
+  | { type: 'build_implicit_mesh'; jobId: UUID; objectId: UUID; spec: ImplicitSurfaceSpec; priority: WorkerJobPriority }
+  | { type: 'cancel_jobs'; jobId: UUID; objectId: UUID };
 
 export type WorkerResponse =
-  | { type: 'parse_result'; objectId: UUID; result: ParseClassifyResult }
-  | { type: 'mesh_preview'; objectId: UUID; mesh: SerializedMesh }
-  | { type: 'mesh_final'; objectId: UUID; mesh: SerializedMesh }
-  | { type: 'job_error'; objectId: UUID; message: string; recoverable: boolean };
+  | { type: 'parse_result'; jobId: UUID; objectId: UUID; result: ParseClassifyResult }
+  | { type: 'parse_progress'; jobId: UUID; objectId: UUID; phase: string; progress: number }
+  | { type: 'mesh_progress'; jobId: UUID; objectId: UUID; phase: string; progress: number }
+  | {
+      type: 'mesh_preview';
+      jobId: UUID;
+      objectId: UUID;
+      mesh: SerializedMesh;
+      transferables?: ArrayBuffer[];
+    }
+  | {
+      type: 'mesh_final';
+      jobId: UUID;
+      objectId: UUID;
+      mesh: SerializedMesh;
+      transferables?: ArrayBuffer[];
+    }
+  | { type: 'cancel_ack'; jobId: UUID; objectId: UUID }
+  | { type: 'job_error'; jobId: UUID; objectId: UUID; message: string; recoverable: boolean };
+
+export interface RenderDiagnostics {
+  webgpuReady: boolean;
+  plotCount: number;
+  pointLightCount: number;
+  directionalShadowEnabled: boolean;
+  pointShadowsEnabled: number;
+  pointShadowLimit: number;
+  shadowReceiver: 'ground' | 'grid' | 'none';
+  transparentPlotCount: number;
+  shadowMapResolution: number;
+  pointShadowMode: PointShadowMode;
+  pointShadowCapability: 'unknown' | 'available' | 'unavailable';
+}
 
 export interface HistorySnapshot {
   scene: SceneSettings;

@@ -372,6 +372,18 @@ input[type='color'] {
   font-size: 0.85rem;
 }
 
+.viewport-overlay--diagnostics {
+  top: 0.75rem;
+  left: auto;
+  right: 0.75rem;
+  width: min(23rem, calc(100% - 1.5rem));
+  display: grid;
+  gap: 0.12rem;
+  font-size: 0.78rem;
+  line-height: 1.25;
+  pointer-events: none;
+}
+
 .tabs {
   position: sticky;
   top: 0;
