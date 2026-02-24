@@ -1,15 +1,16 @@
 import CodeMirror from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
-import type { EquationSpec } from '../../types/contracts';
+import type { EquationSpec, PlotJobStatus } from '../../types/contracts';
 import { LatexPreview } from './LatexPreview';
 
 interface EquationEditorProps {
   equation: EquationSpec;
+  jobStatus?: PlotJobStatus;
   onChange: (rawText: string) => void;
   onOverrideKind: (kind: EquationSpec['kind']) => void;
 }
 
-export function EquationEditor({ equation, onChange, onOverrideKind }: EquationEditorProps) {
+export function EquationEditor({ equation, jobStatus, onChange, onOverrideKind }: EquationEditorProps) {
   const source = equation.source;
   const diag = source.parseErrors[0];
 
@@ -47,6 +48,29 @@ export function EquationEditor({ equation, onChange, onOverrideKind }: EquationE
           {diag.message}
         </div>
       ) : null}
+      {jobStatus && (jobStatus.parsePhase !== 'idle' || jobStatus.meshPhase !== 'idle' || jobStatus.message || jobStatus.lastError) ? (
+        <div className={`equation-editor__job equation-editor__job--${jobStatus.lastError ? 'error' : 'normal'}`}>
+          <span>
+            Parse: {labelForPhase(jobStatus.parsePhase)} | Mesh: {labelForPhase(jobStatus.meshPhase)}
+          </span>
+          {jobStatus.progress > 0 && jobStatus.progress < 1 ? (
+            <span>{Math.round(jobStatus.progress * 100)}%</span>
+          ) : null}
+          {jobStatus.lastMeshBuildMs ? <span>{jobStatus.lastMeshBuildMs} ms</span> : null}
+          {jobStatus.message ? <span>{jobStatus.message}</span> : null}
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function labelForPhase(phase: PlotJobStatus['parsePhase'] | PlotJobStatus['meshPhase']): string {
+  switch (phase) {
+    case 'mesh_preview':
+      return 'preview';
+    case 'mesh_final':
+      return 'final';
+    default:
+      return phase;
+  }
 }

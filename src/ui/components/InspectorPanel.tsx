@@ -380,6 +380,7 @@ function ImplicitEditor({ plot }: { plot: PlotObject }) {
   const updatePlotSpec = useAppStore((s) => s.updatePlotSpec);
   const spec = plot.equation;
   if (spec.kind !== 'implicit_surface') return <></>;
+  const boundsInfo = analyzeBounds(spec.bounds);
 
   return (
     <div className="inspector-section">
@@ -393,7 +394,19 @@ function ImplicitEditor({ plot }: { plot: PlotObject }) {
       </label>
       <RangeField label="Iso Value" min={-5} max={5} step={0.01} value={spec.isoValue} onChange={(v) => updatePlotSpec(plot.id, (s) => (s.kind === 'implicit_surface' ? { ...s, isoValue: v } : s))} />
       <BoundsEditor objectId={plot.id} />
-      <div className="inspector-note">Current implementation uses marching tetrahedra (uniform grid); adaptive octree is planned next.</div>
+      {!boundsInfo.valid ? (
+        <div className="inspector-note">
+          Invalid bounds: each axis must have finite values and `min &lt; max`. Meshing will be skipped until fixed.
+        </div>
+      ) : null}
+      {boundsInfo.valid && boundsInfo.volumeWarning ? (
+        <div className="inspector-note">
+          Large implicit bounds volume ({boundsInfo.volume.toFixed(0)} units^3). `Medium/High` quality may take longer; use smaller bounds for faster preview/refine.
+        </div>
+      ) : null}
+      <div className="inspector-note">
+        Implicit meshing now uses adaptive sparse octree sampling with cleanup and numeric-gradient normals. Full marching-cubes replacement is still pending.
+      </div>
     </div>
   );
 }
@@ -515,4 +528,17 @@ function RangeField({
 
 function EmptyState({ text }: { text: string }) {
   return <div className="inspector-note">{text}</div>;
+}
+
+function analyzeBounds(bounds: { min: { x: number; y: number; z: number }; max: { x: number; y: number; z: number } }) {
+  const spanX = bounds.max.x - bounds.min.x;
+  const spanY = bounds.max.y - bounds.min.y;
+  const spanZ = bounds.max.z - bounds.min.z;
+  const valid = [spanX, spanY, spanZ].every((s) => Number.isFinite(s) && s > 0);
+  const volume = valid ? spanX * spanY * spanZ : Number.NaN;
+  return {
+    valid,
+    volume,
+    volumeWarning: valid && volume > 50_000,
+  };
 }

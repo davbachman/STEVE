@@ -6,6 +6,7 @@ import type {
   HistorySnapshot,
   PlotObject,
   PointLightObject,
+  PlotJobStatus,
   ProjectFileV1,
   RenderDiagnostics,
   SceneObject,
@@ -40,6 +41,7 @@ interface AppStateShape {
     qualityModeImplemented: boolean;
   };
   renderDiagnostics: RenderDiagnostics;
+  plotJobs: Record<UUID, PlotJobStatus>;
   historyPast: HistorySnapshot[];
   historyFuture: HistorySnapshot[];
 }
@@ -73,6 +75,12 @@ interface AppActions {
   redo: () => void;
   markQualityProgress: (samples: number, running: boolean) => void;
   setRenderDiagnostics: (diagnostics: Partial<RenderDiagnostics>) => void;
+  upsertPlotJobStatus: (id: UUID, patch: Partial<PlotJobStatus>) => void;
+  resetPlotJobStatus: (id: UUID) => void;
+  clearPlotJobStatus: (id: UUID) => void;
+  bumpPlotMeshVersion: (id: UUID, meta?: { hasPreview?: boolean; buildMs?: number; phase?: PlotJobStatus['meshPhase']; progress?: number; message?: string }) => void;
+  setPlotJobError: (id: UUID, message: string) => void;
+  applyAsyncPlotSource: (id: UUID, rawText: string, source: PlotObject['equation']['source']) => void;
 }
 
 export type AppState = AppStateShape & AppActions;
@@ -83,13 +91,25 @@ function defaultRenderDiagnostics(): RenderDiagnostics {
     plotCount: 0,
     pointLightCount: 0,
     directionalShadowEnabled: false,
+    directionalShadowCasterCount: 0,
     pointShadowsEnabled: 0,
     pointShadowLimit: 0,
+    pointShadowCasterCounts: {},
     shadowReceiver: 'none',
     transparentPlotCount: 0,
     shadowMapResolution: 0,
     pointShadowMode: 'off',
     pointShadowCapability: 'unknown',
+  };
+}
+
+function defaultPlotJobStatus(): PlotJobStatus {
+  return {
+    parsePhase: 'idle',
+    meshPhase: 'idle',
+    progress: 0,
+    hasPreview: false,
+    meshVersion: 0,
   };
 }
 
@@ -106,6 +126,7 @@ function initialState(): AppStateShape {
       qualityModeImplemented: false,
     },
     renderDiagnostics: defaultRenderDiagnostics(),
+    plotJobs: {},
     historyPast: [],
     historyFuture: [],
   };
@@ -617,6 +638,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       objects: normalized.objects,
       selectedId: null,
       renderDiagnostics: defaultRenderDiagnostics(),
+      plotJobs: {},
       historyPast: [],
       historyFuture: [],
       ui: { ...state.ui, statusMessage: 'Project loaded' },
@@ -675,6 +697,91 @@ export const useAppStore = create<AppState>((set, get) => ({
         renderDiagnostics: next,
       };
     }),
+
+  upsertPlotJobStatus: (id, patch) =>
+    set((state) => {
+      const current = state.plotJobs[id] ?? defaultPlotJobStatus();
+      const next = { ...current, ...patch };
+      if (shallowPlotJobEqual(current, next)) {
+        return state;
+      }
+      return {
+        ...state,
+        plotJobs: { ...state.plotJobs, [id]: next },
+      };
+    }),
+
+  resetPlotJobStatus: (id) =>
+    set((state) => {
+      const current = state.plotJobs[id];
+      const next = current ? { ...defaultPlotJobStatus(), meshVersion: current.meshVersion } : defaultPlotJobStatus();
+      if (current && shallowPlotJobEqual(current, next)) {
+        return state;
+      }
+      return {
+        ...state,
+        plotJobs: { ...state.plotJobs, [id]: next },
+      };
+    }),
+
+  clearPlotJobStatus: (id) =>
+    set((state) => {
+      if (!(id in state.plotJobs)) return state;
+      const next = { ...state.plotJobs };
+      delete next[id];
+      return {
+        ...state,
+        plotJobs: next,
+      };
+    }),
+
+  bumpPlotMeshVersion: (id, meta) =>
+    set((state) => {
+      const current = state.plotJobs[id] ?? defaultPlotJobStatus();
+      const next: PlotJobStatus = {
+        ...current,
+        meshVersion: current.meshVersion + 1,
+        meshPhase: meta?.phase ?? 'ready',
+        progress: meta?.progress ?? 1,
+        hasPreview: meta?.hasPreview ?? current.hasPreview,
+        lastMeshBuildMs: meta?.buildMs ?? current.lastMeshBuildMs,
+        message: meta?.message,
+        lastError: undefined,
+      };
+      return {
+        ...state,
+        plotJobs: { ...state.plotJobs, [id]: next },
+      };
+    }),
+
+  setPlotJobError: (id, message) =>
+    set((state) => {
+      const current = state.plotJobs[id] ?? defaultPlotJobStatus();
+      const next: PlotJobStatus = {
+        ...current,
+        meshPhase: 'error',
+        progress: 0,
+        message,
+        lastError: message,
+      };
+      return {
+        ...state,
+        plotJobs: { ...state.plotJobs, [id]: next },
+      };
+    }),
+
+  applyAsyncPlotSource: (id, rawText, source) =>
+    set((state) => {
+      const idx = state.objects.findIndex((obj) => obj.id === id && obj.type === 'plot');
+      if (idx === -1) return state;
+      const plot = state.objects[idx] as PlotObject;
+      if (plot.equation.source.rawText !== rawText) return state;
+      const next = produce(state, (draft) => {
+        const draftPlot = draft.objects[idx] as PlotObject;
+        draftPlot.equation.source = source;
+      });
+      return next;
+    }),
 }));
 
 function moveSelected(state: AppState, delta: { dx: number; dy: number; dz: number }): AppState {
@@ -709,12 +816,37 @@ function shallowDiagnosticsEqual(a: RenderDiagnostics, b: RenderDiagnostics): bo
     a.plotCount === b.plotCount &&
     a.pointLightCount === b.pointLightCount &&
     a.directionalShadowEnabled === b.directionalShadowEnabled &&
+    a.directionalShadowCasterCount === b.directionalShadowCasterCount &&
     a.pointShadowsEnabled === b.pointShadowsEnabled &&
     a.pointShadowLimit === b.pointShadowLimit &&
     a.shadowReceiver === b.shadowReceiver &&
     a.transparentPlotCount === b.transparentPlotCount &&
     a.shadowMapResolution === b.shadowMapResolution &&
     a.pointShadowMode === b.pointShadowMode &&
-    a.pointShadowCapability === b.pointShadowCapability
+    a.pointShadowCapability === b.pointShadowCapability &&
+    shallowPointShadowCasterCountsEqual(a.pointShadowCasterCounts ?? {}, b.pointShadowCasterCounts ?? {})
+  );
+}
+
+function shallowPointShadowCasterCountsEqual(a: Record<string, number>, b: Record<string, number>): boolean {
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  for (const key of aKeys) {
+    if (a[key] !== b[key]) return false;
+  }
+  return true;
+}
+
+function shallowPlotJobEqual(a: PlotJobStatus, b: PlotJobStatus): boolean {
+  return (
+    a.parsePhase === b.parsePhase &&
+    a.meshPhase === b.meshPhase &&
+    a.progress === b.progress &&
+    a.message === b.message &&
+    a.hasPreview === b.hasPreview &&
+    a.meshVersion === b.meshVersion &&
+    a.lastMeshBuildMs === b.lastMeshBuildMs &&
+    a.lastError === b.lastError
   );
 }

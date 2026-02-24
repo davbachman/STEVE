@@ -178,7 +178,7 @@ input[type='color'] {
 .object-row__head {
   width: 100%;
   display: grid;
-  grid-template-columns: 1.5rem 1fr auto;
+  grid-template-columns: 1.5rem 1fr auto auto;
   align-items: center;
   gap: 0.5rem;
   border: 0;
@@ -203,6 +203,35 @@ input[type='color'] {
   height: 0.85rem;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.25);
+}
+
+.object-row__job-pill {
+  justify-self: end;
+  font-size: 0.66rem;
+  line-height: 1;
+  padding: 0.2rem 0.38rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #b9c8dd;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.object-row__job-pill--busy {
+  color: #ffe3a1;
+  background: rgba(244, 207, 130, 0.08);
+  border-color: rgba(244, 207, 130, 0.22);
+}
+
+.object-row__job-pill--ok {
+  color: #aff5c3;
+  background: rgba(59, 214, 113, 0.08);
+  border-color: rgba(59, 214, 113, 0.22);
+}
+
+.object-row__job-pill--error {
+  color: #ffb0a6;
+  background: rgba(255, 109, 87, 0.08);
+  border-color: rgba(255, 109, 87, 0.22);
 }
 
 .equation-editor {
@@ -271,6 +300,24 @@ input[type='color'] {
   color: #ffb0a6;
   background: rgba(255, 109, 87, 0.08);
   border: 1px solid rgba(255, 109, 87, 0.2);
+}
+
+.equation-editor__job {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  font-size: 0.76rem;
+  color: #b9c8dd;
+  border-radius: 8px;
+  padding: 0.35rem 0.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(8, 12, 20, 0.55);
+}
+
+.equation-editor__job--error {
+  color: #ffc1b9;
+  border-color: rgba(255, 109, 87, 0.18);
+  background: rgba(255, 109, 87, 0.05);
 }
 
 .badge {

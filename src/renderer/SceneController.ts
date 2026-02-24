@@ -26,10 +26,11 @@ import {
 import { GridMaterial } from '@babylonjs/materials/grid';
 import type { AppState } from '../state/store';
 import { useAppStore } from '../state/store';
-import type { PlotObject, PointLightObject, RenderDiagnostics } from '../types/contracts';
+import type { PlotJobStatus, PlotObject, PointLightObject, RenderDiagnostics, SerializedMesh } from '../types/contracts';
 import { compilePlotObject } from '../math/compile';
 import { buildImplicitMeshFromScalarField } from '../math/mesh/implicitMarchingTetra';
 import { buildSurfaceMesh, sampleCurve } from '../math/mesh/parametric';
+import { getRuntimePlotMesh } from '../workers/runtimeMeshCache';
 
 export interface ViewportApi {
   exportPng: (filename?: string) => Promise<void>;
@@ -234,7 +235,7 @@ export class SceneController {
     };
   }
 
-  sync(state: Pick<AppState, 'scene' | 'render' | 'objects' | 'selectedId'>): void {
+  sync(state: Pick<AppState, 'scene' | 'render' | 'objects' | 'selectedId' | 'plotJobs'>): void {
     if (!this.scene || !this.camera || !this.directionalLight) {
       return;
     }
@@ -541,7 +542,7 @@ export class SceneController {
     }
   }
 
-  private syncPlots(state: Pick<AppState, 'scene' | 'objects'>): void {
+  private syncPlots(state: Pick<AppState, 'scene' | 'objects' | 'plotJobs'>): void {
     if (!this.scene) return;
     const plots = state.objects.filter((obj): obj is PlotObject => obj.type === 'plot');
     const seen = new Set<string>();
@@ -567,10 +568,39 @@ export class SceneController {
 
     for (const plot of plots) {
       seen.add(plot.id);
-      const geometryKey = buildGeometryKey(plot);
+      const meshVersion = state.plotJobs[plot.id]?.meshVersion ?? 0;
+      const geometryKey = buildGeometryKey(plot, meshVersion);
       const oldHash = this.meshHashCache.get(plot.id);
 
       let visual = this.plotVisuals.get(plot.id);
+      const runtimeMesh = getRuntimePlotMesh(plot.id);
+      const waitingForWorkerMesh = Boolean(
+        !runtimeMesh
+        && visual
+        && plot.equation.source.parseStatus === 'ok'
+        && isWorkerMeshPending(state.plotJobs[plot.id]),
+      );
+      if (waitingForWorkerMesh && oldHash !== geometryKey && visual) {
+        // Keep the previous mesh on screen until preview/final worker output arrives.
+        visual.root.parent = this.plotRoot;
+        visual.root.isVisible = plot.visible;
+        visual.root.position.copyFrom(vec3(plot.transform.position));
+        visual.root.receiveShadows = directionalShadowsActive || this.hasAnyPointLightShadowsEnabled();
+        this.applyPlotMaterial(plot, visual.root);
+        if (plot.visible && directionalShadowsActive && this.directionalShadow) {
+          this.directionalShadow.addShadowCaster(visual.root, true);
+        }
+        for (const pointLight of this.pointLightVisuals.values()) {
+          if (plot.visible && pointLight.shadowEnabled) {
+            pointLight.shadow?.addShadowCaster(visual.root, true);
+          }
+        }
+        for (const wire of visual.wireframeLines) {
+          wire.isVisible = plot.visible && Boolean(plot.material.wireframeVisible);
+          wire.position.copyFrom(vec3(plot.transform.position));
+        }
+        continue;
+      }
       if (!visual || oldHash !== geometryKey) {
         visual?.wireframeLines.forEach((line) => line.dispose(false, true));
         visual?.root.dispose(false, true);
@@ -633,6 +663,11 @@ export class SceneController {
   private buildPlotVisual(plot: PlotObject): PlotVisual {
     if (!this.scene) {
       throw new Error('Scene not initialized');
+    }
+
+    const runtimeMesh = getRuntimePlotMesh(plot.id);
+    if (runtimeMesh) {
+      return this.buildPlotVisualFromSerialized(plot, runtimeMesh);
     }
 
     const compiled = compilePlotObject(plot);
@@ -711,6 +746,57 @@ export class SceneController {
         vd.normals = Array.from(meshData.normals);
       }
       vd.applyToMesh(root);
+    }
+
+    root.metadata = { selectableId: plot.id, selectableType: 'plot' };
+    root.isPickable = true;
+    root.parent = this.plotRoot;
+    root.receiveShadows = true;
+    root.renderOverlay = false;
+
+    return { root, wireframeLines, geometryKey: buildGeometryKey(plot) };
+  }
+
+  private buildPlotVisualFromSerialized(plot: PlotObject, meshData: SerializedMesh): PlotVisual {
+    if (!this.scene) {
+      throw new Error('Scene not initialized');
+    }
+
+    let root: Mesh;
+    const wireframeLines: LinesMesh[] = [];
+
+    if (meshData.curvePath && meshData.curvePath.length >= 6) {
+      const path = floatArrayToVector3Path(meshData.curvePath);
+      if (plot.equation.kind === 'parametric_curve' && plot.equation.renderAsTube) {
+        root = MeshBuilder.CreateTube(
+          `plot-${plot.id}`,
+          {
+            path,
+            radius: plot.equation.tubeRadius,
+            tessellation: 12,
+            cap: Mesh.CAP_ALL,
+          },
+          this.scene,
+        );
+      } else {
+        root = MeshBuilder.CreateLines(`plot-${plot.id}`, { points: path, updatable: false }, this.scene) as unknown as Mesh;
+      }
+    } else {
+      root = new Mesh(`plot-${plot.id}`, this.scene);
+      applySerializedMeshToBabylonMesh(root, meshData);
+    }
+
+    if (meshData.lines) {
+      meshData.lines.forEach((coords, idx) => {
+        const points = floatArrayToVector3Path(coords);
+        if (points.length >= 2) {
+          const line = MeshBuilder.CreateLines(`plot-${plot.id}-wire-${idx}`, { points }, this.scene);
+          line.color = Color3.FromHexString('#0f172a');
+          line.parent = this.plotRoot;
+          line.isPickable = false;
+          wireframeLines.push(line);
+        }
+      });
     }
 
     root.metadata = { selectableId: plot.id, selectableType: 'plot' };
@@ -1127,6 +1213,11 @@ export class SceneController {
     const plots = state.objects.filter((o): o is PlotObject => o.type === 'plot');
     const pointLights = state.objects.filter((o): o is PointLightObject => o.type === 'point_light');
     const pointShadowsEnabled = Array.from(this.pointLightVisuals.values()).filter((v) => v.shadowEnabled).length;
+    const directionalShadowCasterCount = this.directionalShadow?.getShadowMap()?.renderList?.length ?? 0;
+    const pointShadowCasterCounts: Record<string, number> = {};
+    for (const [id, visual] of this.pointLightVisuals.entries()) {
+      pointShadowCasterCounts[id] = visual.shadowEnabled ? (visual.shadow?.getShadowMap()?.renderList?.length ?? 0) : 0;
+    }
     const directionalShadowEnabled = Boolean(
       state.scene.directional.castShadows && state.scene.shadow.directionalShadowEnabled && this.directionalShadow,
     );
@@ -1142,8 +1233,10 @@ export class SceneController {
       plotCount: plots.length,
       pointLightCount: pointLights.length,
       directionalShadowEnabled,
+      directionalShadowCasterCount,
       pointShadowsEnabled,
       pointShadowLimit: state.scene.shadow.pointShadowMaxLights,
+      pointShadowCasterCounts,
       shadowReceiver,
       transparentPlotCount,
       shadowMapResolution: state.scene.shadow.shadowMapResolution,
@@ -1183,8 +1276,19 @@ export class SceneController {
   }
 }
 
-function buildGeometryKey(plot: PlotObject): string {
-  return JSON.stringify({ equation: plot.equation, materialWireframe: { v: plot.material.wireframeVisible, c: plot.material.wireframeCellSize } });
+function buildGeometryKey(plot: PlotObject, meshVersion = 0): string {
+  const curveStyle =
+    plot.equation.kind === 'parametric_curve'
+      ? {
+          renderAsTube: plot.equation.renderAsTube,
+          tubeRadius: plot.equation.tubeRadius,
+        }
+      : undefined;
+  return JSON.stringify({
+    meshVersion,
+    curveStyle,
+    wireframeCellSize: plot.material.wireframeCellSize ?? 4,
+  });
 }
 
 function color3(hex: string): Color3 {
@@ -1214,6 +1318,37 @@ function stableAlphaIndex(id: string): number {
     h = Math.imul(h, 16777619);
   }
   return Math.abs(h % 1000);
+}
+
+function applySerializedMeshToBabylonMesh(mesh: Mesh, meshData: SerializedMesh): void {
+  const vd = new VertexData();
+  vd.positions = Array.from(meshData.positions);
+  vd.indices = Array.from(meshData.indices);
+  if (meshData.normals) {
+    vd.normals = Array.from(meshData.normals);
+  }
+  if (meshData.uvs) {
+    vd.uvs = Array.from(meshData.uvs);
+  }
+  vd.applyToMesh(mesh);
+}
+
+function floatArrayToVector3Path(coords: Float32Array): Vector3[] {
+  const points: Vector3[] = [];
+  for (let i = 0; i < coords.length; i += 3) {
+    const x = coords[i];
+    const y = coords[i + 1];
+    const z = coords[i + 2];
+    if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+      points.push(new Vector3(x, y, z));
+    }
+  }
+  return points;
+}
+
+function isWorkerMeshPending(status?: PlotJobStatus): boolean {
+  if (!status) return false;
+  return status.meshPhase === 'queued' || status.meshPhase === 'mesh_preview' || status.meshPhase === 'mesh_final';
 }
 
 function rayPlaneIntersectZ(ray: { origin: Vector3; direction: Vector3 }, z: number): Vector3 | null {

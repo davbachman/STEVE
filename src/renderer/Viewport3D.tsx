@@ -16,6 +16,7 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
   const render = useAppStore((s) => s.render);
   const objects = useAppStore((s) => s.objects);
   const selectedId = useAppStore((s) => s.selectedId);
+  const plotJobs = useAppStore((s) => s.plotJobs);
   const diagnostics = useAppStore((s) => s.renderDiagnostics);
 
   useEffect(() => {
@@ -37,7 +38,7 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
       .init()
       .then(() => {
         if (disposed) return;
-        controller.sync({ scene, render, objects, selectedId } as Pick<AppState, 'scene' | 'render' | 'objects' | 'selectedId'>);
+        controller.sync({ scene, render, objects, selectedId, plotJobs } as Pick<AppState, 'scene' | 'render' | 'objects' | 'selectedId' | 'plotJobs'>);
         onApiReady?.(controller.getApi());
       })
       .catch((err) => {
@@ -60,8 +61,8 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
   }, []);
 
   useEffect(() => {
-    controllerRef.current?.sync({ scene, render, objects, selectedId } as Pick<AppState, 'scene' | 'render' | 'objects' | 'selectedId'>);
-  }, [scene, render, objects, selectedId]);
+    controllerRef.current?.sync({ scene, render, objects, selectedId, plotJobs } as Pick<AppState, 'scene' | 'render' | 'objects' | 'selectedId' | 'plotJobs'>);
+  }, [scene, render, objects, selectedId, plotJobs]);
 
   return (
     <div className="viewport-shell">
@@ -90,8 +91,15 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
           <div>Plots: {diagnostics.plotCount}</div>
           <div>Point lights: {diagnostics.pointLightCount}</div>
           <div>Directional shadows: {diagnostics.directionalShadowEnabled ? 'on' : 'off'}</div>
+          <div>Directional casters: {diagnostics.directionalShadowCasterCount}</div>
           <div>
             Point shadows: {diagnostics.pointShadowsEnabled}/{diagnostics.pointShadowLimit} ({diagnostics.pointShadowMode})
+          </div>
+          <div>
+            Point casters:{' '}
+            {diagnostics.pointShadowCasterCounts && Object.keys(diagnostics.pointShadowCasterCounts).length > 0
+              ? Object.entries(diagnostics.pointShadowCasterCounts).map(([id, count]) => `${id.slice(0, 4)}:${count}`).join(', ')
+              : 'none'}
           </div>
           <div>Receiver: {diagnostics.shadowReceiver}</div>
           <div>Transparent plots: {diagnostics.transparentPlotCount}</div>

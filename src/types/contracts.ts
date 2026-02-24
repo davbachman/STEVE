@@ -210,6 +210,7 @@ export interface SerializedMesh {
   normals?: Float32Array;
   uvs?: Float32Array;
   lines?: Float32Array[];
+  curvePath?: Float32Array;
 }
 
 export interface ParseClassifyResult {
@@ -230,6 +231,7 @@ export type WorkerRequest =
       objectId: UUID;
       spec: ParametricSurfaceSpec | ExplicitSurfaceSpec;
       priority: WorkerJobPriority;
+      wireframeCellSize?: number;
     }
   | { type: 'build_curve_mesh'; jobId: UUID; objectId: UUID; spec: ParametricCurveSpec; priority: WorkerJobPriority }
   | { type: 'build_implicit_mesh'; jobId: UUID; objectId: UUID; spec: ImplicitSurfaceSpec; priority: WorkerJobPriority }
@@ -261,13 +263,28 @@ export interface RenderDiagnostics {
   plotCount: number;
   pointLightCount: number;
   directionalShadowEnabled: boolean;
+  directionalShadowCasterCount: number;
   pointShadowsEnabled: number;
   pointShadowLimit: number;
+  pointShadowCasterCounts?: Record<string, number>;
   shadowReceiver: 'ground' | 'grid' | 'none';
   transparentPlotCount: number;
   shadowMapResolution: number;
   pointShadowMode: PointShadowMode;
   pointShadowCapability: 'unknown' | 'available' | 'unavailable';
+}
+
+export type PlotJobPhase = 'idle' | 'queued' | 'parsing' | 'mesh_preview' | 'mesh_final' | 'ready' | 'error' | 'skipped';
+
+export interface PlotJobStatus {
+  parsePhase: Exclude<PlotJobPhase, 'mesh_preview' | 'mesh_final' | 'ready'> | 'ready';
+  meshPhase: PlotJobPhase;
+  progress: number;
+  message?: string;
+  hasPreview: boolean;
+  meshVersion: number;
+  lastMeshBuildMs?: number;
+  lastError?: string;
 }
 
 export interface HistorySnapshot {

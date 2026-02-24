@@ -1,3 +1,4 @@
+import type { AppState } from '../../state/store';
 import { useAppStore } from '../../state/store';
 import type { SceneObject } from '../../types/contracts';
 import { EquationEditor } from './EquationEditor';
@@ -18,12 +19,14 @@ function objectIcon(obj: SceneObject): string {
 
 export function ObjectListPanel() {
   const objects = useAppStore((s) => s.objects);
+  const plotJobs = useAppStore((s) => s.plotJobs);
   const selectedId = useAppStore((s) => s.selectedId);
   const selectObject = useAppStore((s) => s.selectObject);
   const addPlot = useAppStore((s) => s.addPlot);
   const addPointLight = useAppStore((s) => s.addPointLight);
   const updatePlotEquationText = useAppStore((s) => s.updatePlotEquationText);
   const setPlotClassificationOverride = useAppStore((s) => s.setPlotClassificationOverride);
+  const updatePointLight = useAppStore((s) => s.updatePointLight);
 
   return (
     <aside className="panel panel--left">
@@ -46,6 +49,11 @@ export function ObjectListPanel() {
               <button className="object-row__head" onClick={() => selectObject(obj.id)}>
                 <span className="object-row__icon">{objectIcon(obj)}</span>
                 <span className="object-row__name">{obj.name}</span>
+                {obj.type === 'plot' && plotJobs[obj.id] ? (
+                  <span className={`object-row__job-pill object-row__job-pill--${jobPillTone(plotJobs[obj.id])}`}>
+                    {jobPillLabel(plotJobs[obj.id])}
+                  </span>
+                ) : null}
                 {obj.type === 'plot' ? (
                   <span className="object-row__swatch" style={{ background: obj.material.baseColor }} />
                 ) : (
@@ -55,11 +63,12 @@ export function ObjectListPanel() {
               {selected && obj.type === 'plot' ? (
                 <EquationEditor
                   equation={obj.equation}
+                  jobStatus={plotJobs[obj.id]}
                   onChange={(rawText) => updatePlotEquationText(obj.id, rawText)}
                   onOverrideKind={(kind) => setPlotClassificationOverride(obj.id, kind)}
                 />
               ) : null}
-              {selected && obj.type === 'point_light' ? <PointLightInlineEditor id={obj.id} /> : null}
+              {selected && obj.type === 'point_light' ? <PointLightInlineEditor id={obj.id} updatePointLight={updatePointLight} /> : null}
             </div>
           );
         })}
@@ -68,7 +77,13 @@ export function ObjectListPanel() {
   );
 }
 
-function PointLightInlineEditor({ id }: { id: string }) {
+function PointLightInlineEditor({
+  id,
+  updatePointLight,
+}: {
+  id: string;
+  updatePointLight: AppState['updatePointLight'];
+}) {
   const objects = useAppStore((s) => s.objects);
   const obj = objects.find((o) => o.id === id);
   if (!obj || obj.type !== 'point_light') return <></>;
@@ -81,11 +96,7 @@ function PointLightInlineEditor({ id }: { id: string }) {
           type="color"
           value={obj.color}
           onChange={(e) => {
-            const color = e.target.value;
-            useAppStore.setState((state) => ({
-              ...state,
-              objects: state.objects.map((item) => (item.id === id && item.type === 'point_light' ? { ...item, color } : item)),
-            }));
+            updatePointLight(id, { color: e.target.value });
           }}
         />
       </label>
@@ -98,14 +109,36 @@ function PointLightInlineEditor({ id }: { id: string }) {
           step={1}
           value={obj.intensity}
           onChange={(e) => {
-            const intensity = Number(e.target.value);
-            useAppStore.setState((state) => ({
-              ...state,
-              objects: state.objects.map((item) => (item.id === id && item.type === 'point_light' ? { ...item, intensity } : item)),
-            }));
+            updatePointLight(id, { intensity: Number(e.target.value) });
           }}
         />
       </label>
     </div>
   );
+}
+
+function jobPillLabel(job: NonNullable<ReturnType<typeof useAppStore.getState>['plotJobs'][string]>): string {
+  if (job.lastError || job.meshPhase === 'error' || job.parsePhase === 'error') return 'Error';
+  if (job.meshPhase === 'mesh_final') return 'Meshing';
+  if (job.meshPhase === 'mesh_preview') return job.hasPreview ? 'Refining' : 'Preview';
+  if (job.meshPhase === 'queued') return 'Queued';
+  if (job.parsePhase === 'parsing') return 'Parsing';
+  if (job.parsePhase === 'queued') return 'Parse Q';
+  if (job.meshPhase === 'ready' || job.hasPreview) return 'Ready';
+  return 'Idle';
+}
+
+function jobPillTone(job: NonNullable<ReturnType<typeof useAppStore.getState>['plotJobs'][string]>): 'ok' | 'busy' | 'error' | 'idle' {
+  if (job.lastError || job.meshPhase === 'error' || job.parsePhase === 'error') return 'error';
+  if (
+    job.parsePhase === 'queued'
+    || job.parsePhase === 'parsing'
+    || job.meshPhase === 'queued'
+    || job.meshPhase === 'mesh_preview'
+    || job.meshPhase === 'mesh_final'
+  ) {
+    return 'busy';
+  }
+  if (job.meshPhase === 'ready' || job.hasPreview) return 'ok';
+  return 'idle';
 }

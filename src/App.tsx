@@ -3,6 +3,7 @@ import './index.css';
 import { Viewport3D } from './renderer/Viewport3D';
 import type { ViewportApi } from './renderer/SceneController';
 import { useAutosave } from './hooks/useAutosave';
+import { useWorkerPipeline } from './hooks/useWorkerPipeline';
 import { useAppStore } from './state/store';
 import { createBuiltInTestScene } from './testing/testScenes';
 import { ObjectListPanel } from './ui/components/ObjectListPanel';
@@ -21,6 +22,7 @@ export default function App() {
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
 
   useAutosave();
+  useWorkerPipeline();
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
