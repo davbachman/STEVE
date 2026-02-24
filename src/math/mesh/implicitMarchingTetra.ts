@@ -20,15 +20,6 @@ const cubeCorners: Array<[number, number, number]> = [
   [0, 1, 1],
 ];
 
-const tetraEdges: Array<[number, number]> = [
-  [0, 1],
-  [1, 2],
-  [2, 0],
-  [0, 3],
-  [1, 3],
-  [2, 3],
-];
-
 interface ScalarFieldFn {
   (x: number, y: number, z: number): number;
 }
@@ -42,7 +33,6 @@ interface V3 {
 interface QualityConfig {
   rootDivisions: number;
   maxDepth: number;
-  maxLeafCells: number;
 }
 
 interface CubeCell {
@@ -59,9 +49,7 @@ interface MeshBuildContext {
   sampleCache: Map<string, number>;
   quality: QualityConfig;
   rawTriangles: number[];
-  leafCount: number;
   zeroSnapEps: number;
-  zeroResolveNudge: number;
 }
 
 export function buildImplicitMeshFromScalarField(
@@ -82,7 +70,6 @@ export function buildImplicitMeshFromScalarField(
     sampleCache: new Map(),
     quality: config,
     rawTriangles: [],
-    leafCount: 0,
     zeroSnapEps: Math.max(
       Math.hypot(
         bounds.max.x - bounds.min.x,
@@ -91,35 +78,11 @@ export function buildImplicitMeshFromScalarField(
       ) * 1e-12,
       1e-12,
     ),
-    zeroResolveNudge: Math.max(
-      Math.hypot(
-        bounds.max.x - bounds.min.x,
-        bounds.max.y - bounds.min.y,
-        bounds.max.z - bounds.min.z,
-      ) * 1e-9,
-      1e-9,
-    ),
   };
 
-  const rootDiv = config.rootDivisions;
-  const xSpan = bounds.max.x - bounds.min.x;
-  const ySpan = bounds.max.y - bounds.min.y;
-  const zSpan = bounds.max.z - bounds.min.z;
-
-  for (let k = 0; k < rootDiv; k += 1) {
-    const z0 = bounds.min.z + (zSpan * k) / rootDiv;
-    const z1 = bounds.min.z + (zSpan * (k + 1)) / rootDiv;
-    for (let j = 0; j < rootDiv; j += 1) {
-      const y0 = bounds.min.y + (ySpan * j) / rootDiv;
-      const y1 = bounds.min.y + (ySpan * (j + 1)) / rootDiv;
-      for (let i = 0; i < rootDiv; i += 1) {
-        const x0 = bounds.min.x + (xSpan * i) / rootDiv;
-        const x1 = bounds.min.x + (xSpan * (i + 1)) / rootDiv;
-        const cell = sampleCell(ctx, { x: x0, y: y0, z: z0 }, { x: x1, y: y1, z: z1 });
-        subdivideAdaptive(ctx, cell, 0);
-      }
-    }
-  }
+  // Use a uniform leaf-resolution grid for the final mesh to avoid crack
+  // formation from mixed-resolution seams.
+  polygonizeUniformLeafGrid(ctx);
 
   return finalizeImplicitMesh(ctx);
 }
@@ -127,44 +90,34 @@ export function buildImplicitMeshFromScalarField(
 function qualityConfig(quality: ImplicitSurfaceSpec['quality']): QualityConfig {
   switch (quality) {
     case 'draft':
-      return { rootDivisions: 4, maxDepth: 2, maxLeafCells: 90_000 };
+      return { rootDivisions: 4, maxDepth: 2 };
     case 'medium':
-      return { rootDivisions: 4, maxDepth: 3, maxLeafCells: 260_000 };
+      return { rootDivisions: 4, maxDepth: 3 };
     case 'high':
-      return { rootDivisions: 6, maxDepth: 3, maxLeafCells: 520_000 };
+      return { rootDivisions: 6, maxDepth: 3 };
   }
 }
 
-function subdivideAdaptive(ctx: MeshBuildContext, cell: CubeCell, depth: number): void {
-  if (!cellMightContainSurface(ctx, cell)) {
-    return;
-  }
+function polygonizeUniformLeafGrid(ctx: MeshBuildContext): void {
+  const div = ctx.quality.rootDivisions * 2 ** ctx.quality.maxDepth;
+  const xSpan = ctx.bounds.max.x - ctx.bounds.min.x;
+  const ySpan = ctx.bounds.max.y - ctx.bounds.min.y;
+  const zSpan = ctx.bounds.max.z - ctx.bounds.min.z;
 
-  if (depth >= ctx.quality.maxDepth || ctx.leafCount >= ctx.quality.maxLeafCells) {
-    polygonizeCubeAsTetra(ctx.rawTriangles, cell.corners, cell.values);
-    ctx.leafCount += 1;
-    return;
-  }
-
-  const mx = (cell.min.x + cell.max.x) * 0.5;
-  const my = (cell.min.y + cell.max.y) * 0.5;
-  const mz = (cell.min.z + cell.max.z) * 0.5;
-
-  for (let bz = 0; bz < 2; bz += 1) {
-    for (let by = 0; by < 2; by += 1) {
-      for (let bx = 0; bx < 2; bx += 1) {
-        const childMin = {
-          x: bx === 0 ? cell.min.x : mx,
-          y: by === 0 ? cell.min.y : my,
-          z: bz === 0 ? cell.min.z : mz,
-        };
-        const childMax = {
-          x: bx === 0 ? mx : cell.max.x,
-          y: by === 0 ? my : cell.max.y,
-          z: bz === 0 ? mz : cell.max.z,
-        };
-        const child = sampleCell(ctx, childMin, childMax);
-        subdivideAdaptive(ctx, child, depth + 1);
+  for (let k = 0; k < div; k += 1) {
+    const z0 = ctx.bounds.min.z + (zSpan * k) / div;
+    const z1 = ctx.bounds.min.z + (zSpan * (k + 1)) / div;
+    for (let j = 0; j < div; j += 1) {
+      const y0 = ctx.bounds.min.y + (ySpan * j) / div;
+      const y1 = ctx.bounds.min.y + (ySpan * (j + 1)) / div;
+      for (let i = 0; i < div; i += 1) {
+        const x0 = ctx.bounds.min.x + (xSpan * i) / div;
+        const x1 = ctx.bounds.min.x + (xSpan * (i + 1)) / div;
+        const cell = sampleCell(ctx, { x: x0, y: y0, z: z0 }, { x: x1, y: y1, z: z1 });
+        if (!cellMightContainSurface(ctx, cell)) {
+          continue;
+        }
+        polygonizeCubeAsTetra(ctx.rawTriangles, cell.corners, cell.values);
       }
     }
   }
@@ -235,7 +188,7 @@ function sampleScalar(ctx: MeshBuildContext, x: number, y: number, z: number): n
   if (!Number.isFinite(value)) {
     value = Number.NaN;
   } else if (Math.abs(value) <= ctx.zeroSnapEps) {
-    value = resolveNearZeroSample(ctx, x, y, z);
+    value = resolveNearZeroSample(ctx);
   }
   ctx.sampleCache.set(key, value);
   return value;
@@ -245,17 +198,11 @@ function sampleKey(x: number, y: number, z: number): string {
   return `${x.toFixed(10)}|${y.toFixed(10)}|${z.toFixed(10)}`;
 }
 
-function resolveNearZeroSample(ctx: MeshBuildContext, x: number, y: number, z: number): number {
-  const n = ctx.zeroResolveNudge;
-  const px = clamp(x + n * 0.754877666, ctx.bounds.min.x, ctx.bounds.max.x);
-  const py = clamp(y - n * 0.569840291, ctx.bounds.min.y, ctx.bounds.max.y);
-  const pz = clamp(z + n * 0.327512431, ctx.bounds.min.z, ctx.bounds.max.z);
-  const alt = ctx.scalarField(px, py, pz) - ctx.isoValue;
-  if (Number.isFinite(alt) && Math.abs(alt) > ctx.zeroSnapEps) {
-    return alt;
-  }
-  // Fallback: bias slightly positive rather than returning exact zero.
-  return ctx.zeroSnapEps;
+function resolveNearZeroSample(ctx: MeshBuildContext): number {
+  // Preserve exact hits and let tetra polygonization/final cleanup handle them.
+  // This avoids sign-biased asymmetry on surfaces like xyz=1.
+  void ctx;
+  return 0;
 }
 
 function polygonizeCubeAsTetra(target: number[], cubePos: V3[], cubeVal: number[]): void {
@@ -270,95 +217,82 @@ function polygonizeCubeAsTetra(target: number[], cubePos: V3[], cubeVal: number[
 
 function polygonizeTetra(points: V3[], values: number[], rawTriangles: number[]): void {
   const zeroTol = 0;
-  const inside = values.map((v) => Number.isFinite(v) && v <= zeroTol);
+  if (values.some((v) => !Number.isFinite(v))) {
+    return;
+  }
+
+  const inside = values.map((v) => v <= zeroTol);
   const insideCount = inside.reduce((sum, v) => sum + (v ? 1 : 0), 0);
   if (insideCount === 0 || insideCount === 4) {
     return;
   }
 
-  const intersections: V3[] = [];
-  for (const [a, b] of tetraEdges) {
-    const vaRaw = values[a];
-    const vbRaw = values[b];
-    const va = Math.abs(vaRaw) <= zeroTol ? 0 : vaRaw;
-    const vb = Math.abs(vbRaw) <= zeroTol ? 0 : vbRaw;
-    if (!Number.isFinite(va) || !Number.isFinite(vb)) {
-      continue;
-    }
-    if (va === 0 && vb === 0) {
-      continue;
-    }
-    if (va === 0) {
-      intersections.push(points[a]);
-      continue;
-    }
-    if (vb === 0) {
-      intersections.push(points[b]);
-      continue;
-    }
-    const crosses = (va < 0 && vb > 0) || (va > 0 && vb < 0);
-    if (!crosses) continue;
-    const t = va / (va - vb);
-    intersections.push(lerp(points[a], points[b], clamp01(t)));
+  const insideIdx: number[] = [];
+  const outsideIdx: number[] = [];
+  for (let i = 0; i < 4; i += 1) {
+    (inside[i] ? insideIdx : outsideIdx).push(i);
   }
 
-  const uniqueIntersections = dedupePoints(intersections, 1e-7);
+  const edgePointCache = new Map<string, V3>();
+  const interpolate = (a: number, b: number): V3 | null => {
+    const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+    const cached = edgePointCache.get(key);
+    if (cached) return cached;
 
-  if (uniqueIntersections.length < 3) {
+    const va = values[a];
+    const vb = values[b];
+    const denom = va - vb;
+    if (!Number.isFinite(denom) || Math.abs(denom) < 1e-20) {
+      return null;
+    }
+    const t = clamp01(va / denom);
+    const p = lerp(points[a], points[b], t);
+    edgePointCache.set(key, p);
+    return p;
+  };
+
+  if (insideCount === 1) {
+    const i = insideIdx[0];
+    const a = outsideIdx[0];
+    const b = outsideIdx[1];
+    const c = outsideIdx[2];
+    const p0 = interpolate(i, a);
+    const p1 = interpolate(i, b);
+    const p2 = interpolate(i, c);
+    if (p0 && p1 && p2) addTriangle(p0, p1, p2, rawTriangles);
     return;
   }
 
-  if (uniqueIntersections.length === 3) {
-    addTriangle(uniqueIntersections[0], uniqueIntersections[1], uniqueIntersections[2], rawTriangles);
+  if (insideCount === 3) {
+    const o = outsideIdx[0];
+    const a = insideIdx[0];
+    const b = insideIdx[1];
+    const c = insideIdx[2];
+    const p0 = interpolate(o, a);
+    const p1 = interpolate(o, b);
+    const p2 = interpolate(o, c);
+    if (p0 && p1 && p2) addTriangle(p0, p1, p2, rawTriangles);
     return;
   }
 
-  if (uniqueIntersections.length === 4) {
-    const ordered = sortPolygon4(uniqueIntersections);
-    addTriangle(ordered[0], ordered[1], ordered[2], rawTriangles);
-    addTriangle(ordered[0], ordered[2], ordered[3], rawTriangles);
+  // 2-in / 2-out: emit a quad split with combinatorially stable ordering.
+  const i0 = insideIdx[0];
+  const i1 = insideIdx[1];
+  const o0 = outsideIdx[0];
+  const o1 = outsideIdx[1];
+  const p00 = interpolate(i0, o0);
+  const p01 = interpolate(i0, o1);
+  const p10 = interpolate(i1, o0);
+  const p11 = interpolate(i1, o1);
+  if (!p00 || !p01 || !p10 || !p11) {
     return;
   }
-
-  for (let i = 1; i < uniqueIntersections.length - 1; i += 1) {
-    addTriangle(uniqueIntersections[0], uniqueIntersections[i], uniqueIntersections[i + 1], rawTriangles);
-  }
-}
-
-function sortPolygon4(points: V3[]): V3[] {
-  const centroid = points.reduce(
-    (acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y, z: acc.z + p.z }),
-    { x: 0, y: 0, z: 0 },
-  );
-  centroid.x /= points.length;
-  centroid.y /= points.length;
-  centroid.z /= points.length;
-
-  return [...points].sort((a, b) => {
-    const aa = Math.atan2(a.y - centroid.y, a.x - centroid.x);
-    const bb = Math.atan2(b.y - centroid.y, b.x - centroid.x);
-    return aa - bb;
-  });
+  addTriangle(p00, p01, p11, rawTriangles);
+  addTriangle(p00, p11, p10, rawTriangles);
 }
 
 function addTriangle(a: V3, b: V3, c: V3, rawTriangles: number[]): void {
   rawTriangles.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
-}
-
-function dedupePoints(points: V3[], epsilon: number): V3[] {
-  if (points.length <= 1) return points;
-  const out: V3[] = [];
-  for (const p of points) {
-    let duplicate = false;
-    for (const q of out) {
-      if (Math.abs(p.x - q.x) <= epsilon && Math.abs(p.y - q.y) <= epsilon && Math.abs(p.z - q.z) <= epsilon) {
-        duplicate = true;
-        break;
-      }
-    }
-    if (!duplicate) out.push(p);
-  }
-  return out;
 }
 
 function finalizeImplicitMesh(ctx: MeshBuildContext): SerializedMesh {
@@ -372,18 +306,28 @@ function finalizeImplicitMesh(ctx: MeshBuildContext): SerializedMesh {
   const spanZ = ctx.bounds.max.z - ctx.bounds.min.z;
   const leafDiv = cfg.rootDivisions * 2 ** cfg.maxDepth;
   const leafMinSize = Math.min(spanX, spanY, spanZ) / Math.max(1, leafDiv);
-  const mergeEpsilon = Math.max(leafMinSize * 0.01, 1e-6);
+  const mergeEpsilon = Math.max(leafMinSize * 1e-5, 1e-8);
   const areaEpsilon = Math.max(mergeEpsilon * mergeEpsilon * 0.02, 1e-12);
+  const latticeSnapTolFactor = 8e-3;
 
   const positions: number[] = [];
   const indices: number[] = [];
-  const dedupe = new Map<string, number>();
+  const dedupe = new Map<string, number[]>();
   const triangleKeys = new Set<string>();
 
   for (let i = 0; i < ctx.rawTriangles.length; i += 9) {
-    const ia = getOrCreateVertexIndex(dedupe, positions, ctx.rawTriangles[i], ctx.rawTriangles[i + 1], ctx.rawTriangles[i + 2], mergeEpsilon);
-    const ib = getOrCreateVertexIndex(dedupe, positions, ctx.rawTriangles[i + 3], ctx.rawTriangles[i + 4], ctx.rawTriangles[i + 5], mergeEpsilon);
-    const ic = getOrCreateVertexIndex(dedupe, positions, ctx.rawTriangles[i + 6], ctx.rawTriangles[i + 7], ctx.rawTriangles[i + 8], mergeEpsilon);
+    const ax = snapToLeafLattice(ctx.rawTriangles[i], ctx.bounds.min.x, spanX, leafDiv, latticeSnapTolFactor);
+    const ay = snapToLeafLattice(ctx.rawTriangles[i + 1], ctx.bounds.min.y, spanY, leafDiv, latticeSnapTolFactor);
+    const az = snapToLeafLattice(ctx.rawTriangles[i + 2], ctx.bounds.min.z, spanZ, leafDiv, latticeSnapTolFactor);
+    const bx = snapToLeafLattice(ctx.rawTriangles[i + 3], ctx.bounds.min.x, spanX, leafDiv, latticeSnapTolFactor);
+    const by = snapToLeafLattice(ctx.rawTriangles[i + 4], ctx.bounds.min.y, spanY, leafDiv, latticeSnapTolFactor);
+    const bz = snapToLeafLattice(ctx.rawTriangles[i + 5], ctx.bounds.min.z, spanZ, leafDiv, latticeSnapTolFactor);
+    const cx = snapToLeafLattice(ctx.rawTriangles[i + 6], ctx.bounds.min.x, spanX, leafDiv, latticeSnapTolFactor);
+    const cy = snapToLeafLattice(ctx.rawTriangles[i + 7], ctx.bounds.min.y, spanY, leafDiv, latticeSnapTolFactor);
+    const cz = snapToLeafLattice(ctx.rawTriangles[i + 8], ctx.bounds.min.z, spanZ, leafDiv, latticeSnapTolFactor);
+    const ia = getOrCreateVertexIndex(dedupe, positions, ax, ay, az, mergeEpsilon);
+    const ib = getOrCreateVertexIndex(dedupe, positions, bx, by, bz, mergeEpsilon);
+    const ic = getOrCreateVertexIndex(dedupe, positions, cx, cy, cz, mergeEpsilon);
     if (ia === ib || ib === ic || ia === ic) {
       continue;
     }
@@ -404,6 +348,7 @@ function finalizeImplicitMesh(ctx: MeshBuildContext): SerializedMesh {
 
   const normals = computeNumericGradientNormals(ctx, positions, leafMinSize);
   orientTrianglesByNormals(indices, positions, normals);
+  canonicalizeClosedMeshOrientation(indices, positions, normals);
 
   return {
     positions: new Float32Array(positions),
@@ -412,23 +357,73 @@ function finalizeImplicitMesh(ctx: MeshBuildContext): SerializedMesh {
   };
 }
 
+function snapToLeafLattice(value: number, min: number, span: number, div: number, tolFactor: number): number {
+  if (!(Number.isFinite(value) && Number.isFinite(min) && Number.isFinite(span) && Number.isFinite(div))) {
+    return value;
+  }
+  if (div <= 0 || span <= 0) {
+    return value;
+  }
+  const step = span / div;
+  if (!(step > 0)) {
+    return value;
+  }
+  const k = Math.round((value - min) / step);
+  const snapped = min + k * step;
+  const tol = Math.max(step * tolFactor, 1e-10);
+  return Math.abs(value - snapped) <= tol ? snapped : value;
+}
+
 function getOrCreateVertexIndex(
-  dedupe: Map<string, number>,
+  dedupe: Map<string, number[]>,
   positions: number[],
   x: number,
   y: number,
   z: number,
   epsilon: number,
 ): number {
-  const key = `${Math.round(x / epsilon)}|${Math.round(y / epsilon)}|${Math.round(z / epsilon)}`;
-  const existing = dedupe.get(key);
-  if (existing !== undefined) {
-    return existing;
+  if (!(epsilon > 0) || !Number.isFinite(epsilon)) {
+    const index = positions.length / 3;
+    positions.push(x, y, z);
+    return index;
   }
+
+  const gx = Math.floor(x / epsilon);
+  const gy = Math.floor(y / epsilon);
+  const gz = Math.floor(z / epsilon);
+  const epsSq = epsilon * epsilon;
+  for (let dz = -1; dz <= 1; dz += 1) {
+    for (let dy = -1; dy <= 1; dy += 1) {
+      for (let dx = -1; dx <= 1; dx += 1) {
+        const bucket = dedupe.get(vertexBucketKey(gx + dx, gy + dy, gz + dz));
+        if (!bucket) continue;
+        for (const existing of bucket) {
+          const base = existing * 3;
+          const ddx = positions[base] - x;
+          const ddy = positions[base + 1] - y;
+          const ddz = positions[base + 2] - z;
+          if (ddx * ddx + ddy * ddy + ddz * ddz <= epsSq) {
+            return existing;
+          }
+        }
+      }
+    }
+  }
+
   const index = positions.length / 3;
   positions.push(x, y, z);
-  dedupe.set(key, index);
+  const key = vertexBucketKey(gx, gy, gz);
+  const bucket = dedupe.get(key);
+  if (bucket) {
+    bucket.push(index);
+  } else {
+    dedupe.set(key, [index]);
+  }
   return index;
+}
+
+function vertexBucketKey(x: number, y: number, z: number): string {
+  return `${x}|${y}|${z}`;
 }
 
 function canonicalTriangleKey(a: number, b: number, c: number): string {
@@ -550,6 +545,71 @@ function orientTrianglesByNormals(indices: number[], positions: number[], normal
       indices[i + 2] = ib;
     }
   }
+}
+
+function canonicalizeClosedMeshOrientation(indices: number[], positions: number[], normals: number[]): void {
+  if (!isClosedManifold(indices)) {
+    return;
+  }
+
+  const volume6 = signedVolumeTimesSix(indices, positions);
+  if (!Number.isFinite(volume6) || Math.abs(volume6) < 1e-10) {
+    return;
+  }
+
+  // Canonicalize watertight meshes to outward winding so lighting/shadows
+  // do not depend on the arbitrary sign of the implicit scalar function.
+  if (volume6 < 0) {
+    for (let i = 0; i < indices.length; i += 3) {
+      const t = indices[i + 1];
+      indices[i + 1] = indices[i + 2];
+      indices[i + 2] = t;
+    }
+    for (let i = 0; i < normals.length; i += 1) {
+      normals[i] = -normals[i];
+    }
+  }
+}
+
+function isClosedManifold(indices: number[]): boolean {
+  const edges = new Map<string, number>();
+  for (let i = 0; i < indices.length; i += 3) {
+    const tri = [indices[i], indices[i + 1], indices[i + 2]];
+    for (let e = 0; e < 3; e += 1) {
+      let a = tri[e];
+      let b = tri[(e + 1) % 3];
+      if (a > b) [a, b] = [b, a];
+      const key = `${a}|${b}`;
+      edges.set(key, (edges.get(key) ?? 0) + 1);
+    }
+  }
+  for (const count of edges.values()) {
+    if (count !== 2) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function signedVolumeTimesSix(indices: number[], positions: number[]): number {
+  let volume6 = 0;
+  for (let i = 0; i < indices.length; i += 3) {
+    const a = indices[i] * 3;
+    const b = indices[i + 1] * 3;
+    const c = indices[i + 2] * 3;
+    if (c + 2 >= positions.length) continue;
+    const ax = positions[a];
+    const ay = positions[a + 1];
+    const az = positions[a + 2];
+    const bx = positions[b];
+    const by = positions[b + 1];
+    const bz = positions[b + 2];
+    const cx = positions[c];
+    const cy = positions[c + 1];
+    const cz = positions[c + 2];
+    volume6 += ax * (by * cz - bz * cy) + ay * (bz * cx - bx * cz) + az * (bx * cy - by * cx);
+  }
+  return volume6;
 }
 
 function computeFaceNormals(positions: number[], indices?: number[]): number[] {

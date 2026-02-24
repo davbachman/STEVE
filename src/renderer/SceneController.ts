@@ -6,6 +6,7 @@ import {
   HemisphericLight,
   LinesMesh,
   Matrix,
+  Material,
   Mesh,
   MeshBuilder,
   MirrorTexture,
@@ -82,7 +83,6 @@ export class SceneController {
   private lightRoot: TransformNode | null = null;
   private groundMesh: Mesh | null = null;
   private gridMesh: Mesh | null = null;
-  private gridShadowCatcherMesh: Mesh | null = null;
   private xyGridLines: LinesMesh[] = [];
   private xyGridKey = '';
   private axesMeshes: LinesMesh[] = [];
@@ -209,7 +209,6 @@ export class SceneController {
     this.xyGridLines = [];
     this.xyGridKey = '';
     this.gridMesh?.dispose(false, true);
-    this.gridShadowCatcherMesh?.dispose(false, true);
     this.groundMesh?.dispose(false, true);
     this.plotRoot?.dispose();
     this.lightRoot?.dispose();
@@ -329,19 +328,6 @@ export class SceneController {
     this.gridMesh.isVisible = false;
     this.gridMesh.scaling = new Vector3(state.scene.gridExtent, 1, state.scene.gridExtent);
     this.syncXYGridLines(state);
-      if (this.gridShadowCatcherMesh) {
-      this.gridShadowCatcherMesh.scaling = new Vector3(state.scene.gridExtent, 1, state.scene.gridExtent);
-      this.gridShadowCatcherMesh.isVisible =
-        !state.scene.groundPlaneVisible && state.scene.gridVisible && state.scene.shadow.gridShadowReceiverEnabled;
-      this.gridShadowCatcherMesh.receiveShadows = directionalShadowsActive;
-        const catcherMaterial = this.gridShadowCatcherMesh.material;
-        if (catcherMaterial instanceof StandardMaterial) {
-          catcherMaterial.alpha = state.scene.gridVisible && state.scene.shadow.gridShadowReceiverEnabled
-          ? clamp(0.12 + state.scene.gridLineOpacity * 0.18, 0.12, 0.34)
-          : 0;
-        }
-      }
-
     const groundMaterial = this.groundMesh.material;
     if (groundMaterial instanceof PBRMaterial) {
       groundMaterial.albedoColor = color3(state.scene.groundPlaneColor);
@@ -650,14 +636,6 @@ export class SceneController {
     if (this.groundMesh) {
       this.groundMesh.receiveShadows = state.scene.groundPlaneVisible && (directionalShadowsActive || this.hasAnyPointLightShadowsEnabled());
     }
-    if (this.gridShadowCatcherMesh) {
-      this.gridShadowCatcherMesh.receiveShadows = Boolean(
-        !state.scene.groundPlaneVisible
-        && state.scene.gridVisible
-        && state.scene.shadow.gridShadowReceiverEnabled
-        && (directionalShadowsActive || this.hasAnyPointLightShadowsEnabled()),
-      );
-    }
   }
 
   private buildPlotVisual(plot: PlotObject): PlotVisual {
@@ -825,9 +803,18 @@ export class SceneController {
     pbr.subSurface.isRefractionEnabled = plot.material.transmission > 0.05;
     pbr.subSurface.refractionIntensity = clamp01(plot.material.transmission);
     pbr.subSurface.indexOfRefraction = Math.max(1, plot.material.ior);
+    // Implicit meshes are generated with a winding convention that ends up
+    // inverted relative to Babylon's default LH front-face expectation.
+    // Pinning sideOrientation fixes front/back classification so two-sided
+    // lighting doesn't flip the visible shell normals.
+    pbr.sideOrientation = plot.equation.kind === 'implicit_surface' ? Material.ClockWiseSideOrientation : null;
     const isTransparent = plot.material.opacity < 0.98 || plot.material.transmission > 0.05;
-    pbr.separateCullingPass = isTransparent;
+    // Keep culling disabled so Babylon can run the extra front/back pass when
+    // `separateCullingPass` is enabled for transparent surfaces. Enabling
+    // back-face culling here disables that path and can make implicit surfaces
+    // look lit "inside out" / drop the expected front-facing shell.
     pbr.backFaceCulling = false;
+    pbr.separateCullingPass = isTransparent;
     // Generated parametric/implicit meshes may have arbitrary winding (and users may
     // view the back side). Two-sided lighting prevents the \"lit side is dark\" issue.
     pbr.twoSidedLighting = true;
@@ -872,8 +859,6 @@ export class SceneController {
 
     this.groundMesh?.dispose(false, true);
     this.gridMesh?.dispose(false, true);
-    this.gridShadowCatcherMesh?.dispose(false, true);
-
     this.groundMesh = MeshBuilder.CreateGround('ground', { width: 1, height: 1, subdivisions: 1 }, this.scene);
     this.groundMesh.position.z = 0;
     this.groundMesh.rotationQuaternion = null;
@@ -900,21 +885,6 @@ export class SceneController {
     gridMaterial.opacity = 0.25;
     this.gridMesh.material = gridMaterial;
     this.gridMesh.isPickable = false;
-
-    this.gridShadowCatcherMesh = MeshBuilder.CreateGround('grid-shadow-catcher', { width: 1, height: 1, subdivisions: 1 }, this.scene);
-    this.gridShadowCatcherMesh.position.z = 0.0012;
-    this.gridShadowCatcherMesh.rotationQuaternion = null;
-    this.gridShadowCatcherMesh.rotation = new Vector3(Math.PI / 2, 0, 0);
-    this.gridShadowCatcherMesh.isPickable = false;
-    this.gridShadowCatcherMesh.receiveShadows = true;
-    this.gridShadowCatcherMesh.renderingGroupId = 0;
-    const catcherMat = new StandardMaterial('grid-shadow-catcher-mat', this.scene);
-    catcherMat.diffuseColor = new Color3(0.9, 0.92, 0.98);
-    catcherMat.specularColor = Color3.Black();
-    catcherMat.emissiveColor = Color3.Black();
-    catcherMat.alpha = 0.2;
-    catcherMat.backFaceCulling = false;
-    this.gridShadowCatcherMesh.material = catcherMat;
 
     // Temporarily disable MirrorTexture creation on startup for WebGPU compatibility.
     this.groundMirror?.dispose();
@@ -1224,9 +1194,7 @@ export class SceneController {
     const transparentPlotCount = plots.filter((plot) => plot.material.opacity < 0.98 || plot.material.transmission > 0.05).length;
     const shadowReceiver: RenderDiagnostics['shadowReceiver'] = state.scene.groundPlaneVisible
       ? 'ground'
-      : state.scene.gridVisible && state.scene.shadow.gridShadowReceiverEnabled
-        ? 'grid'
-        : 'none';
+      : 'none';
 
     useAppStore.getState().setRenderDiagnostics({
       webgpuReady: Boolean(this.engine && this.scene),

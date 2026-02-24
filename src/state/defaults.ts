@@ -163,7 +163,6 @@ export const defaultSceneSettings = (): SceneSettings => ({
     pointShadowMaxLights: 2,
     shadowMapResolution: 2048,
     shadowSoftness: 0.6,
-    gridShadowReceiverEnabled: true,
   },
 });
 
@@ -235,7 +234,7 @@ export function createDefaultImplicit(name = 'Implicit'): PlotObject {
       isoValue: 0,
       quality: 'draft',
     },
-    material: { ...materialPresets['Clear Glass'] },
+    material: { ...materialPresets['Glossy Plastic'] },
   };
 }
 

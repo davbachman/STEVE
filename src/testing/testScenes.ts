@@ -96,7 +96,6 @@ function createShadowRegressionScene(): ProjectFileV1 {
     pointShadowMaxLights: 2,
     shadowMapResolution: 2048,
     shadowSoftness: 0.55,
-    gridShadowReceiverEnabled: true,
   };
   scene.defaultGraphBounds = {
     min: { x: -8, y: -8, z: -4 },
@@ -138,7 +137,6 @@ function createPointShadowRegressionScene(): ProjectFileV1 {
     pointShadowMaxLights: 1,
     shadowMapResolution: 1536,
     shadowSoftness: 0.4,
-    gridShadowReceiverEnabled: true,
   };
   project.scene.ambient = { color: '#fff8f0', intensity: 0.03 };
   project.render = {

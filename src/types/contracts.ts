@@ -155,7 +155,6 @@ export interface ShadowSettings {
   pointShadowMaxLights: number;
   shadowMapResolution: number;
   shadowSoftness: number; // 0..1
-  gridShadowReceiverEnabled: boolean;
 }
 
 export interface SceneSettings {
@@ -267,7 +266,7 @@ export interface RenderDiagnostics {
   pointShadowsEnabled: number;
   pointShadowLimit: number;
   pointShadowCasterCounts?: Record<string, number>;
-  shadowReceiver: 'ground' | 'grid' | 'none';
+  shadowReceiver: 'ground' | 'none';
   transparentPlotCount: number;
   shadowMapResolution: number;
   pointShadowMode: PointShadowMode;

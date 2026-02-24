@@ -150,7 +150,7 @@ Quality mode target:
   - `evaluator.ts`: compiled numeric expression execution
   - `compile.ts`: converts plot objects into executable plot evaluators
   - `mesh/parametric.ts`: curve and parametric surface sampling/meshing
-  - `mesh/implicitMarchingTetra.ts`: implicit surface meshing (currently adaptive sparse octree + marching tetrahedra polygonization path; still in-progress)
+  - `mesh/implicitMarchingTetra.ts`: implicit surface meshing (marching tetrahedra polygonization with a uniform leaf-resolution final meshing path, cleanup, and numeric normals; still in-progress)
 
 - `src/workers/`
   - `mathWorker.ts`: parse/classify worker
@@ -223,7 +223,7 @@ Playwright scenarios for shadow smoke and visual regression workflows. Note: vis
 ### Partial / Placeholder / Unfinished
 
 - Quality render mode (`Render > Mode = Quality`) is still a placeholder/progressive counter and may visually jitter
-- Implicit mesher has correctness artifacts on some shapes (holes/missing triangles on cylinders and certain lattice-aligned surfaces)
+- Implicit surface topology is much improved (major hole/crack regressions now covered by tests), but implicit-surface lighting/normals orientation is still incorrect in some scenes
 - Advanced interactive realism effects (SSR, robust transmission/refraction stacking, path-traced still mode) are not complete
 - Playwright visual baselines are not fully trustworthy for WebGPU pixels in headless mode
 
@@ -240,7 +240,7 @@ Implemented:
 - Directional shadows visible and tunable
 - Point-light shadows re-enabled and capability gated
 - Shadow diagnostics overlay with shadow counts/capability/receiver info
-- Grid shadow receiver path (when ground plane is off)
+- Ground-plane shadow receiver path (XY grid is visual-only; not a shadow receiver)
 - Ambient/directional/point controls affecting scene
 - Shadow regression test scenes and Playwright harness
 
@@ -273,18 +273,19 @@ Remaining hardening (future polish):
 
 Implemented in current repo:
 
-- Replaced pure uniform grid behavior with adaptive sparse octree-style refinement/pruning
-- Numeric-gradient normals (improved lighting vs face-only normals)
+- Uniform leaf-resolution final meshing path (temporary robust path that avoids mixed-resolution seam cracks)
+- Numeric-gradient normals + triangle winding orientation pass
+- Closed-mesh orientation canonicalization (signed-volume based) to reduce scalar-sign-dependent inverted lighting on watertight surfaces
 - Mesh cleanup (degenerate filtering, point dedupe, duplicate triangle filtering)
 - Bounds validation / large-volume warning UI in implicit inspector
-- Unit tests for sphere/torus/quality monotonicity/invalid bounds
+- Expanded unit tests for sphere/shifted sphere/torus/ellipsoid/clipped cylinder/`xyz=1` topology regressions, quality monotonicity, and invalid bounds
 
 Not complete / still failing in practice:
 
-- Robust crack-free seam stitching between adaptive cells
+- Implicit surfaces can still appear lit from the wrong side in some scenes (reported with point lights), despite mesher topology looking correct
+- Root-cause isolation is still needed between implicit normal orientation (especially open/clipped surfaces) and renderer/material/light handling
 - Full marching-cubes implementation (current polygonization is still marching-tetra-based)
-- Missing-triangle artifacts on some implicit surfaces (e.g. cylinders)
-- Production-grade topology consistency
+- Production-grade topology consistency / isotropy (marching-tetra artifacts still visible on some shapes)
 
 ### Phase 4 — Real Quality Render Mode (Progressive Still Renderer)
 
@@ -330,7 +331,7 @@ Implemented/partial:
 - PBR materials
 - Shadows
 - Some transmission/refraction approximation behavior
-- Ground/grid receiver flows
+- Ground receiver flow (XY grid is visual-only overlay, no shadow receiving)
 
 Still needed:
 
@@ -363,7 +364,7 @@ Still needed:
 Implemented:
 
 - Parser/classifier unit tests
-- Initial implicit mesher tests
+- Expanded implicit mesher topology/branch/orientation regression tests
 - Playwright smoke + regression scene workflows
 
 Still needed:
@@ -375,9 +376,10 @@ Still needed:
 
 ## Known Issues / Current Bugs (As of This File)
 
-1. **Implicit mesher artifacts (Phase 3 blocker)**
-- Some implicit surfaces (notably cylinders and certain spheres) still show missing triangles/holes.
-- This is a current meshing correctness issue, not just a visual-quality limitation.
+1. **Implicit surface lighting/normals issue (Phase 3 / Phase 1 crossover blocker)**
+- Some implicitly defined surfaces still appear illuminated from the wrong side (reported with point lights) even when the mesh topology looks correct.
+- Mesher-side orientation handling is improved for watertight surfaces, but app-level rendering behavior still needs root-cause diagnosis.
+- Major hole/crack regressions now have unit-test coverage and currently pass locally, so the primary remaining implicit issue is shading/normal correctness.
 
 2. **Quality render mode is placeholder**
 - `Quality (progressive)` mode does not perform real path tracing or produce true accumulated results yet.
@@ -390,10 +392,10 @@ Still needed:
 
 ## Recommended Next Steps (Engineering Priority)
 
-1. **Finish Phase 3 mesher correctness**
-- Eliminate implicit-surface holes/cracks (likely seam stitching or fallback final meshing path)
-- Consider temporary final-pass uniform meshing for implicit surfaces until adaptive seams are stitched
-- Eventually replace marching tetrahedra polygonization with marching cubes
+1. **Finish implicit-surface correctness (Phase 3 / Phase 1 crossover)**
+- Resolve wrong-side lighting on implicit surfaces (especially point-light cases) by isolating mesher normals/orientation vs renderer/material/light behavior
+- Add a targeted regression for implicit lighting correctness (not just topology)
+- Eventually replace marching tetrahedra polygonization with marching cubes and improve isotropy
 
 2. **Implement Phase 4 true quality renderer**
 - Replace placeholder quality mode with real progressive still renderer
@@ -409,6 +411,7 @@ Still needed:
 - This project is **WebGPU-only** by design. Do not add a silent WebGL fallback unless explicitly requested.
 - The root `README.md` is stale (Vite template) and should not be treated as source of truth.
 - Canonical app/worker contracts live in `src/types/contracts.ts`; `src/workers/contracts.ts` is just a re-export.
+- The XY grid is intentionally **not** a shadow receiver anymore. Do not reintroduce a grid shadow-catcher path unless explicitly requested.
 - If debugging rendering issues, use `Render diagnostics overlay` and the built-in test scenes:
   - `/?testScene=shadow-regression`
   - `/?testScene=point-shadow-regression`

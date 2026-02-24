@@ -280,14 +280,6 @@ function SceneTab() {
         <input type="checkbox" checked={scene.gridVisible} onChange={(e) => updateScene({ gridVisible: e.target.checked })} />
         XY grid
       </label>
-      <label className="checkbox-row">
-        <input
-          type="checkbox"
-          checked={scene.shadow.gridShadowReceiverEnabled}
-          onChange={(e) => updateScene({ shadow: { ...scene.shadow, gridShadowReceiverEnabled: e.target.checked } })}
-        />
-        Grid shadow receiver
-      </label>
       <RangeField label="Grid Extent" min={1} max={80} step={1} value={scene.gridExtent} onChange={(v) => updateScene({ gridExtent: v })} />
       <RangeField label="Grid Spacing" min={0.1} max={10} step={0.1} value={scene.gridSpacing} onChange={(v) => updateScene({ gridSpacing: v })} />
       <RangeField label="Grid Opacity" min={0} max={1} step={0.01} value={scene.gridLineOpacity} onChange={(v) => updateScene({ gridLineOpacity: v })} />
