@@ -4,6 +4,7 @@ import {
   Color4,
   DirectionalLight,
   HemisphericLight,
+  ImageProcessingConfiguration,
   LinesMesh,
   Matrix,
   Material,
@@ -173,7 +174,10 @@ export class SceneController {
         return;
       }
       try {
-        this.tickQualityMode();
+        const shouldRender = this.tickQualityMode();
+        if (!shouldRender) {
+          return;
+        }
         this.scene?.render();
       } catch (error) {
         this.renderLoopFailed = true;
@@ -238,7 +242,20 @@ export class SceneController {
     return {
       exportPng: async (filename = '3dplot.png') => {
         if (!this.canvas) return;
+        const waitResult = await this.waitForQualityReadyForExport(20_000);
         await exportCanvasPng(this.canvas, filename);
+        const { render } = useAppStore.getState();
+        if (render.mode === 'quality') {
+          if (waitResult === 'timeout') {
+            useAppStore.getState().setStatusMessage(
+              `Exported PNG before quality accumulation finished (${render.qualityCurrentSamples}/${render.qualitySamplesTarget} samples)`,
+            );
+          } else {
+            useAppStore.getState().setStatusMessage(`Exported quality PNG (${render.qualityCurrentSamples} samples)`);
+          }
+        } else {
+          useAppStore.getState().setStatusMessage('Exported PNG');
+        }
       },
     };
   }
@@ -338,6 +355,14 @@ export class SceneController {
       state.scene.backgroundMode === 'solid'
         ? state.scene.backgroundColor
         : `linear-gradient(${state.scene.gradientTopColor}, ${state.scene.gradientBottomColor})`;
+    const ipc = this.scene.imageProcessingConfiguration;
+    ipc.isEnabled = true;
+    ipc.exposure = clamp(state.render.exposure, 0.01, 10);
+    ipc.toneMappingEnabled = state.render.toneMapping !== 'none';
+    ipc.toneMappingType =
+      state.render.toneMapping === 'aces'
+        ? ImageProcessingConfiguration.TONEMAPPING_ACES
+        : ImageProcessingConfiguration.TONEMAPPING_STANDARD;
 
     this.groundMesh.isVisible = state.scene.groundPlaneVisible;
     this.groundMesh.receiveShadows = directionalShadowsActive;
@@ -1284,7 +1309,7 @@ export class SceneController {
     }
   }
 
-  private tickQualityMode(): void {
+  private tickQualityMode(): boolean {
     const { render, markQualityProgress } = useAppStore.getState();
     if (render.mode !== 'quality') {
       if (this.taaPipeline?.isEnabled) {
@@ -1294,7 +1319,7 @@ export class SceneController {
       if (render.qualityCurrentSamples !== 0 || render.qualityRunning) {
         markQualityProgress(0, false);
       }
-      return;
+      return true;
     }
 
     if (!this.taaPipeline || !this.taaPipeline.isEnabled) {
@@ -1303,7 +1328,7 @@ export class SceneController {
         if (render.qualityCurrentSamples !== 0 || render.qualityRunning) {
           markQualityProgress(0, false);
         }
-        return;
+        return true;
       }
     }
 
@@ -1318,10 +1343,15 @@ export class SceneController {
     }
 
     const target = clamp(Math.round(render.qualitySamplesTarget), 1, 4096);
+    if (this.qualityProgressCounter >= target) {
+      markQualityProgress(this.qualityProgressCounter, false);
+      return false;
+    }
     if (this.qualityProgressCounter < target) {
       this.qualityProgressCounter += 1;
     }
     markQualityProgress(this.qualityProgressCounter, this.qualityProgressCounter < target);
+    return true;
   }
 
   private computeQualityCameraSignature(): string {
@@ -1361,6 +1391,31 @@ export class SceneController {
       console.warn('TAA pipeline dispose failed (ignored)', error);
     } finally {
       this.taaPipeline = null;
+    }
+  }
+
+  private async waitForQualityReadyForExport(timeoutMs: number): Promise<'skipped' | 'ready' | 'timeout'> {
+    const started = performance.now();
+    let announced = false;
+    while (true) {
+      if (this.disposed) {
+        return 'skipped';
+      }
+      const { render } = useAppStore.getState();
+      if (render.mode !== 'quality') {
+        return 'skipped';
+      }
+      if (!render.qualityRunning && render.qualityCurrentSamples >= render.qualitySamplesTarget) {
+        return 'ready';
+      }
+      if (!announced) {
+        useAppStore.getState().setStatusMessage('Waiting for quality accumulation before PNG export...');
+        announced = true;
+      }
+      if (performance.now() - started >= timeoutMs) {
+        return 'timeout';
+      }
+      await delay(50);
     }
   }
 
@@ -1415,6 +1470,10 @@ function clamp(value: number, min: number, max: number): number {
 
 function clamp01(value: number): number {
   return clamp(value, 0, 1);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function qualityBlendFactor(samples: number): number {
