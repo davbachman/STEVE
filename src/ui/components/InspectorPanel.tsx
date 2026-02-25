@@ -304,7 +304,7 @@ function RenderTab() {
         Mode
         <select value={render.mode} onChange={(e) => updateRender({ mode: e.target.value as 'interactive' | 'quality' })}>
           <option value="interactive">Interactive</option>
-          <option value="quality">Quality (prototype)</option>
+          <option value="quality">Quality (progressive)</option>
         </select>
       </label>
       <label>
@@ -344,7 +344,7 @@ function RenderTab() {
         </div>
       ) : null}
       <div className="inspector-note">
-        Interactive rendering includes PBR, shadows, ground reflections, and transmission approximations. Progressive path tracing is scaffolded and not fully implemented yet.
+        Interactive rendering includes PBR, shadows, and transmission approximations. Quality mode now uses progressive temporal accumulation (TAA); a true path-traced still renderer is still future work.
       </div>
     </div>
   );

@@ -56,7 +56,7 @@ export function TopBar({ viewportApi }: TopBarProps) {
           Render Mode
           <select value={render.mode} onChange={(e) => updateRender({ mode: e.target.value as 'interactive' | 'quality' })}>
             <option value="interactive">Interactive</option>
-            <option value="quality">Quality (prototype)</option>
+            <option value="quality">Quality (progressive)</option>
           </select>
         </label>
         {render.mode === 'quality' ? (

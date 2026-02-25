@@ -76,12 +76,12 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
       ) : null}
       {render.mode === 'quality' ? (
         <div className="viewport-overlay viewport-overlay--quality">
-          <div>Quality Render Mode (progressive prototype)</div>
+          <div>Quality Render Mode (progressive accumulation)</div>
           <div>
             Samples: {render.qualityCurrentSamples} / {render.qualitySamplesTarget}
             {render.qualityRunning ? ' (running)' : ' (idle)'}
           </div>
-          <div>Path-traced quality mode is scaffolded; current build uses a progressive placeholder counter.</div>
+          <div>Uses temporal accumulation (TAA). Camera/scene changes restart accumulation.</div>
         </div>
       ) : null}
       {render.showDiagnostics ? (

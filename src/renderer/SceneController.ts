@@ -24,6 +24,7 @@ import {
   type Observer,
   type PointerInfo,
 } from '@babylonjs/core';
+import { TAARenderingPipeline } from '@babylonjs/core/PostProcesses/RenderPipeline/Pipelines/taaRenderingPipeline';
 import { GridMaterial } from '@babylonjs/materials/grid';
 import type { AppState } from '../state/store';
 import { useAppStore } from '../state/store';
@@ -94,6 +95,10 @@ export class SceneController {
   private cameraDrag: { mode: 'orbit' | 'pan'; pointerId: number; lastX: number; lastY: number } | null = null;
   private qualityProgressCounter = 0;
   private lastQualitySignature = '';
+  private lastQualityCameraSignature = '';
+  private taaPipeline: TAARenderingPipeline | null = null;
+  private baseHardwareScalingLevel = 1;
+  private lastAppliedHardwareScalingLevel = Number.NaN;
   private meshHashCache = new Map<string, string>();
   private disposed = false;
   private renderLoopFailed = false;
@@ -115,6 +120,8 @@ export class SceneController {
     });
     await this.engine.initAsync();
     this.engineInitialized = true;
+    this.baseHardwareScalingLevel = this.engine.getHardwareScalingLevel();
+    this.lastAppliedHardwareScalingLevel = this.baseHardwareScalingLevel;
     if (this.disposed) {
       this.safeDisposeEngine();
       throw new Error('Viewport initialization was canceled');
@@ -166,7 +173,7 @@ export class SceneController {
         return;
       }
       try {
-        this.tickQualityCounter();
+        this.tickQualityMode();
         this.scene?.render();
       } catch (error) {
         this.renderLoopFailed = true;
@@ -187,6 +194,7 @@ export class SceneController {
     window.removeEventListener('resize', this.handleResize);
     this.pointerObserver && this.scene?.onPointerObservable.remove(this.pointerObserver);
     this.pointerObserver = null;
+    this.disposeQualityPipeline();
     this.groundMirror?.dispose();
     this.groundMirror = null;
     for (const visual of this.plotVisuals.values()) {
@@ -222,6 +230,7 @@ export class SceneController {
     this.scene = null;
     this.engine = null;
     this.engineInitialized = false;
+    this.lastAppliedHardwareScalingLevel = Number.NaN;
     useAppStore.getState().setRenderDiagnostics({ webgpuReady: false });
   }
 
@@ -245,13 +254,25 @@ export class SceneController {
     this.syncSelection(state.selectedId);
     this.syncRenderDiagnostics(state);
 
+    this.syncQualityRenderer(state);
+
     const sceneSignature = JSON.stringify({
       objects: state.objects,
       scene: state.scene,
-      render: state.render.mode,
+      render: {
+        mode: state.render.mode,
+        toneMapping: state.render.toneMapping,
+        exposure: state.render.exposure,
+        denoise: state.render.denoise,
+        qualitySamplesTarget: state.render.qualitySamplesTarget,
+        qualityResolutionScale: state.render.qualityResolutionScale,
+      },
+      plotMeshVersions: state.objects
+        .filter((o): o is PlotObject => o.type === 'plot')
+        .map((o) => [o.id, state.plotJobs[o.id]?.meshVersion ?? 0]),
     });
     if (sceneSignature !== this.lastQualitySignature) {
-      this.qualityProgressCounter = 0;
+      this.resetQualityAccumulation({ resetHistory: state.render.mode === 'quality' });
       this.lastQualitySignature = sceneSignature;
     }
   }
@@ -1213,24 +1234,141 @@ export class SceneController {
     });
   }
 
-  private tickQualityCounter(): void {
+  private syncQualityRenderer(state: Pick<AppState, 'render'>): void {
+    this.syncQualityResolutionScale(state.render);
+    this.syncQualityPipeline(state.render);
+  }
+
+  private syncQualityResolutionScale(render: AppState['render']): void {
+    if (!this.engine) return;
+    const scale = render.mode === 'quality' ? clamp(render.qualityResolutionScale, 0.25, 4) : 1;
+    const targetLevel = this.baseHardwareScalingLevel / scale;
+    if (Number.isFinite(this.lastAppliedHardwareScalingLevel) && Math.abs(this.lastAppliedHardwareScalingLevel - targetLevel) < 1e-6) {
+      return;
+    }
+    this.engine.setHardwareScalingLevel(targetLevel);
+    this.engine.resize();
+    this.lastAppliedHardwareScalingLevel = targetLevel;
+    this.resetQualityAccumulation({ resetHistory: render.mode === 'quality' });
+  }
+
+  private syncQualityPipeline(render: AppState['render']): void {
+    if (!this.scene || !this.camera) return;
+    if (render.mode !== 'quality') {
+      if (this.taaPipeline?.isEnabled) {
+        this.taaPipeline.isEnabled = false;
+      }
+      return;
+    }
+
+    if (!this.taaPipeline) {
+      const pipeline = new TAARenderingPipeline('quality-taa', this.scene, [this.camera]);
+      if (!pipeline.isSupported) {
+        pipeline.dispose();
+        useAppStore.getState().setStatusMessage('Quality accumulation (TAA) is not supported on this GPU/browser');
+        return;
+      }
+      this.taaPipeline = pipeline;
+    }
+
+    const targetSamples = clamp(Math.round(render.qualitySamplesTarget), 1, 4096);
+    this.taaPipeline.samples = targetSamples;
+    this.taaPipeline.msaaSamples = 1;
+    this.taaPipeline.disableOnCameraMove = true;
+    this.taaPipeline.reprojectHistory = false;
+    this.taaPipeline.clampHistory = true;
+    this.taaPipeline.factor = qualityBlendFactor(targetSamples);
+    if (!this.taaPipeline.isEnabled) {
+      this.taaPipeline.isEnabled = true;
+      this.resetQualityAccumulation({ resetHistory: true });
+    }
+  }
+
+  private tickQualityMode(): void {
     const { render, markQualityProgress } = useAppStore.getState();
     if (render.mode !== 'quality') {
+      if (this.taaPipeline?.isEnabled) {
+        this.taaPipeline.isEnabled = false;
+      }
+      this.lastQualityCameraSignature = '';
       if (render.qualityCurrentSamples !== 0 || render.qualityRunning) {
         markQualityProgress(0, false);
       }
       return;
     }
-    if (this.qualityProgressCounter >= render.qualitySamplesTarget) {
-      markQualityProgress(this.qualityProgressCounter, false);
+
+    if (!this.taaPipeline || !this.taaPipeline.isEnabled) {
+      this.syncQualityPipeline(render);
+      if (!this.taaPipeline || !this.taaPipeline.isEnabled) {
+        if (render.qualityCurrentSamples !== 0 || render.qualityRunning) {
+          markQualityProgress(0, false);
+        }
+        return;
+      }
+    }
+
+    const cameraSig = this.computeQualityCameraSignature();
+    if (cameraSig) {
+      if (this.lastQualityCameraSignature && cameraSig !== this.lastQualityCameraSignature) {
+        // Let TAA's internal camera-move handling reset its history while we
+        // restart our sample-progress counter.
+        this.resetQualityAccumulation({ resetHistory: false });
+      }
+      this.lastQualityCameraSignature = cameraSig;
+    }
+
+    const target = clamp(Math.round(render.qualitySamplesTarget), 1, 4096);
+    if (this.qualityProgressCounter < target) {
+      this.qualityProgressCounter += 1;
+    }
+    markQualityProgress(this.qualityProgressCounter, this.qualityProgressCounter < target);
+  }
+
+  private computeQualityCameraSignature(): string {
+    if (!this.camera) return '';
+    const t = this.camera.target;
+    const r = (n: number) => (Number.isFinite(n) ? n.toFixed(4) : 'nan');
+    return [
+      r(this.camera.alpha),
+      r(this.camera.beta),
+      r(this.camera.radius),
+      r(t.x),
+      r(t.y),
+      r(t.z),
+    ].join('|');
+  }
+
+  private resetQualityAccumulation(options: { resetHistory: boolean }): void {
+    this.qualityProgressCounter = 0;
+    this.lastQualityCameraSignature = this.computeQualityCameraSignature();
+    if (!options.resetHistory || !this.taaPipeline) {
       return;
     }
-    this.qualityProgressCounter += 1;
-    markQualityProgress(this.qualityProgressCounter, true);
+    const wasEnabled = this.taaPipeline.isEnabled;
+    if (!wasEnabled) {
+      return;
+    }
+    // Toggle to force Babylon TAA history/jitter reset when content changes.
+    this.taaPipeline.isEnabled = false;
+    this.taaPipeline.isEnabled = true;
+  }
+
+  private disposeQualityPipeline(): void {
+    if (!this.taaPipeline) return;
+    try {
+      this.taaPipeline.dispose();
+    } catch (error) {
+      console.warn('TAA pipeline dispose failed (ignored)', error);
+    } finally {
+      this.taaPipeline = null;
+    }
   }
 
   private readonly handleResize = () => {
     this.engine?.resize();
+    if (useAppStore.getState().render.mode === 'quality') {
+      this.resetQualityAccumulation({ resetHistory: true });
+    }
   };
 
   private safeDisposeEngine(): void {
@@ -1277,6 +1415,12 @@ function clamp(value: number, min: number, max: number): number {
 
 function clamp01(value: number): number {
   return clamp(value, 0, 1);
+}
+
+function qualityBlendFactor(samples: number): number {
+  const n = clamp(Math.round(samples), 1, 4096);
+  // Lower factor = slower but cleaner convergence for still-frame accumulation.
+  return clamp(1 / Math.max(8, n), 0.01, 0.125);
 }
 
 function stableAlphaIndex(id: string): number {
