@@ -25,6 +25,7 @@ Highlights already working:
 - Object list + inspector panels + scene/material/light controls
 - Selection and drag interactions (camera/object/light)
 - Directional and point lights, with shadows (capability gated)
+- Quality mode baseline with progressive temporal accumulation (TAA), restart-on-change, and quality-aware PNG export wait behavior
 - Local save/load/autosave and PNG export
 - Worker-based parse/meshing pipeline (preview/refine workflow + cancellation)
 - Playwright harness + shadow regression scenes (with WebGPU screenshot caveats)
@@ -42,7 +43,7 @@ Known prototype limitations remain (see "Phase Status" and "Known Issues").
 - Scene controls (ground plane, XY grid, axes, background)
 - Lighting controls (ambient, directional, point lights)
 - Local persistence and PNG export
-- Progressive high-quality still render mode (future phase; currently placeholder)
+- Progressive high-quality still render mode (current TAA accumulation baseline; advanced quality still renderer is a future phase)
 
 ### Scope (Out of v1)
 
@@ -84,7 +85,7 @@ Interactive mode target:
 
 Quality mode target:
 
-- Progressive still renderer with accumulation (future phase)
+- Advanced progressive still renderer beyond the current TAA accumulation baseline (future phase)
 
 ## Current Architecture and Tech Stack
 
@@ -222,14 +223,14 @@ Playwright scenarios for shadow smoke and visual regression workflows. Note: vis
 
 ### Partial / Placeholder / Unfinished
 
-- Quality render mode (`Render > Mode = Quality`) is still a placeholder/progressive counter and may visually jitter
-- Implicit surface topology is much improved (major hole/crack regressions now covered by tests), but implicit-surface lighting/normals orientation is still incorrect in some scenes
-- Advanced interactive realism effects (SSR, robust transmission/refraction stacking, path-traced still mode) are not complete
+- Quality render mode (`Render > Mode = Quality`) now provides progressive temporal accumulation (TAA-based) with restart-on-change and quality-aware PNG export (waits for accumulation with timeout behavior)
+- Implicit surface shading hemisphere issue is resolved in current renderer, but implicit meshing quality/topology remains in progress (marching-tetra artifacts/isotropy limits; marching cubes not yet implemented)
+- Advanced realism is still incomplete (true path-traced quality renderer and robust interactive reflections/transmission stacking are future work)
 - Playwright visual baselines are not fully trustworthy for WebGPU pixels in headless mode
 
 ## Phase Status (Plan Progress)
 
-This project follows an 8-phase roadmap. Status below reflects the code currently in this repo.
+This roadmap was revised after the Phase 4 baseline landed. Phases 1–4 are complete enough for current prototype goals; post-Phase-4 development now follows a priority-aligned roadmap (Phases 5–9) described below.
 
 ### Phase 1 — Rendering Correctness and Lighting Completion
 
@@ -280,71 +281,60 @@ Implemented in current repo:
 - Bounds validation / large-volume warning UI in implicit inspector
 - Expanded unit tests for sphere/shifted sphere/torus/ellipsoid/clipped cylinder/`xyz=1` topology regressions, quality monotonicity, and invalid bounds
 
-Not complete / still failing in practice:
+Not complete / still in progress:
 
-- Implicit surfaces can still appear lit from the wrong side in some scenes (reported with point lights), despite mesher topology looking correct
-- Root-cause isolation is still needed between implicit normal orientation (especially open/clipped surfaces) and renderer/material/light handling
 - Full marching-cubes implementation (current polygonization is still marching-tetra-based)
 - Production-grade topology consistency / isotropy (marching-tetra artifacts still visible on some shapes)
+- More coverage for difficult/open/clipped implicit surfaces and meshing edge cases
 
 ### Phase 4 — Real Quality Render Mode (Progressive Still Renderer)
 
-**Status:** Not implemented (placeholder only)
-
-Current behavior:
-
-- UI scaffold exists
-- Sample counter/progress placeholder runs
-- Can cause visible jitter without true quality improvement
-
-Still needed:
-
-- Actual accumulation renderer
-- restart-on-change logic tied to render buffers
-- quality buffer PNG export
-- reflection/transmission support in quality mode
-
-### Phase 5 — Interaction and Editing UX Hardening
-
-**Status:** Partially implemented
+**Status:** Implemented (progressive TAA accumulation baseline)
 
 Implemented:
 
-- Core selection/dragging/copy/paste/delete/undo/redo
-- Light gizmo usability improvements
-- Z-drag follow improvements
+- Real progressive temporal accumulation in Quality mode (TAA-based)
+- Accumulation restart-on-change behavior (camera/scene/render changes and resize)
+- Quality-aware PNG export wait behavior (with timeout path/status messaging)
+- Tone mapping / exposure controls wired into renderer image processing
+- Quality sample progress/status reporting in UI overlays
 
-Still needed:
+Still needed (moved into next roadmap phase):
 
-- Command-based undo/redo (currently snapshot-style)
-- Drag transaction coalescing
-- Multi-select (optional)
-- Selection prioritization and snapping modes
-- Keyboard shortcut scoping hardening around editor focus
+- Advanced quality still-render realism beyond TAA baseline (path/hybrid renderer work)
+- Higher-fidelity reflections / transmission / IOR in quality mode
+- Dedicated quality render buffer/export pipeline improvements
 
-### Phase 6 — Rendering Realism Expansion (Interactive Mode)
+### Phase 5 — Advanced Quality Realism (True Quality Still Renderer)
 
-**Status:** Partial
+**Status:** Planned (next priority)
 
-Implemented/partial:
+Priority rationale:
 
-- PBR materials
-- Shadows
-- Some transmission/refraction approximation behavior
-- Ground receiver flow (XY grid is visual-only overlay, no shadow receiving)
+- User priority is realism first, with emphasis on eventual quality realism (reflections/transmission/IOR)
+- Current TAA quality mode is a baseline, not the final realism path
 
-Still needed:
+Primary focus:
 
-- Stable planar reflections reintroduced broadly (capability gated)
-- SSR path (if viable on Babylon/WebGPU stack)
-- Better transmission/refraction realism and ordering
-- Quality presets that alter pipeline features/performance meaningfully
+- True quality still-render pipeline (path/hybrid progressive accumulation)
+- Quality-mode reflections, transmission, and IOR realism
+- Quality-buffer export and convergence diagnostics
 
-### Phase 7 — Persistence, Project Schema, and Export Hardening
+### Phase 6 — Broad Command-Based Undo/Redo
 
-**Status:** Partial
+**Status:** Partially implemented foundation (snapshot history exists; command history not yet implemented)
 
-Implemented:
+Scope:
+
+- Broad command-history undo/redo (not transform-only)
+- Drag transaction coalescing and transaction boundaries
+- Inspector edits, object/light CRUD, scene/render setting edits
+
+### Phase 7 — Save/Import Current State Hardening (Local UX + Schema)
+
+**Status:** Partial (core local persistence exists; hardening not complete)
+
+Implemented foundation:
 
 - Project JSON import/export
 - Local autosave
@@ -352,37 +342,350 @@ Implemented:
 
 Still needed:
 
-- Schema migration scaffolding/version upgrades
-- Autosave management UI (restore prompt/history/clear)
-- Import validation UX hardening
-- Expanded export options/resolution presets/transparency handling
+- Schema migration/versioning scaffolding
+- Import validation and error UX hardening
+- Autosave restore/clear UX and metadata
+- Current-state workflow polish
 
-### Phase 8 — QA, Performance, and Release Preparation
+### Phase 8 — QA / Performance / Release Hardening
 
 **Status:** Partial foundation only
 
-Implemented:
+Focus:
 
-- Parser/classifier unit tests
-- Expanded implicit mesher topology/branch/orientation regression tests
-- Playwright smoke + regression scene workflows
+- Validate and harden Phases 5–7 (quality realism, undo/redo, persistence)
+- Broader Playwright coverage, export-based visual checks, and performance budgets
 
-Still needed:
+### Phase 9 — Modest Interactive Realism Upgrade (Optional, Time-Boxed)
 
-- Broader interaction Playwright coverage
-- Visual regression strategy that reliably captures WebGPU output
-- Performance benchmark harness and budgets
-- Bundle-size optimization and diagnostics polish
+**Status:** Deferred / optional (nice-to-have)
+
+Constraints:
+
+- Capability-gated, low-risk improvements only
+- Time-boxed pass with explicit abort criteria if ROI/performance is poor
+
+## Priority-Aligned Post-Phase-4 Roadmap (Supersedes Prior Ordering)
+
+### Summary
+
+Current starting point:
+
+- Phase 4 baseline is complete: Quality mode now uses real progressive temporal accumulation (TAA), restart-on-change behavior, and quality-aware PNG export waiting.
+- Undo/redo exists but is snapshot-based.
+- Local save/open/autosave/import/export exist, but reliability/UX/schema hardening is still needed.
+
+User priorities (current):
+
+1. Better realism, with emphasis on eventual quality realism (reflections + transmission/IOR)
+2. Undo/redo
+3. Save/import current state
+
+Roadmap ordering (revised):
+
+1. Phase 5 — Advanced Quality Realism (True Quality Still Renderer)
+2. Phase 6 — Broad Command-Based Undo/Redo
+3. Phase 7 — Save/Import Current State Hardening (Local UX + Schema)
+4. Phase 8 — QA / Performance / Release Hardening
+5. Phase 9 — Modest Interactive Realism Upgrade (Optional, Time-Boxed)
+
+Interactive realism confidence (used for prioritization):
+
+- Modest interactive realism upgrade (capability-gated, time-boxed): high confidence (`~80-90%`) of useful improvement
+- Strong interactive realism pass: medium confidence (`~50-70%`) with higher artifact/perf risk
+- High-end interactive realism (SSR + robust multi-layer transmission across many scenes/hardware): low confidence (`~20-40%`)
+- Conclusion: interactive realism is intentionally deferred and kept modest; quality realism is the primary realism investment
+
+### Phase 5 — Advanced Quality Realism (True Quality Still Renderer)
+
+Goal:
+
+- Make Quality mode the primary realism path with materially better reflections and transmission/IOR than interactive mode.
+
+Why this phase comes first:
+
+- This matches the current product priority (eventual quality realism matters more than interactive realism).
+- It avoids spending disproportionate effort on fragile interactive realism paths before the still-render path is compelling.
+
+In scope:
+
+- Dedicated quality still-render pipeline (path-traced or hybrid ray/path progressive accumulation)
+- Quality-mode reflections, transmission, and IOR as first-class features
+- Dedicated quality render buffer accumulation and convergence tracking
+- Quality export path that exports the quality buffer (not only transient viewport frames)
+- Capability detection/fallback messaging if the advanced quality renderer cannot initialize
+
+Out of scope:
+
+- Animation/timeline rendering
+- Caustics guarantees
+- Cloud/distributed rendering
+- Mobile support
+
+Implementation approach:
+
+- Keep the current TAA path as a stable quality-preview baseline/fallback while building a new `Quality Still Renderer v1`.
+- Use a dedicated offscreen accumulation buffer + sample counter separate from the raster viewport frame.
+- Implement deterministic accumulation restart triggers for camera, scene/object/light/material changes, render settings changes, and resize/quality-resolution changes.
+- Prioritize quality shading features in v1:
+  - specular reflections
+  - transmission/refraction with IOR
+  - bounded multi-bounce support
+  - point + directional + ambient/environment lighting contribution
+- Integrate quality-buffer PNG export with target-sample waiting (default) and clear status messaging.
+
+Exit criteria:
+
+- Quality mode output is visibly better than interactive mode for reflective/transmissive scenes.
+- IOR changes are clearly visible and stable in quality output.
+- Restarts on relevant changes are reliable and deterministic.
+- Quality export writes the accumulated quality buffer (not a transient raster frame).
+
+### Phase 6 — Broad Command-Based Undo/Redo
+
+Goal:
+
+- Replace snapshot-style history with command-based undo/redo across core editing workflows.
+
+In scope:
+
+- Object/light add/remove
+- Transform drags and numeric transform edits
+- Inspector edits (materials, lighting, scene, render settings)
+- Copy/paste/delete/duplicate object workflows
+- Drag coalescing and transaction boundaries
+- Preserve existing keyboard shortcut behavior from the user perspective
+
+Out of scope:
+
+- CodeMirror keystroke-level undo integration with app history (deferred)
+- Cross-session undo history persistence
+
+Implementation approach:
+
+- Introduce command-history core (`dispatchCommand`, `undo`, `redo`) plus transaction helpers.
+- Migrate store mutations incrementally:
+  - transforms and object/light CRUD first
+  - inspector property edits next
+  - scene/render edits after that
+- Add drag transaction lifecycle:
+  - pointer down = begin transaction
+  - pointer move = coalesce updates
+  - pointer up = commit
+  - cancel/escape = abort active transaction (where applicable)
+- Ensure workerized plot updates and mesh refreshes remain correct across undo/redo.
+
+Exit criteria:
+
+- Mixed edit sequences undo/redo correctly without exploding history length.
+- Dragging produces coalesced history entries.
+- Redo invalidates correctly after new edits.
+- Worker-driven plot refreshes remain stable after undo/redo.
+
+### Phase 7 — Save/Import Current State Hardening (Local UX + Schema)
+
+Goal:
+
+- Make local save/open/autosave/import workflows reliable, user-friendly, and forward-compatible.
+
+In scope:
+
+- Schema versioning and migration scaffolding
+- Import validation and structured error reporting
+- Autosave restore/clear UX and metadata
+- Local save/open/import status and UX polish
+- Current-state export workflow improvements (within local-first scope)
+
+Out of scope:
+
+- Cloud sync/collaboration
+- Remote backups
+- Non-JSON project formats (unless trivial additions are clearly justified)
+
+Implementation approach:
+
+- Add centralized parse/validate/migrate entrypoint before state replacement.
+- Introduce `ProjectFileV2` plus migration from existing project files.
+- Harden import UX for malformed JSON, unsupported versions, invalid object/material/equation shapes, and enum validation failures.
+- Add autosave restore prompt and clear flow with metadata (timestamp/version/object counts).
+- Keep current local JSON flow; improve status/error messaging consistency.
+
+Exit criteria:
+
+- Invalid imports fail safely without mutating current project state.
+- Existing saved projects continue to load via migration path.
+- Autosave restore/clear is visible and reliable.
+- Save/open/import status messaging is consistent and actionable.
+
+### Phase 8 — QA / Performance / Release Hardening (for Phases 5–7)
+
+Goal:
+
+- Stabilize and verify the quality-renderer, undo/redo, and persistence upgrades before deeper optional rendering work.
+
+In scope:
+
+- Automated coverage for quality-mode convergence/export behavior
+- Undo/redo regression matrix (including drag coalescing)
+- Persistence validation/migration/autosave restore tests
+- Performance instrumentation and budgets for quality rendering and key workflows
+
+Implementation approach:
+
+- Unit tests for command history correctness, coalescing, import validation, and migrations.
+- Playwright workflows for quality mode/export, undo/redo, and save/open/autosave/import failures.
+- Prefer app PNG export artifacts for visual verification where direct WebGPU screenshots are unreliable.
+- Add diagnostics for quality sample throughput and relevant fallback reasons.
+
+Exit criteria:
+
+- Core prioritized workflows are regression-tested and stable.
+- Quality export path is reliable enough for iterative use.
+- Performance regressions are measurable and visible in diagnostics.
+
+### Phase 9 — Modest Interactive Realism Upgrade (Optional, Time-Boxed)
+
+Goal:
+
+- Deliver bounded improvements to interactive realism without delaying the higher-priority roadmap phases.
+
+Why deferred:
+
+- Interactive realism has lower ROI for current goals and a lower confidence ceiling if scoped aggressively.
+- This phase is a nice-to-have after quality realism, undo/redo, persistence, and QA hardening.
+
+In scope (strictly modest):
+
+- Capability-gated reflection improvements where low-risk
+- Glass/transmission preset tuning and basic ordering improvements
+- Diagnostics/fallback clarity
+- No attempt to match quality-renderer realism
+
+Out of scope:
+
+- Broad SSR/transparency pipeline overhaul
+- “Quality-like” interactive realism guarantees
+- Deep renderer surgery that destabilizes the quality path
+
+Implementation approach:
+
+- Prioritize low-risk wins first (environment/planar tuning, material preset calibration, targeted sorting fixes).
+- Add explicit diagnostics/fallback reasons rather than silent degradation.
+- Time-box implementation; stop if gains are small relative to complexity or perf cost.
+
+Success criteria:
+
+- Noticeable improvement in common glass/metal demo scenes.
+- No major performance regressions on target desktop setup.
+- No destabilization of quality mode or core editing workflows.
+
+Abort criteria:
+
+- Improvements require deep renderer surgery with uncertain outcomes.
+- Cross-hardware instability becomes the primary task.
+- Performance cost exceeds budget with minimal visual gain.
+
+### Planned API / Interface / Type Changes (Roadmap)
+
+#### Phase 5 planned (Quality Realism)
+
+- `RenderSettings` additions (proposed):
+  - `qualityRenderer` (e.g. `'taa_preview' | 'path'`)
+  - `qualityMaxBounces`
+  - `qualityClampFireflies`
+  - `qualityEarlyExportBehavior` (default `'wait'`)
+- `RenderDiagnostics` additions (proposed):
+  - active quality renderer path
+  - quality resolution
+  - samples/sec
+  - last reset reason
+- `ViewportApi.exportPng(options?)` quality-aware options (planned, backward-compatible)
+
+#### Phase 6 planned (Undo/Redo)
+
+- Command-history interfaces/types (proposed):
+  - `HistoryCommand`
+  - `HistoryTransaction`
+- Store actions (proposed):
+  - `dispatchCommand`
+  - `beginHistoryTransaction`
+  - `commitHistoryTransaction`
+  - `cancelHistoryTransaction`
+
+#### Phase 7 planned (Save/Import)
+
+- Persistence schema/types (proposed):
+  - `ProjectFileV2`
+  - validation/migration entrypoint (e.g. `parseValidateMigrateProjectFile(...)`)
+  - structured `ProjectImportError` / `ProjectImportResult`
+  - autosave metadata types (timestamp/version/object counts)
+
+#### Phase 9 planned (Modest Interactive Realism)
+
+- Minimal capability-gated settings/diagnostics only if needed:
+  - `interactiveReflections`
+  - interactive reflection path/fallback diagnostics
+
+### Test Cases and Scenarios (Roadmap)
+
+#### Phase 5 — Quality Realism
+
+- Quality mode convergence reaches target samples and idles.
+- Accumulation restarts on camera/scene/material/light/render/resize changes.
+- Reflective/transmissive scenes show visible quality-mode improvement over interactive mode.
+- IOR changes produce stable, visible differences in quality output.
+- Quality export waits for target samples by default and exports the quality buffer.
+- Unsupported quality path fails gracefully with clear status/fallback behavior.
+
+#### Phase 6 — Undo/Redo
+
+- Coalesced drag transaction produces one undo step.
+- Mixed sequence (`add -> move -> material edit -> delete`) round-trips through undo/redo.
+- Redo stack clears after new edits.
+- Plot worker mesh updates remain correct after undo/redo of plot changes.
+- Keyboard shortcuts still behave correctly around editor focus.
+
+#### Phase 7 — Save/Import
+
+- Valid older project files migrate and load successfully.
+- Malformed JSON fails with clear messaging and no state mutation.
+- Structurally invalid project data fails safely.
+- Autosave restore prompt appears for newer autosave and restore works.
+- Autosave clear removes stale restore state.
+- Save/open/import status messages are consistent and accurate.
+
+#### Phase 8 — QA / Performance
+
+- Playwright end-to-end quality export workflow.
+- Playwright undo/redo editing workflow.
+- Playwright save/open/autosave restore/import error workflow.
+- Export-based visual regression checks for selected quality scenes.
+- Performance smoke checks for quality sample throughput and memory sanity.
+
+#### Phase 9 — Modest Interactive Realism
+
+- Capability-gated reflection path selection and fallback messaging.
+- Common glass/metal scenes show visible improvement.
+- No critical performance regressions in target scenes.
+
+### Assumptions and Defaults (Roadmap)
+
+- Quality realism is the primary realism investment; interactive realism is deferred and optional.
+- Interactive realism should remain modest and time-boxed unless the user explicitly changes priorities.
+- Undo/redo priority means broad command-history coverage, not transform-only history.
+- Save/import priority means local UX + schema migration/validation hardening, not cloud sync.
+- WebGPU-only policy remains unchanged.
+- CodeMirror editor undo remains separate from app undo/redo in the first command-history phase.
+- Quality mode currently ships as a TAA accumulation baseline; true quality still-render realism begins in Phase 5.
 
 ## Known Issues / Current Bugs (As of This File)
 
-1. **Implicit surface lighting/normals issue (Phase 3 / Phase 1 crossover blocker)**
-- Some implicitly defined surfaces still appear illuminated from the wrong side (reported with point lights) even when the mesh topology looks correct.
-- Mesher-side orientation handling is improved for watertight surfaces, but app-level rendering behavior still needs root-cause diagnosis.
-- Major hole/crack regressions now have unit-test coverage and currently pass locally, so the primary remaining implicit issue is shading/normal correctness.
+1. **Quality render mode is not yet a true path-traced still renderer**
+- `Quality (progressive)` mode now performs real TAA-based temporal accumulation with restart-on-change and quality-aware export waiting, but it is still a baseline and not the final advanced quality realism path.
 
-2. **Quality render mode is placeholder**
-- `Quality (progressive)` mode does not perform real path tracing or produce true accumulated results yet.
+2. **Interactive realism is intentionally limited (for now)**
+- Advanced reflections/transmission realism in interactive mode is deferred to a later modest, time-boxed phase.
+- The primary realism investment is the quality renderer path.
 
 3. **WebGPU Playwright visual capture reliability**
 - Headless Chromium screenshots may not capture WebGPU canvas pixels consistently.
@@ -392,19 +695,22 @@ Still needed:
 
 ## Recommended Next Steps (Engineering Priority)
 
-1. **Finish implicit-surface correctness (Phase 3 / Phase 1 crossover)**
-- Resolve wrong-side lighting on implicit surfaces (especially point-light cases) by isolating mesher normals/orientation vs renderer/material/light behavior
-- Add a targeted regression for implicit lighting correctness (not just topology)
-- Eventually replace marching tetrahedra polygonization with marching cubes and improve isotropy
+Interactive realism was evaluated as lower-confidence / lower-priority for current goals. Quality realism is the primary realism investment, so the next phases should follow the revised ordering below.
 
-2. **Implement Phase 4 true quality renderer**
-- Replace placeholder quality mode with real progressive still renderer
+1. **Phase 5 — Advanced quality realism (true quality still renderer)**
+- Build the advanced quality still-render path (beyond the current TAA baseline), with reflections/transmission/IOR as core focus.
 
-3. **Phase 5 command/history hardening**
-- Move from snapshot-only history to command-based undo/redo for drags and inspector edits
+2. **Phase 6 — Command-based undo/redo**
+- Replace snapshot-style history with broad command-history coverage, drag coalescing, and transaction boundaries.
 
-4. **Phase 8 testing hardening**
-- Improve automated validation for WebGPU rendering (likely image export-based verification)
+3. **Phase 7 — Save/import current state hardening**
+- Add schema migration/validation, autosave restore/clear UX, and stronger local save/open/import reliability.
+
+4. **Phase 8 — QA / performance hardening**
+- Add regression coverage and performance diagnostics for the quality renderer, undo/redo, and persistence flows.
+
+5. **Phase 9 — Modest interactive realism upgrade (optional, time-boxed)**
+- Apply low-risk, capability-gated interactive realism improvements only after the higher-priority phases are stable.
 
 ## Notes for Future Agents
 
@@ -416,3 +722,7 @@ Still needed:
   - `/?testScene=shadow-regression`
   - `/?testScene=point-shadow-regression`
 - Hard refresh after worker/mesher changes because worker bundles are cached separately by the dev server/browser.
+- Quality realism (advanced still renderer) is prioritized over interactive realism in the current roadmap.
+- Interactive realism is intentionally deferred and should be scoped as a modest, time-boxed pass unless priorities change.
+- Do not re-promote a broad interactive realism overhaul ahead of undo/redo or save/import hardening unless the user explicitly changes priorities.
+- The implicit lighting hemisphere issue is considered resolved unless new evidence/regressions appear.
