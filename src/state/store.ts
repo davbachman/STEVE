@@ -105,6 +105,12 @@ function defaultRenderDiagnostics(): RenderDiagnostics {
     qualityResolutionScale: 1,
     qualitySamplesPerSecond: 0,
     qualityLastResetReason: null,
+    qualityPathExecutionMode: null,
+    qualityPathAlignmentStatus: null,
+    qualityPathAlignmentProbeCount: 0,
+    qualityPathAlignmentHitMismatches: 0,
+    qualityPathAlignmentMaxPointError: 0,
+    qualityPathAlignmentMaxDistanceError: 0,
   };
 }
 
@@ -834,6 +840,12 @@ function shallowDiagnosticsEqual(a: RenderDiagnostics, b: RenderDiagnostics): bo
     a.qualityResolutionScale === b.qualityResolutionScale &&
     a.qualitySamplesPerSecond === b.qualitySamplesPerSecond &&
     a.qualityLastResetReason === b.qualityLastResetReason &&
+    a.qualityPathExecutionMode === b.qualityPathExecutionMode &&
+    a.qualityPathAlignmentStatus === b.qualityPathAlignmentStatus &&
+    a.qualityPathAlignmentProbeCount === b.qualityPathAlignmentProbeCount &&
+    a.qualityPathAlignmentHitMismatches === b.qualityPathAlignmentHitMismatches &&
+    a.qualityPathAlignmentMaxPointError === b.qualityPathAlignmentMaxPointError &&
+    a.qualityPathAlignmentMaxDistanceError === b.qualityPathAlignmentMaxDistanceError &&
     shallowPointShadowCasterCountsEqual(a.pointShadowCasterCounts ?? {}, b.pointShadowCasterCounts ?? {})
   );
 }

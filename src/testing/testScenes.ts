@@ -1,6 +1,7 @@
 import type { ProjectFileV1, SceneObject } from '../types/contracts';
 import {
   APP_VERSION,
+  createDefaultCurve,
   createDefaultImplicit,
   createDefaultSurface,
   createPointLight,
@@ -10,7 +11,7 @@ import {
 } from '../state/defaults';
 import { analyzeEquationText } from '../math/classifier';
 
-export type BuiltInTestSceneId = 'shadow-regression' | 'point-shadow-regression';
+export type BuiltInTestSceneId = 'shadow-regression' | 'point-shadow-regression' | 'phase5b-path-mixed-geometry';
 
 export function createBuiltInTestScene(id: BuiltInTestSceneId): ProjectFileV1 {
   switch (id) {
@@ -18,6 +19,8 @@ export function createBuiltInTestScene(id: BuiltInTestSceneId): ProjectFileV1 {
       return createShadowRegressionScene();
     case 'point-shadow-regression':
       return createPointShadowRegressionScene();
+    case 'phase5b-path-mixed-geometry':
+      return createPhase5BPathMixedGeometryScene();
     default:
       return createShadowRegressionScene();
   }
@@ -195,4 +198,124 @@ function createPointShadowRegressionScene(): ProjectFileV1 {
   }
 
   return project;
+}
+
+function createPhase5BPathMixedGeometryScene(): ProjectFileV1 {
+  const glassSheet = createDefaultSurface('Glass Sheet');
+  glassSheet.transform.position = { x: 0, y: 0, z: 0.9 };
+  glassSheet.material = {
+    ...materialPresets['Tinted Glass'],
+    baseColor: '#78d4bd',
+    opacity: 0.28,
+    transmission: 0.9,
+    ior: 1.52,
+    reflectiveness: 0.42,
+    roughness: 0.12,
+  };
+  if (glassSheet.equation.kind === 'parametric_surface') {
+    glassSheet.equation.source = analyzeEquationText('(u, v, 0.22*sin(1.3*u)*cos(1.1*v))').source;
+    glassSheet.equation.domain = {
+      uMin: -3.2,
+      uMax: 3.2,
+      vMin: -3.2,
+      vMax: 3.2,
+      uSamples: 86,
+      vSamples: 86,
+    };
+  }
+
+  const lineCurve = createDefaultCurve('Line Curve (No Tube)');
+  lineCurve.transform.position = { x: 0, y: 0, z: 0.8 };
+  lineCurve.material = {
+    ...materialPresets.Chrome,
+    baseColor: '#f8efe2',
+    roughness: 0.04,
+    reflectiveness: 0.96,
+  };
+  if (lineCurve.equation.kind === 'parametric_curve') {
+    lineCurve.equation.renderAsTube = false;
+    lineCurve.equation.tDomain = { min: -8.5, max: 8.5, samples: 520 };
+    lineCurve.equation.source = analyzeEquationText(
+      '(2.6*cos(1.2*t), 2.2*sin(2.0*t), 0.55*sin(3.0*t) + 0.18*t)',
+    ).source;
+  }
+
+  const backdrop = createDefaultImplicit('Refraction Target');
+  backdrop.transform.position = { x: 0, y: 0, z: 1.8 };
+  backdrop.material = {
+    ...materialPresets.Ceramic,
+    baseColor: '#f2eee7',
+    roughness: 0.2,
+    reflectiveness: 0.12,
+  };
+  if (backdrop.equation.kind === 'implicit_surface') {
+    backdrop.equation.source = analyzeEquationText('x^2 + (y*0.85)^2 + (z-0.2)^2 = 1.4^2').source;
+    backdrop.equation.quality = 'draft';
+    backdrop.equation.bounds = {
+      min: { x: -2.3, y: -2.3, z: -1.8 },
+      max: { x: 2.3, y: 2.3, z: 2.8 },
+    };
+  }
+
+  const key = createPointLight('Warm Key', { x: 4.2, y: -4.4, z: 5.1 });
+  key.color = '#ffd2ab';
+  key.intensity = 34;
+  key.range = 36;
+  key.castShadows = true;
+
+  const rim = createPointLight('Cool Rim', { x: -4.8, y: 4.1, z: 3.6 });
+  rim.color = '#9fd6ff';
+  rim.intensity = 11;
+  rim.range = 28;
+  rim.castShadows = false;
+
+  const scene = defaultSceneSettings();
+  scene.backgroundMode = 'gradient';
+  scene.gradientTopColor = '#111827';
+  scene.gradientBottomColor = '#06080e';
+  scene.backgroundColor = '#0b1020';
+  scene.ambient = { color: '#e9f2ff', intensity: 0.04 };
+  scene.directional = {
+    direction: { x: -0.55, y: 0.25, z: -1 },
+    color: '#fff4e9',
+    intensity: 1.5,
+    castShadows: true,
+  };
+  scene.groundPlaneVisible = true;
+  scene.gridVisible = false;
+  scene.axesVisible = false;
+  scene.shadow = {
+    directionalShadowEnabled: true,
+    pointShadowMode: 'auto',
+    pointShadowMaxLights: 1,
+    shadowMapResolution: 1536,
+    shadowSoftness: 0.45,
+  };
+  scene.defaultGraphBounds = {
+    min: { x: -6, y: -6, z: -3 },
+    max: { x: 6, y: 6, z: 7 },
+  };
+
+  const render = defaultRenderSettings();
+  render.mode = 'quality';
+  render.qualityRenderer = 'path';
+  render.qualitySamplesTarget = 12;
+  render.qualityResolutionScale = 0.5;
+  render.qualityMaxBounces = 4;
+  render.qualityClampFireflies = true;
+  render.toneMapping = 'aces';
+  render.exposure = 1.02;
+  render.showDiagnostics = true;
+  render.qualityCurrentSamples = 0;
+  render.qualityRunning = false;
+
+  const objects: SceneObject[] = [glassSheet, lineCurve, backdrop, key, rim];
+
+  return {
+    schemaVersion: 1,
+    appVersion: APP_VERSION,
+    scene,
+    render,
+    objects,
+  };
 }

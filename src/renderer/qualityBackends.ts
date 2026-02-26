@@ -3,6 +3,7 @@ import {
   Color3,
   DirectionalLight,
   HemisphericLight,
+  LinesMesh,
   Matrix,
   Mesh,
   PBRMaterial,
@@ -15,6 +16,7 @@ import type { AbstractMesh, Material, Scene, WebGPUEngine } from '@babylonjs/cor
 import { TAARenderingPipeline } from '@babylonjs/core/PostProcesses/RenderPipeline/Pipelines/taaRenderingPipeline';
 import { CreateScreenshotUsingRenderTargetAsync } from '@babylonjs/core/Misc/screenshotTools';
 import type { RenderDiagnostics, RenderSettings } from '../types/contracts';
+import { useAppStore } from '../state/store';
 import type {
   PathTraceWorkerLight,
   PathTraceWorkerMaterial,
@@ -330,11 +332,24 @@ class PathQualityBackendV1 implements QualityBackend {
   private cpuPathWorkerOffloadDisabled = false;
   private cpuPathWorkerSceneDirty = true;
   private cpuPathWorkerSceneUnsupported = false;
+  private cpuPathWorkerSceneUnsupportedReason: string | null = null;
+  private cpuPathWorkerUnsupportedAnnouncementKey: string | null = null;
+  private cpuPathWorkerGeometrySignature = '';
+  private cpuPathWorkerMaterialSignature = '';
+  private cpuPathWorkerLightSignature = '';
   private cpuPathWorkerSceneVersion = 0;
   private cpuPathWorkerReadySceneVersion = -1;
   private cpuPathWorkerInitPendingSceneVersion = -1;
   private cpuPathWorkerRequestIdSeq = 0;
   private cpuPathWorkerPendingBatch: CpuPathWorkerPendingBatch | null = null;
+  private cpuPathExecutionMode: string | null = null;
+  private cpuPathAlignmentProbeStatus: string | null = null;
+  private cpuPathAlignmentProbeCount = 0;
+  private cpuPathAlignmentProbeHitMismatches = 0;
+  private cpuPathAlignmentProbeMaxPointError = 0;
+  private cpuPathAlignmentProbeMaxDistanceError = 0;
+  private cpuPathAlignmentProbeLastRunMs = 0;
+  private cpuPathAlignmentProbeForceNext = true;
 
   constructor(
     private readonly engine: WebGPUEngine,
@@ -433,6 +448,8 @@ class PathQualityBackendV1 implements QualityBackend {
     this.captureInFlight = false;
     this.invalidateTraceMeshAcceleration();
     this.terminateCpuPathWorker();
+    this.resetCpuPathInstrumentationState();
+    this.publishCpuPathInstrumentationDiagnostics();
     this.clearAccumCanvas();
   }
 
@@ -501,6 +518,19 @@ class PathQualityBackendV1 implements QualityBackend {
         if (dispatchedWorkerBatch) {
           return;
         }
+        if (this.cpuPathWorkerSceneUnsupported) {
+          this.setCpuPathExecutionMode('main_thread_scene_unsupported');
+        } else if (
+          this.cpuPathWorkerSceneVersion > 0
+          && this.cpuPathWorkerInitPendingSceneVersion === this.cpuPathWorkerSceneVersion
+          && this.cpuPathWorkerReadySceneVersion !== this.cpuPathWorkerSceneVersion
+        ) {
+          this.setCpuPathExecutionMode('main_thread_worker_scene_init_pending');
+        } else if (this.cpuPathWorkerOffloadDisabled || typeof Worker === 'undefined' || typeof window === 'undefined') {
+          this.setCpuPathExecutionMode('main_thread_worker_unavailable');
+        } else {
+          this.setCpuPathExecutionMode('main_thread_fallback');
+        }
       }
       this.captureInFlight = true;
       this.traceHybridBatch(render, width, height);
@@ -554,11 +584,17 @@ class PathQualityBackendV1 implements QualityBackend {
     this.runtimeFailureReason = null;
     this.runtimeFailureRetryAfterMs = 0;
     this.cpuPathWorkerPendingBatch = null;
-    this.invalidateTraceMeshAcceleration();
+    this.cpuPathAlignmentProbeForceNext = true;
     this.clearAccumCanvas();
   }
 
-  resetHistory(): void {}
+  resetHistory(): void {
+    // Distinguish "history" resets (scene/render changes, resize, backend switches)
+    // from camera-only accumulation restarts so we can keep CPU trace BVHs warm while
+    // orbiting/panning in quality mode.
+    this.invalidateTraceMeshAcceleration();
+    this.cpuPathAlignmentProbeForceNext = true;
+  }
 
   dispose(): void {
     this.enabled = false;
@@ -583,6 +619,8 @@ class PathQualityBackendV1 implements QualityBackend {
     this.cpuPathWorkerPendingBatch = null;
     this.invalidateTraceMeshAcceleration();
     this.terminateCpuPathWorker();
+    this.resetCpuPathInstrumentationState();
+    this.publishCpuPathInstrumentationDiagnostics();
   }
 
   private ensureAccumCanvasSize(width: number, height: number): void {
@@ -653,9 +691,234 @@ class PathQualityBackendV1 implements QualityBackend {
       console.warn(`CPU path worker offload disabled: ${reason}`, error);
     }
     this.cpuPathWorkerOffloadDisabled = true;
+    this.setCpuPathExecutionMode('main_thread_worker_offload_disabled');
     this.captureInFlight = false;
     this.cpuPathWorkerPendingBatch = null;
     this.terminateCpuPathWorker();
+  }
+
+  private announceCpuPathWorkerFallback(reason: string): void {
+    if (this.mode !== 'cpu_path') {
+      return;
+    }
+    const key = `scene:${reason}`;
+    if (this.cpuPathWorkerUnsupportedAnnouncementKey === key) {
+      return;
+    }
+    this.cpuPathWorkerUnsupportedAnnouncementKey = key;
+    const message = `Quality Path worker offload unavailable for current scene (${reason}); using main-thread CPU tracing`;
+    console.info(message);
+    try {
+      useAppStore.getState().setStatusMessage(message);
+    } catch {
+      // Ignore status messaging errors; console diagnostics are sufficient fallback.
+    }
+  }
+
+  private clearCpuPathWorkerFallbackAnnouncement(): void {
+    this.cpuPathWorkerUnsupportedAnnouncementKey = null;
+  }
+
+  private resetCpuPathInstrumentationState(): void {
+    if (this.mode !== 'cpu_path') {
+      return;
+    }
+    this.cpuPathExecutionMode = null;
+    this.cpuPathAlignmentProbeStatus = null;
+    this.cpuPathAlignmentProbeCount = 0;
+    this.cpuPathAlignmentProbeHitMismatches = 0;
+    this.cpuPathAlignmentProbeMaxPointError = 0;
+    this.cpuPathAlignmentProbeMaxDistanceError = 0;
+    this.cpuPathAlignmentProbeLastRunMs = 0;
+    this.cpuPathAlignmentProbeForceNext = true;
+  }
+
+  private publishCpuPathInstrumentationDiagnostics(): void {
+    if (this.mode !== 'cpu_path') {
+      return;
+    }
+    try {
+      useAppStore.getState().setRenderDiagnostics({
+        qualityPathExecutionMode: this.cpuPathExecutionMode,
+        qualityPathAlignmentStatus: this.cpuPathAlignmentProbeStatus,
+        qualityPathAlignmentProbeCount: this.cpuPathAlignmentProbeCount,
+        qualityPathAlignmentHitMismatches: this.cpuPathAlignmentProbeHitMismatches,
+        qualityPathAlignmentMaxPointError: this.cpuPathAlignmentProbeMaxPointError,
+        qualityPathAlignmentMaxDistanceError: this.cpuPathAlignmentProbeMaxDistanceError,
+      });
+    } catch {
+      // Diagnostics are best-effort only.
+    }
+  }
+
+  private setCpuPathExecutionMode(mode: string | null): void {
+    if (this.mode !== 'cpu_path') {
+      return;
+    }
+    if (this.cpuPathExecutionMode === mode) {
+      return;
+    }
+    this.cpuPathExecutionMode = mode;
+    this.publishCpuPathInstrumentationDiagnostics();
+  }
+
+  private refreshCpuPathWorkerSceneSignatures(): void {
+    if (this.mode !== 'cpu_path') {
+      return;
+    }
+    this.getTraceableMeshesForCurrentFrame();
+
+    const geometryParts: string[] = [];
+    const materialParts: string[] = [];
+    const lightParts: string[] = [];
+    let lineMeshCount = 0;
+    let otherUnsupportedMeshCount = 0;
+
+    for (const entry of this.traceMeshAccelEntries) {
+      const mesh = entry.mesh;
+      const className = safeMeshClassName(mesh);
+      const isLineMesh = mesh instanceof LinesMesh;
+      if (isLineMesh) {
+        lineMeshCount += 1;
+      } else if (!entry.triangleAccel) {
+        otherUnsupportedMeshCount += 1;
+      }
+
+      const indicesLength = mesh instanceof Mesh ? (mesh.getIndices()?.length ?? 0) : 0;
+      const positionLength = mesh instanceof Mesh ? (mesh.getVerticesData('position')?.length ?? 0) : 0;
+      geometryParts.push([
+        mesh.uniqueId,
+        className,
+        entry.worldMatrixUpdateFlag,
+        entry.triangleAccel?.triangleCount ?? 0,
+        indicesLength,
+        positionLength,
+        sigNum(entry.minX),
+        sigNum(entry.minY),
+        sigNum(entry.minZ),
+        sigNum(entry.maxX),
+        sigNum(entry.maxY),
+        sigNum(entry.maxZ),
+      ].join(','));
+
+      const material = extractHybridSurfaceMaterial(mesh.material);
+      materialParts.push([
+        mesh.uniqueId,
+        sigNum(material.baseColor.x),
+        sigNum(material.baseColor.y),
+        sigNum(material.baseColor.z),
+        sigNum(material.metallic),
+        sigNum(material.roughness),
+        sigNum(material.reflectance),
+        sigNum(material.transmission),
+        sigNum(material.ior),
+        sigNum(material.opacity),
+      ].join(','));
+    }
+
+    for (const light of this.scene.lights) {
+      if (!light.isEnabled() || light.intensity <= 0) {
+        continue;
+      }
+      if (light instanceof HemisphericLight) {
+        const diffuse = light.diffuse ?? Color3.White();
+        const ground = light.groundColor ?? Color3.Black();
+        lightParts.push([
+          'hemi',
+          light.uniqueId,
+          sigNum(light.direction.x),
+          sigNum(light.direction.y),
+          sigNum(light.direction.z),
+          sigNum(diffuse.r),
+          sigNum(diffuse.g),
+          sigNum(diffuse.b),
+          sigNum(ground.r),
+          sigNum(ground.g),
+          sigNum(ground.b),
+          sigNum(light.intensity),
+        ].join(','));
+        continue;
+      }
+      if (light instanceof DirectionalLight) {
+        const diffuse = light.diffuse ?? Color3.White();
+        lightParts.push([
+          'dir',
+          light.uniqueId,
+          sigNum(light.direction.x),
+          sigNum(light.direction.y),
+          sigNum(light.direction.z),
+          sigNum(diffuse.r),
+          sigNum(diffuse.g),
+          sigNum(diffuse.b),
+          sigNum(light.intensity),
+        ].join(','));
+        continue;
+      }
+      if (light instanceof PointLight) {
+        const diffuse = light.diffuse ?? Color3.White();
+        const resolvedRange = Number.isFinite(light.range) && light.range > 0
+          ? light.range
+          : Math.max(1, this.camera.radius * 2);
+        lightParts.push([
+          'point',
+          light.uniqueId,
+          sigNum(light.position.x),
+          sigNum(light.position.y),
+          sigNum(light.position.z),
+          sigNum(diffuse.r),
+          sigNum(diffuse.g),
+          sigNum(diffuse.b),
+          sigNum(light.intensity),
+          sigNum(resolvedRange),
+        ].join(','));
+      }
+    }
+
+    // Environment/ambient affect worker path shading and are tracked alongside lights.
+    const clear = this.scene.clearColor;
+    const ambient = this.scene.ambientColor;
+    lightParts.push([
+      'env',
+      sigNum(Number.isFinite(clear?.r) ? clear.r : 0),
+      sigNum(Number.isFinite(clear?.g) ? clear.g : 0),
+      sigNum(Number.isFinite(clear?.b) ? clear.b : 0),
+      sigNum(Number.isFinite(ambient?.r) ? ambient.r : 0),
+      sigNum(Number.isFinite(ambient?.g) ? ambient.g : 0),
+      sigNum(Number.isFinite(ambient?.b) ? ambient.b : 0),
+    ].join(','));
+
+    const geometrySignature = geometryParts.join('|');
+    const materialSignature = materialParts.join('|');
+    const lightSignature = lightParts.join('|');
+    const signaturesChanged =
+      geometrySignature !== this.cpuPathWorkerGeometrySignature
+      || materialSignature !== this.cpuPathWorkerMaterialSignature
+      || lightSignature !== this.cpuPathWorkerLightSignature;
+    if (signaturesChanged) {
+      this.cpuPathWorkerGeometrySignature = geometrySignature;
+      this.cpuPathWorkerMaterialSignature = materialSignature;
+      this.cpuPathWorkerLightSignature = lightSignature;
+      this.cpuPathWorkerSceneDirty = true;
+    }
+
+    let unsupportedReason: string | null = null;
+    if (lineMeshCount > 0) {
+      unsupportedReason = lineMeshCount === 1
+        ? 'scene contains 1 line mesh (curve line mode); worker offload currently supports triangle meshes only'
+        : `scene contains ${lineMeshCount} line meshes (curve line mode); worker offload currently supports triangle meshes only`;
+    } else if (otherUnsupportedMeshCount > 0) {
+      unsupportedReason = otherUnsupportedMeshCount === 1
+        ? 'scene contains 1 unsupported trace mesh for worker offload (falling back to main-thread CPU path tracing)'
+        : `scene contains ${otherUnsupportedMeshCount} unsupported trace meshes for worker offload (falling back to main-thread CPU path tracing)`;
+    }
+
+    this.cpuPathWorkerSceneUnsupportedReason = unsupportedReason;
+    this.cpuPathWorkerSceneUnsupported = unsupportedReason !== null;
+    if (unsupportedReason) {
+      this.announceCpuPathWorkerFallback(unsupportedReason);
+    } else {
+      this.clearCpuPathWorkerFallbackAnnouncement();
+    }
   }
 
   private ensureCpuPathWorker(): Worker | null {
@@ -682,6 +945,7 @@ class PathQualityBackendV1 implements QualityBackend {
       this.cpuPathWorker = worker;
       this.cpuPathWorkerSceneDirty = true;
       this.cpuPathWorkerSceneUnsupported = false;
+      this.cpuPathWorkerSceneUnsupportedReason = null;
       return worker;
     } catch (error) {
       this.disableCpuPathWorkerOffload('worker initialization failed', error);
@@ -798,6 +1062,7 @@ class PathQualityBackendV1 implements QualityBackend {
       worker.postMessage(request, { transfer: [batch.rays.buffer] });
       this.cpuPathWorkerPendingBatch = batch.pending;
       this.captureInFlight = true;
+      this.setCpuPathExecutionMode('worker');
       return true;
     } catch (error) {
       this.disableCpuPathWorkerOffload('trace batch dispatch failed', error);
@@ -806,7 +1071,10 @@ class PathQualityBackendV1 implements QualityBackend {
   }
 
   private ensureCpuPathWorkerScene(worker: Worker): boolean {
+    this.refreshCpuPathWorkerSceneSignatures();
     if (this.cpuPathWorkerSceneUnsupported) {
+      this.setCpuPathExecutionMode('main_thread_scene_unsupported');
+      this.cpuPathWorkerSceneDirty = false;
       return false;
     }
     if (
@@ -821,6 +1089,7 @@ class PathQualityBackendV1 implements QualityBackend {
       && this.cpuPathWorkerSceneVersion > 0
       && this.cpuPathWorkerInitPendingSceneVersion === this.cpuPathWorkerSceneVersion
     ) {
+      this.setCpuPathExecutionMode('main_thread_worker_scene_init_pending');
       return false;
     }
 
@@ -828,6 +1097,9 @@ class PathQualityBackendV1 implements QualityBackend {
     const snapshot = this.buildCpuPathWorkerSceneSnapshot(nextVersion);
     if (!snapshot) {
       this.cpuPathWorkerSceneUnsupported = true;
+      this.cpuPathWorkerSceneUnsupportedReason ??= 'scene snapshot could not be serialized for worker offload';
+      this.announceCpuPathWorkerFallback(this.cpuPathWorkerSceneUnsupportedReason);
+      this.setCpuPathExecutionMode('main_thread_scene_unsupported');
       this.cpuPathWorkerSceneDirty = false;
       return false;
     }
@@ -843,6 +1115,7 @@ class PathQualityBackendV1 implements QualityBackend {
       this.cpuPathWorkerInitPendingSceneVersion = nextVersion;
       this.cpuPathWorkerSceneDirty = false;
       this.cpuPathWorkerSceneUnsupported = false;
+      this.cpuPathWorkerSceneUnsupportedReason = null;
       return false;
     } catch (error) {
       this.disableCpuPathWorkerOffload('scene snapshot dispatch failed', error);
@@ -977,6 +1250,7 @@ class PathQualityBackendV1 implements QualityBackend {
     const w = this.accumCanvas.width;
     const h = this.accumCanvas.height;
     const tracePixelContext = this.buildHybridTracePixelContext(captureCamera, w, h);
+    this.maybeRunCpuPathAlignmentProbe(captureCamera, tracePixelContext, w, h);
     const totalPixels = Math.max(1, w * h);
     const targetSamples = clamp(Math.round(render.qualitySamplesTarget), 1, 4096);
     const sampleIndex = this.sampleCount + 1;
@@ -1085,6 +1359,7 @@ class PathQualityBackendV1 implements QualityBackend {
     const w = this.accumCanvas.width;
     const h = this.accumCanvas.height;
     const tracePixelContext = this.buildHybridTracePixelContext(captureCamera, w, h);
+    this.maybeRunCpuPathAlignmentProbe(captureCamera, tracePixelContext, w, h);
     const totalPixels = Math.max(1, w * h);
     const targetSamples = clamp(Math.round(render.qualitySamplesTarget), 1, 4096);
     const sampleIndex = this.sampleCount + 1;
@@ -1159,6 +1434,135 @@ class PathQualityBackendV1 implements QualityBackend {
       pixelScaleY: viewportHeight / Math.max(1, height),
       hardwareScale: Math.max(1e-4, this.engine.getHardwareScalingLevel()),
     };
+  }
+
+  private tracePixelCenterToScreenCoords(
+    x: number,
+    y: number,
+    tracePixelContext: HybridTracePixelContext,
+  ): { screenX: number; screenY: number } {
+    const localX = (x + 0.5) * tracePixelContext.pixelScaleX;
+    const localY = (y + 0.5) * tracePixelContext.pixelScaleY;
+    return {
+      screenX: (localX + tracePixelContext.viewportX) * tracePixelContext.hardwareScale,
+      screenY: (localY + tracePixelContext.viewportY) * tracePixelContext.hardwareScale,
+    };
+  }
+
+  private maybeRunCpuPathAlignmentProbe(
+    captureCamera: ArcRotateCamera,
+    tracePixelContext: HybridTracePixelContext,
+    width: number,
+    height: number,
+  ): void {
+    if (this.mode !== 'cpu_path' || !this.enabled) {
+      return;
+    }
+    const now = nowMs();
+    const minIntervalMs = 1000;
+    if (!this.cpuPathAlignmentProbeForceNext && now - this.cpuPathAlignmentProbeLastRunMs < minIntervalMs) {
+      return;
+    }
+    this.cpuPathAlignmentProbeForceNext = false;
+    this.cpuPathAlignmentProbeLastRunMs = now;
+
+    try {
+      const w = Math.max(1, Math.floor(width));
+      const h = Math.max(1, Math.floor(height));
+      const probePoints = buildAlignmentProbePixels(w, h);
+      let hitMismatches = 0;
+      let maxPointError = 0;
+      let maxDistanceError = 0;
+      let validPointComparisons = 0;
+      const rayPredicate = (mesh: AbstractMesh) => this.isTraceRenderableMesh(mesh, null);
+
+      for (const point of probePoints) {
+        const { screenX, screenY } = this.tracePixelCenterToScreenCoords(point.x, point.y, tracePixelContext);
+        const ray = this.scene.createPickingRay(screenX, screenY, PATH_PICK_WORLD_MATRIX, captureCamera);
+        const custom = this.pickTraceRayClosest(ray, null);
+        const babylon = this.scene.pick(screenX, screenY, rayPredicate, false, captureCamera);
+
+        const babylonHit = Boolean(
+          babylon?.hit
+          && typeof babylon.distance === 'number'
+          && Number.isFinite(babylon.distance)
+          && babylon.distance >= 0,
+        );
+        const customHit = Boolean(custom?.hit && Number.isFinite(custom.distance) && custom.distance >= 0);
+
+        if (babylonHit !== customHit) {
+          hitMismatches += 1;
+          continue;
+        }
+        if (!babylonHit || !custom) {
+          continue;
+        }
+
+        const babylonPoint = babylon?.pickedPoint
+          ?? ray.origin.add(ray.direction.scale(Math.max(0, babylon?.distance ?? 0)));
+        const pointError = Vector3.Distance(custom.pickedPoint, babylonPoint);
+        const distanceError = Math.abs(custom.distance - (babylon?.distance ?? custom.distance));
+        if (Number.isFinite(pointError)) {
+          maxPointError = Math.max(maxPointError, pointError);
+        }
+        if (Number.isFinite(distanceError)) {
+          maxDistanceError = Math.max(maxDistanceError, distanceError);
+        }
+        validPointComparisons += 1;
+      }
+
+      const radiusScale = Number.isFinite(this.camera.radius) ? Math.max(0.1, this.camera.radius) : 10;
+      const warnPointThreshold = Math.max(0.003, radiusScale * 0.003);
+      const errorPointThreshold = Math.max(0.02, radiusScale * 0.02);
+      const warnDistanceThreshold = Math.max(0.003, radiusScale * 0.002);
+      const errorDistanceThreshold = Math.max(0.03, radiusScale * 0.015);
+
+      let status = 'ok';
+      if (
+        hitMismatches > 0
+        || maxPointError > errorPointThreshold
+        || maxDistanceError > errorDistanceThreshold
+      ) {
+        status = 'error';
+      } else if (
+        maxPointError > warnPointThreshold
+        || maxDistanceError > warnDistanceThreshold
+      ) {
+        status = 'warning';
+      }
+
+      this.cpuPathAlignmentProbeStatus = status;
+      this.cpuPathAlignmentProbeCount += 1;
+      this.cpuPathAlignmentProbeHitMismatches += hitMismatches;
+      this.cpuPathAlignmentProbeMaxPointError = Math.max(this.cpuPathAlignmentProbeMaxPointError, maxPointError);
+      this.cpuPathAlignmentProbeMaxDistanceError = Math.max(this.cpuPathAlignmentProbeMaxDistanceError, maxDistanceError);
+      this.publishCpuPathInstrumentationDiagnostics();
+
+      if (status === 'error') {
+        console.warn(
+          'Quality path alignment probe reported mismatch',
+          {
+            probeCount: this.cpuPathAlignmentProbeCount,
+            points: probePoints.length,
+            validPointComparisons,
+            hitMismatches,
+            maxPointError,
+            maxDistanceError,
+            qualityResolutionScale: useAppStore.getState().render.qualityResolutionScale,
+            hardwareScale: tracePixelContext.hardwareScale,
+            viewportX: tracePixelContext.viewportX,
+            viewportY: tracePixelContext.viewportY,
+            pixelScaleX: tracePixelContext.pixelScaleX,
+            pixelScaleY: tracePixelContext.pixelScaleY,
+          },
+        );
+      }
+    } catch (error) {
+      this.cpuPathAlignmentProbeStatus = 'probe_error';
+      this.cpuPathAlignmentProbeCount += 1;
+      this.publishCpuPathInstrumentationDiagnostics();
+      console.warn('Quality path alignment probe failed', error);
+    }
   }
 
   private traceHybridRay(
@@ -1579,6 +1983,12 @@ class PathQualityBackendV1 implements QualityBackend {
     this.traceMeshCacheBuilt = false;
     this.cpuPathWorkerSceneDirty = true;
     this.cpuPathWorkerSceneUnsupported = false;
+    this.cpuPathWorkerSceneUnsupportedReason = null;
+    this.clearCpuPathWorkerFallbackAnnouncement();
+    this.cpuPathWorkerGeometrySignature = '';
+    this.cpuPathWorkerMaterialSignature = '';
+    this.cpuPathWorkerLightSignature = '';
+    this.cpuPathAlignmentProbeForceNext = true;
     this.cpuPathWorkerReadySceneVersion = -1;
     this.cpuPathWorkerInitPendingSceneVersion = -1;
   }
@@ -1683,6 +2093,8 @@ class PathQualityBackendV1 implements QualityBackend {
     this.traceMeshBvhRoot = buildTraceMeshBvh(entries);
     this.cpuPathWorkerSceneDirty = true;
     this.cpuPathWorkerSceneUnsupported = false;
+    this.cpuPathWorkerSceneUnsupportedReason = null;
+    this.cpuPathAlignmentProbeForceNext = true;
     this.cpuPathWorkerReadySceneVersion = -1;
     this.cpuPathWorkerInitPendingSceneVersion = -1;
   }
@@ -2258,11 +2670,17 @@ class PathQualityBackendV1 implements QualityBackend {
     // its internal Y-up <-> custom-up matrices (copyFrom() breaks Z-up scenes).
     captureCamera.upVector = this.camera.upVector.clone();
     captureCamera.fov = this.camera.fov;
+    captureCamera.fovMode = this.camera.fovMode;
     captureCamera.minZ = this.camera.minZ;
     captureCamera.maxZ = this.camera.maxZ;
     captureCamera.mode = this.camera.mode;
+    captureCamera.orthoLeft = this.camera.orthoLeft;
+    captureCamera.orthoRight = this.camera.orthoRight;
+    captureCamera.orthoTop = this.camera.orthoTop;
+    captureCamera.orthoBottom = this.camera.orthoBottom;
     captureCamera.layerMask = this.camera.layerMask;
     captureCamera.viewport = this.camera.viewport.clone();
+    this.syncCaptureCameraMatrices(captureCamera);
     return captureCamera;
   }
 
@@ -2271,14 +2689,38 @@ class PathQualityBackendV1 implements QualityBackend {
     captureCamera.beta = this.camera.beta;
     captureCamera.radius = this.camera.radius;
     captureCamera.fov = this.camera.fov;
+    captureCamera.fovMode = this.camera.fovMode;
     captureCamera.minZ = this.camera.minZ;
     captureCamera.maxZ = this.camera.maxZ;
     captureCamera.mode = this.camera.mode;
+    captureCamera.orthoLeft = this.camera.orthoLeft;
+    captureCamera.orthoRight = this.camera.orthoRight;
+    captureCamera.orthoTop = this.camera.orthoTop;
+    captureCamera.orthoBottom = this.camera.orthoBottom;
     // Keep using the setter here as well; mutating in-place bypasses ArcRotateCamera.setMatUp().
     captureCamera.upVector = this.camera.upVector.clone();
     captureCamera.layerMask = this.camera.layerMask;
     captureCamera.viewport = this.camera.viewport.clone();
     captureCamera.target.copyFrom(this.camera.target);
+    this.syncCaptureCameraMatrices(captureCamera);
+  }
+
+  private syncCaptureCameraMatrices(captureCamera: ArcRotateCamera): void {
+    try {
+      captureCamera.computeWorldMatrix();
+    } catch {
+      // Ignore transient matrix errors during scene mutation.
+    }
+    try {
+      captureCamera.getViewMatrix(true);
+    } catch {
+      // Ignore transient matrix errors during scene mutation.
+    }
+    try {
+      captureCamera.getProjectionMatrix(true);
+    } catch {
+      // Ignore transient matrix errors during scene mutation.
+    }
   }
 
   private applySubpixelCameraJitter(
@@ -2714,6 +3156,12 @@ interface TraceTriangleHitResult {
 
 function buildTraceTriangleAccel(mesh: AbstractMesh): TraceTriangleAccel | null {
   if (!(mesh instanceof Mesh)) {
+    return null;
+  }
+  if (mesh instanceof LinesMesh) {
+    // Lines meshes are indexed as line segments, not triangles. Treating their index
+    // buffer as triangle soup produces bogus path-traced hits (especially curve plots).
+    // Fall back to Babylon ray picking for the CPU path tracer instead.
     return null;
   }
 
@@ -3945,6 +4393,48 @@ function refractDirectionAcrossInterface(
     return null;
   }
   return dir.normalize();
+}
+
+function buildAlignmentProbePixels(width: number, height: number): Array<{ x: number; y: number }> {
+  const w = Math.max(1, Math.floor(width));
+  const h = Math.max(1, Math.floor(height));
+  const candidates: Array<{ x: number; y: number }> = [
+    { x: Math.floor(w * 0.5), y: Math.floor(h * 0.5) },
+    { x: Math.floor(w * 0.25), y: Math.floor(h * 0.25) },
+    { x: Math.floor(w * 0.75), y: Math.floor(h * 0.25) },
+    { x: Math.floor(w * 0.25), y: Math.floor(h * 0.75) },
+    { x: Math.floor(w * 0.75), y: Math.floor(h * 0.75) },
+    { x: Math.floor(w * 0.5), y: Math.floor(h * 0.15) },
+    { x: Math.floor(w * 0.5), y: Math.floor(h * 0.85) },
+    { x: Math.floor(w * 0.15), y: Math.floor(h * 0.5) },
+    { x: Math.floor(w * 0.85), y: Math.floor(h * 0.5) },
+  ];
+  const seen = new Set<string>();
+  const out: Array<{ x: number; y: number }> = [];
+  for (const point of candidates) {
+    const x = clamp(Math.floor(point.x), 0, w - 1);
+    const y = clamp(Math.floor(point.y), 0, h - 1);
+    const key = `${x},${y}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push({ x, y });
+  }
+  return out;
+}
+
+function sigNum(value: number, digits = 4): string {
+  return Number.isFinite(value) ? value.toFixed(digits) : 'nan';
+}
+
+function safeMeshClassName(mesh: AbstractMesh): string {
+  try {
+    const getClassName = (mesh as { getClassName?: () => string }).getClassName;
+    return typeof getClassName === 'function' ? getClassName.call(mesh) : 'AbstractMesh';
+  } catch {
+    return 'AbstractMesh';
+  }
 }
 
 function nowMs(): number {

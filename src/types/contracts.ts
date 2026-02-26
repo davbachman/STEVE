@@ -280,6 +280,12 @@ export interface RenderDiagnostics {
   qualityResolutionScale: number;
   qualitySamplesPerSecond: number;
   qualityLastResetReason: string | null;
+  qualityPathExecutionMode: string | null;
+  qualityPathAlignmentStatus: string | null;
+  qualityPathAlignmentProbeCount: number;
+  qualityPathAlignmentHitMismatches: number;
+  qualityPathAlignmentMaxPointError: number;
+  qualityPathAlignmentMaxDistanceError: number;
 }
 
 export type PlotJobPhase = 'idle' | 'queued' | 'parsing' | 'mesh_preview' | 'mesh_final' | 'ready' | 'error' | 'skipped';

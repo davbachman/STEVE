@@ -27,7 +27,11 @@ export default function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const testScene = params.get('testScene');
-    if (testScene === 'shadow-regression' || testScene === 'point-shadow-regression') {
+    if (
+      testScene === 'shadow-regression'
+      || testScene === 'point-shadow-regression'
+      || testScene === 'phase5b-path-mixed-geometry'
+    ) {
       replaceProject(createBuiltInTestScene(testScene));
       setStatusMessage(`Loaded test scene: ${testScene}`);
     }

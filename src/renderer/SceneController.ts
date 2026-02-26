@@ -1423,6 +1423,8 @@ export class SceneController {
     const shadowReceiver: RenderDiagnostics['shadowReceiver'] = state.scene.groundPlaneVisible
       ? 'ground'
       : 'none';
+    const currentDiagnostics = useAppStore.getState().renderDiagnostics;
+    const pathDiagnosticsActive = state.render.mode === 'quality' && this.qualityActiveRenderer === 'path';
 
     useAppStore.getState().setRenderDiagnostics({
       webgpuReady: Boolean(this.engine && this.scene),
@@ -1443,6 +1445,12 @@ export class SceneController {
       qualityResolutionScale: state.render.mode === 'quality' ? clamp(state.render.qualityResolutionScale, 0.25, 4) : 1,
       qualitySamplesPerSecond: state.render.mode === 'quality' ? this.qualitySamplesPerSecond : 0,
       qualityLastResetReason: state.render.mode === 'quality' ? this.qualityLastResetReason : null,
+      qualityPathExecutionMode: pathDiagnosticsActive ? currentDiagnostics.qualityPathExecutionMode : null,
+      qualityPathAlignmentStatus: pathDiagnosticsActive ? currentDiagnostics.qualityPathAlignmentStatus : null,
+      qualityPathAlignmentProbeCount: pathDiagnosticsActive ? currentDiagnostics.qualityPathAlignmentProbeCount : 0,
+      qualityPathAlignmentHitMismatches: pathDiagnosticsActive ? currentDiagnostics.qualityPathAlignmentHitMismatches : 0,
+      qualityPathAlignmentMaxPointError: pathDiagnosticsActive ? currentDiagnostics.qualityPathAlignmentMaxPointError : 0,
+      qualityPathAlignmentMaxDistanceError: pathDiagnosticsActive ? currentDiagnostics.qualityPathAlignmentMaxDistanceError : 0,
     });
   }
 

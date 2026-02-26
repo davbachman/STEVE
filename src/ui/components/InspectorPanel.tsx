@@ -368,6 +368,16 @@ function RenderTab() {
           <div>Quality res scale: {diagnostics.qualityResolutionScale.toFixed(2)}</div>
           <div>Quality samples/sec: {diagnostics.qualitySamplesPerSecond}</div>
           <div>Quality reset: {diagnostics.qualityLastResetReason ?? 'none'}</div>
+          {diagnostics.qualityPathExecutionMode ? <div>Path exec: {diagnostics.qualityPathExecutionMode}</div> : null}
+          {diagnostics.qualityPathAlignmentStatus ? (
+            <div>
+              Path align: {diagnostics.qualityPathAlignmentStatus}
+              {' '}| probes {diagnostics.qualityPathAlignmentProbeCount}
+              {' '}| hit mismatches {diagnostics.qualityPathAlignmentHitMismatches}
+              {' '}| max point err {diagnostics.qualityPathAlignmentMaxPointError.toFixed(4)}
+              {' '}| max dist err {diagnostics.qualityPathAlignmentMaxDistanceError.toFixed(4)}
+            </div>
+          ) : null}
           {diagnostics.qualityRendererFallbackReason ? <div>Quality fallback: {diagnostics.qualityRendererFallbackReason}</div> : null}
         </div>
       ) : null}
