@@ -185,8 +185,12 @@ export interface RenderSettings {
   toneMapping: 'aces' | 'filmic' | 'none';
   exposure: number;
   interactiveQuality: 'performance' | 'balanced' | 'quality';
+  qualityRenderer: 'taa_preview' | 'hybrid_gpu_preview' | 'path';
   qualitySamplesTarget: number;
   qualityResolutionScale: number;
+  qualityMaxBounces: number;
+  qualityClampFireflies: boolean;
+  qualityEarlyExportBehavior: 'wait' | 'immediate';
   denoise: boolean;
   qualityRunning: boolean;
   qualityCurrentSamples: number;
@@ -271,6 +275,11 @@ export interface RenderDiagnostics {
   shadowMapResolution: number;
   pointShadowMode: PointShadowMode;
   pointShadowCapability: 'unknown' | 'available' | 'unavailable';
+  qualityActiveRenderer: 'none' | 'taa_preview' | 'hybrid_gpu_preview' | 'path';
+  qualityRendererFallbackReason: string | null;
+  qualityResolutionScale: number;
+  qualitySamplesPerSecond: number;
+  qualityLastResetReason: string | null;
 }
 
 export type PlotJobPhase = 'idle' | 'queued' | 'parsing' | 'mesh_preview' | 'mesh_final' | 'ready' | 'error' | 'skipped';

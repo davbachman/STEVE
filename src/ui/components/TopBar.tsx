@@ -17,6 +17,7 @@ export function TopBar({ viewportApi }: TopBarProps) {
   const updateRender = useAppStore((s) => s.updateRender);
   const status = useAppStore((s) => s.ui.statusMessage);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
+  const displayQualitySamples = Math.max(0, Math.floor(render.qualityCurrentSamples));
 
   return (
     <header className="top-bar">
@@ -73,7 +74,7 @@ export function TopBar({ viewportApi }: TopBarProps) {
               />
             </label>
             <span className="top-bar__quality-status">
-              {render.qualityCurrentSamples}/{render.qualitySamplesTarget} {render.qualityRunning ? 'running' : 'idle'}
+              {displayQualitySamples}/{render.qualitySamplesTarget} {render.qualityRunning ? 'running' : 'idle'}
             </span>
           </>
         ) : null}
@@ -81,7 +82,7 @@ export function TopBar({ viewportApi }: TopBarProps) {
 
       <div className="top-bar__group top-bar__group--right">
         <span className="top-bar__hint">RMB orbit | Shift+RMB pan | LMB drag move | Shift+LMB drag Z</span>
-        {status ? <span className="top-bar__status">{status}</span> : null}
+        {status ? <span className="top-bar__status" title={status}>{status}</span> : null}
       </div>
 
       <input

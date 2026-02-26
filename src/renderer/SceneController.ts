@@ -25,15 +25,16 @@ import {
   type Observer,
   type PointerInfo,
 } from '@babylonjs/core';
-import { TAARenderingPipeline } from '@babylonjs/core/PostProcesses/RenderPipeline/Pipelines/taaRenderingPipeline';
 import { GridMaterial } from '@babylonjs/materials/grid';
+import { CreateScreenshotUsingRenderTargetAsync } from '@babylonjs/core/Misc/screenshotTools';
 import type { AppState } from '../state/store';
 import { useAppStore } from '../state/store';
-import type { PlotJobStatus, PlotObject, PointLightObject, RenderDiagnostics, SerializedMesh } from '../types/contracts';
+import type { PlotJobStatus, PlotObject, PointLightObject, RenderDiagnostics, RenderSettings, SerializedMesh } from '../types/contracts';
 import { compilePlotObject } from '../math/compile';
 import { buildImplicitMeshFromScalarField } from '../math/mesh/implicitMarchingTetra';
 import { buildSurfaceMesh, sampleCurve } from '../math/mesh/parametric';
 import { getRuntimePlotMesh } from '../workers/runtimeMeshCache';
+import { QualityBackendRouter } from './qualityBackends';
 
 export interface ViewportApi {
   exportPng: (filename?: string) => Promise<void>;
@@ -94,10 +95,18 @@ export class SceneController {
   private pointerObserver: Nullable<Observer<PointerInfo>> = null;
   private dragState: DragState | null = null;
   private cameraDrag: { mode: 'orbit' | 'pan'; pointerId: number; lastX: number; lastY: number } | null = null;
-  private qualityProgressCounter = 0;
   private lastQualitySignature = '';
   private lastQualityCameraSignature = '';
-  private taaPipeline: TAARenderingPipeline | null = null;
+  private qualityBackends: QualityBackendRouter | null = null;
+  private qualityActiveRenderer: RenderDiagnostics['qualityActiveRenderer'] = 'none';
+  private qualityFallbackReason: string | null = null;
+  private qualityLastResetReason: string | null = null;
+  private qualitySamplesPerSecond = 0;
+  private qualityPerfWindowStartMs = 0;
+  private qualityPerfWindowStartSamples = 0;
+  private lastQualityStatusMessageKey = '';
+  private qualityPreviewOverlayCanvas: HTMLCanvasElement | null = null;
+  private qualityPreviewOverlayCtx: CanvasRenderingContext2D | null = null;
   private baseHardwareScalingLevel = 1;
   private lastAppliedHardwareScalingLevel = Number.NaN;
   private meshHashCache = new Map<string, string>();
@@ -179,6 +188,7 @@ export class SceneController {
           return;
         }
         this.scene?.render();
+        this.handleQualityFrameRendered();
       } catch (error) {
         this.renderLoopFailed = true;
         const message = error instanceof Error ? error.message : 'Unknown Babylon render error';
@@ -199,6 +209,9 @@ export class SceneController {
     this.pointerObserver && this.scene?.onPointerObservable.remove(this.pointerObserver);
     this.pointerObserver = null;
     this.disposeQualityPipeline();
+    this.qualityPreviewOverlayCanvas?.remove();
+    this.qualityPreviewOverlayCanvas = null;
+    this.qualityPreviewOverlayCtx = null;
     this.groundMirror?.dispose();
     this.groundMirror = null;
     for (const visual of this.plotVisuals.values()) {
@@ -243,12 +256,29 @@ export class SceneController {
       exportPng: async (filename = '3dplot.png') => {
         if (!this.canvas) return;
         const waitResult = await this.waitForQualityReadyForExport(20_000);
-        await exportCanvasPng(this.canvas, filename);
         const { render } = useAppStore.getState();
+        let exportCanvas =
+          render.mode === 'quality' ? (this.qualityBackends?.getActiveBackendExportCanvas() ?? this.canvas) : this.canvas;
+        if (exportCanvas !== this.canvas && canvasLooksBlank(exportCanvas)) {
+          exportCanvas = this.canvas;
+        }
+        if (exportCanvas === this.canvas && this.engine && this.camera) {
+          await exportScenePngViaRenderTarget(this.engine, this.camera, this.canvas, filename);
+        } else {
+          await exportCanvasPng(exportCanvas, filename);
+        }
         if (render.mode === 'quality') {
           if (waitResult === 'timeout') {
             useAppStore.getState().setStatusMessage(
               `Exported PNG before quality accumulation finished (${render.qualityCurrentSamples}/${render.qualitySamplesTarget} samples)`,
+            );
+          } else if (
+            waitResult === 'skipped'
+            && render.qualityEarlyExportBehavior === 'immediate'
+            && render.qualityCurrentSamples < render.qualitySamplesTarget
+          ) {
+            useAppStore.getState().setStatusMessage(
+              `Exported quality PNG early (${render.qualityCurrentSamples}/${render.qualitySamplesTarget} samples)`,
             );
           } else {
             useAppStore.getState().setStatusMessage(`Exported quality PNG (${render.qualityCurrentSamples} samples)`);
@@ -269,7 +299,6 @@ export class SceneController {
     this.syncLights(state);
     this.syncPlots(state);
     this.syncSelection(state.selectedId);
-    this.syncRenderDiagnostics(state);
 
     this.syncQualityRenderer(state);
 
@@ -281,17 +310,25 @@ export class SceneController {
         toneMapping: state.render.toneMapping,
         exposure: state.render.exposure,
         denoise: state.render.denoise,
+        qualityRenderer: state.render.qualityRenderer,
         qualitySamplesTarget: state.render.qualitySamplesTarget,
         qualityResolutionScale: state.render.qualityResolutionScale,
+        qualityMaxBounces: state.render.qualityMaxBounces,
+        qualityClampFireflies: state.render.qualityClampFireflies,
       },
       plotMeshVersions: state.objects
         .filter((o): o is PlotObject => o.type === 'plot')
         .map((o) => [o.id, state.plotJobs[o.id]?.meshVersion ?? 0]),
     });
     if (sceneSignature !== this.lastQualitySignature) {
-      this.resetQualityAccumulation({ resetHistory: state.render.mode === 'quality' });
+      this.resetQualityAccumulation({
+        resetHistory: state.render.mode === 'quality',
+        reason: 'scene_or_render_change',
+      });
       this.lastQualitySignature = sceneSignature;
     }
+
+    this.syncRenderDiagnostics(state);
   }
 
   private syncSceneSettings(state: Pick<AppState, 'scene' | 'render'>): void {
@@ -1140,7 +1177,7 @@ export class SceneController {
       } else {
         const panScale = this.camera.radius * 0.002;
         const right = this.camera.getDirection(new Vector3(1, 0, 0));
-        const up = this.camera.getDirection(new Vector3(0, 0, 1));
+        const up = this.camera.getDirection(new Vector3(0, 1, 0));
         this.camera.target.addInPlace(right.scale(-dx * panScale));
         this.camera.target.addInPlace(up.scale(dy * panScale));
       }
@@ -1225,7 +1262,152 @@ export class SceneController {
     return false;
   }
 
-  private syncRenderDiagnostics(state: Pick<AppState, 'scene' | 'objects'>): void {
+  private setQualityRendererStatus(active: RenderDiagnostics['qualityActiveRenderer'], fallbackReason: string | null): void {
+    const activeChanged = this.qualityActiveRenderer !== active;
+    const fallbackChanged = this.qualityFallbackReason !== fallbackReason;
+    if (!activeChanged && !fallbackChanged) {
+      return;
+    }
+    this.qualityActiveRenderer = active;
+    this.qualityFallbackReason = fallbackReason;
+    if (active === 'none') {
+      this.resetQualityPerfTracking();
+    }
+    useAppStore.getState().setRenderDiagnostics({
+      qualityActiveRenderer: this.qualityActiveRenderer,
+      qualityRendererFallbackReason: this.qualityFallbackReason,
+      qualitySamplesPerSecond: this.qualitySamplesPerSecond,
+    });
+  }
+
+  private resetQualityPerfTracking(): void {
+    this.qualityPerfWindowStartMs = 0;
+    this.qualityPerfWindowStartSamples = 0;
+    if (this.qualitySamplesPerSecond !== 0) {
+      this.qualitySamplesPerSecond = 0;
+      useAppStore.getState().setRenderDiagnostics({ qualitySamplesPerSecond: 0 });
+    }
+  }
+
+  private ensureQualityPreviewOverlayCanvas(): void {
+    if (this.qualityPreviewOverlayCanvas || typeof document === 'undefined') {
+      return;
+    }
+    const parent = this.canvas.parentElement;
+    if (!parent) {
+      return;
+    }
+    const overlay = document.createElement('canvas');
+    const ctx = overlay.getContext('2d', { alpha: true });
+    if (!ctx) {
+      return;
+    }
+    overlay.className = 'viewport-canvas';
+    overlay.style.position = 'absolute';
+    overlay.style.inset = '0';
+    overlay.style.width = '100%';
+    overlay.style.height = '100%';
+    overlay.style.pointerEvents = 'none';
+    overlay.style.zIndex = '2';
+    overlay.style.display = 'none';
+    overlay.style.background = 'transparent';
+    parent.insertBefore(overlay, this.canvas.nextSibling);
+    this.qualityPreviewOverlayCanvas = overlay;
+    this.qualityPreviewOverlayCtx = ctx;
+  }
+
+  private hideQualityPreviewOverlay(): void {
+    if (this.qualityPreviewOverlayCanvas) {
+      this.qualityPreviewOverlayCanvas.style.display = 'none';
+    }
+  }
+
+  private syncQualityPreviewOverlay(render: RenderSettings): void {
+    const overlayEligible =
+      this.qualityActiveRenderer === 'path'
+      || this.qualityActiveRenderer === 'hybrid_gpu_preview';
+    if (render.mode !== 'quality' || !overlayEligible || !this.qualityBackends) {
+      this.hideQualityPreviewOverlay();
+      return;
+    }
+    // Partial sub-pass previews (before the first full sample) are visually misleading:
+    // sparse interleaved pixels + browser canvas scaling can look like ghost geometry.
+    if (render.qualityCurrentSamples < 1) {
+      this.hideQualityPreviewOverlay();
+      return;
+    }
+    const exportCanvas = this.qualityBackends.getActiveBackendExportCanvas();
+    if (!exportCanvas) {
+      this.hideQualityPreviewOverlay();
+      return;
+    }
+    this.ensureQualityPreviewOverlayCanvas();
+    if (!this.qualityPreviewOverlayCanvas || !this.qualityPreviewOverlayCtx) {
+      return;
+    }
+    const overlay = this.qualityPreviewOverlayCanvas;
+    const ctx = this.qualityPreviewOverlayCtx;
+    const w = Math.max(1, exportCanvas.width);
+    const h = Math.max(1, exportCanvas.height);
+    if (overlay.width !== w || overlay.height !== h) {
+      overlay.width = w;
+      overlay.height = h;
+    }
+    ctx.save();
+    try {
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'copy';
+      ctx.drawImage(exportCanvas, 0, 0, w, h);
+    } finally {
+      ctx.restore();
+    }
+    overlay.style.display = 'block';
+  }
+
+  private updateQualitySamplesPerSecond(currentSamples: number, active: boolean): void {
+    if (!active) {
+      this.resetQualityPerfTracking();
+      return;
+    }
+    const now = performance.now();
+    if (this.qualityPerfWindowStartMs <= 0) {
+      this.qualityPerfWindowStartMs = now;
+      this.qualityPerfWindowStartSamples = currentSamples;
+      return;
+    }
+    const elapsedMs = now - this.qualityPerfWindowStartMs;
+    if (elapsedMs < 250) {
+      return;
+    }
+    const deltaSamples = Math.max(0, currentSamples - this.qualityPerfWindowStartSamples);
+    const rawSps = elapsedMs > 0 ? (deltaSamples * 1000) / elapsedMs : 0;
+    const nextSps =
+      rawSps >= 10
+        ? Math.round(rawSps)
+        : rawSps >= 1
+          ? Math.round(rawSps * 10) / 10
+          : rawSps >= 0.1
+            ? Math.round(rawSps * 100) / 100
+            : Math.round(rawSps * 1000) / 1000;
+    if (nextSps !== this.qualitySamplesPerSecond) {
+      this.qualitySamplesPerSecond = nextSps;
+      useAppStore.getState().setRenderDiagnostics({ qualitySamplesPerSecond: nextSps });
+    }
+    if (elapsedMs >= 1000 || deltaSamples >= 32) {
+      this.qualityPerfWindowStartMs = now;
+      this.qualityPerfWindowStartSamples = currentSamples;
+    }
+  }
+
+  private announceQualityStatusOnce(key: string, message: string): void {
+    if (this.lastQualityStatusMessageKey === key) {
+      return;
+    }
+    this.lastQualityStatusMessageKey = key;
+    useAppStore.getState().setStatusMessage(message);
+  }
+
+  private syncRenderDiagnostics(state: Pick<AppState, 'scene' | 'objects' | 'render'>): void {
     const plots = state.objects.filter((o): o is PlotObject => o.type === 'plot');
     const pointLights = state.objects.filter((o): o is PointLightObject => o.type === 'point_light');
     const pointShadowsEnabled = Array.from(this.pointLightVisuals.values()).filter((v) => v.shadowEnabled).length;
@@ -1256,6 +1438,11 @@ export class SceneController {
       shadowMapResolution: state.scene.shadow.shadowMapResolution,
       pointShadowMode: state.scene.shadow.pointShadowMode,
       pointShadowCapability: this.pointShadowCapability,
+      qualityActiveRenderer: state.render.mode === 'quality' ? this.qualityActiveRenderer : 'none',
+      qualityRendererFallbackReason: state.render.mode === 'quality' ? this.qualityFallbackReason : null,
+      qualityResolutionScale: state.render.mode === 'quality' ? clamp(state.render.qualityResolutionScale, 0.25, 4) : 1,
+      qualitySamplesPerSecond: state.render.mode === 'quality' ? this.qualitySamplesPerSecond : 0,
+      qualityLastResetReason: state.render.mode === 'quality' ? this.qualityLastResetReason : null,
     });
   }
 
@@ -1274,57 +1461,82 @@ export class SceneController {
     this.engine.setHardwareScalingLevel(targetLevel);
     this.engine.resize();
     this.lastAppliedHardwareScalingLevel = targetLevel;
-    this.resetQualityAccumulation({ resetHistory: render.mode === 'quality' });
+    this.resetQualityAccumulation({
+      resetHistory: render.mode === 'quality',
+      reason: render.mode === 'quality' ? 'resolution_scale_change' : null,
+    });
   }
 
-  private syncQualityPipeline(render: AppState['render']): void {
-    if (!this.scene || !this.camera) return;
+  private syncQualityPipeline(render: RenderSettings): void {
+    if (!this.engine || !this.scene || !this.camera) return;
+    this.qualityBackends ??= new QualityBackendRouter(this.engine, this.scene, this.camera);
+
+    const result = this.qualityBackends.sync(render);
+    const effectiveFallbackReason =
+      result.activeRenderer !== 'none' && result.activeRenderer === render.qualityRenderer
+        ? null
+        : result.fallbackReason;
+    this.setQualityRendererStatus(result.activeRenderer, effectiveFallbackReason);
+
     if (render.mode !== 'quality') {
-      if (this.taaPipeline?.isEnabled) {
-        this.taaPipeline.isEnabled = false;
-      }
+      this.hideQualityPreviewOverlay();
       return;
     }
 
-    if (!this.taaPipeline) {
-      const pipeline = new TAARenderingPipeline('quality-taa', this.scene, [this.camera]);
-      if (!pipeline.isSupported) {
-        pipeline.dispose();
-        useAppStore.getState().setStatusMessage('Quality accumulation (TAA) is not supported on this GPU/browser');
-        return;
-      }
-      this.taaPipeline = pipeline;
+    if (render.qualityRenderer === 'path' && result.activeRenderer === 'hybrid_gpu_preview') {
+      this.announceQualityStatusOnce(
+        'quality-path-fallback-hybrid-gpu-preview',
+        effectiveFallbackReason ?? 'Quality path renderer unavailable; using Hybrid GPU Preview fallback',
+      );
+    } else if (render.qualityRenderer === 'path' && result.activeRenderer === 'taa_preview') {
+      this.announceQualityStatusOnce(
+        'quality-path-fallback-taa',
+        effectiveFallbackReason ?? 'Quality path renderer unavailable; using TAA preview fallback',
+      );
+    } else if (render.qualityRenderer === 'hybrid_gpu_preview' && result.activeRenderer === 'hybrid_gpu_preview') {
+      this.announceQualityStatusOnce(
+        'quality-hybrid-gpu-preview-phase5a',
+        'Quality Hybrid GPU Preview is the Phase 5A fast GPU-backed accumulation path (advanced true path tracing remains in progress)',
+      );
+    } else if (render.qualityRenderer === 'hybrid_gpu_preview' && result.activeRenderer === 'taa_preview') {
+      this.announceQualityStatusOnce(
+        'quality-hybrid-gpu-preview-fallback-taa',
+        effectiveFallbackReason ?? 'Hybrid GPU Preview unavailable; using TAA preview fallback',
+      );
+    } else if (render.qualityRenderer === 'path' && result.activeRenderer === 'path') {
+      this.announceQualityStatusOnce(
+        'quality-path-v1-experimental',
+        'Quality path renderer is an experimental Phase 5B CPU path tracer prototype (true GPU path tracing is still in progress)',
+      );
+    } else if (result.activeRenderer === 'none' && effectiveFallbackReason) {
+      this.announceQualityStatusOnce(`quality-unsupported-${render.qualityRenderer}`, effectiveFallbackReason);
     }
 
-    const targetSamples = clamp(Math.round(render.qualitySamplesTarget), 1, 4096);
-    this.taaPipeline.samples = targetSamples;
-    this.taaPipeline.msaaSamples = 1;
-    this.taaPipeline.disableOnCameraMove = true;
-    this.taaPipeline.reprojectHistory = false;
-    this.taaPipeline.clampHistory = true;
-    this.taaPipeline.factor = qualityBlendFactor(targetSamples);
-    if (!this.taaPipeline.isEnabled) {
-      this.taaPipeline.isEnabled = true;
-      this.resetQualityAccumulation({ resetHistory: true });
+    if (result.enabledJustNow) {
+      this.resetQualityAccumulation({ resetHistory: true, reason: 'quality_pipeline_enabled' });
     }
   }
 
   private tickQualityMode(): boolean {
     const { render, markQualityProgress } = useAppStore.getState();
     if (render.mode !== 'quality') {
-      if (this.taaPipeline?.isEnabled) {
-        this.taaPipeline.isEnabled = false;
-      }
+      this.qualityBackends?.disableAll();
+      this.setQualityRendererStatus('none', null);
+      this.hideQualityPreviewOverlay();
       this.lastQualityCameraSignature = '';
+      this.updateQualitySamplesPerSecond(0, false);
       if (render.qualityCurrentSamples !== 0 || render.qualityRunning) {
         markQualityProgress(0, false);
       }
       return true;
     }
 
-    if (!this.taaPipeline || !this.taaPipeline.isEnabled) {
+    if (!this.qualityBackends || !this.qualityBackends.isActiveBackendEnabled()) {
       this.syncQualityPipeline(render);
-      if (!this.taaPipeline || !this.taaPipeline.isEnabled) {
+      if (!this.qualityBackends || !this.qualityBackends.isActiveBackendEnabled()) {
+        this.setQualityRendererStatus('none', this.qualityFallbackReason);
+        this.hideQualityPreviewOverlay();
+        this.updateQualitySamplesPerSecond(0, false);
         if (render.qualityCurrentSamples !== 0 || render.qualityRunning) {
           markQualityProgress(0, false);
         }
@@ -1335,23 +1547,33 @@ export class SceneController {
     const cameraSig = this.computeQualityCameraSignature();
     if (cameraSig) {
       if (this.lastQualityCameraSignature && cameraSig !== this.lastQualityCameraSignature) {
-        // Let TAA's internal camera-move handling reset its history while we
-        // restart our sample-progress counter.
-        this.resetQualityAccumulation({ resetHistory: false });
+        // Let the active quality backend handle history reset while we track a shared reset reason.
+        this.resetQualityAccumulation({ resetHistory: false, reason: 'camera_change' });
       }
       this.lastQualityCameraSignature = cameraSig;
     }
 
-    const target = clamp(Math.round(render.qualitySamplesTarget), 1, 4096);
-    if (this.qualityProgressCounter >= target) {
-      markQualityProgress(this.qualityProgressCounter, false);
-      return false;
+    const tick = this.qualityBackends.tick(render);
+    if (!tick.shouldRender) {
+      markQualityProgress(Math.max(0, Math.floor(tick.progress.currentSamples)), tick.progress.running);
+      this.updateQualitySamplesPerSecond(tick.progress.currentSamples, tick.progress.running);
     }
-    if (this.qualityProgressCounter < target) {
-      this.qualityProgressCounter += 1;
+    return tick.shouldRender;
+  }
+
+  private handleQualityFrameRendered(): void {
+    if (!this.qualityBackends) {
+      return;
     }
-    markQualityProgress(this.qualityProgressCounter, this.qualityProgressCounter < target);
-    return true;
+    const { render, markQualityProgress } = useAppStore.getState();
+    if (render.mode !== 'quality' || !this.qualityBackends.isActiveBackendEnabled()) {
+      return;
+    }
+    this.qualityBackends.onFrameRendered(render, this.canvas);
+    const progress = this.qualityBackends.getActiveBackendProgress(render);
+    markQualityProgress(Math.max(0, Math.floor(progress.currentSamples)), progress.running);
+    this.updateQualitySamplesPerSecond(progress.currentSamples, progress.running);
+    this.syncQualityPreviewOverlay(render);
   }
 
   private computeQualityCameraSignature(): string {
@@ -1368,30 +1590,27 @@ export class SceneController {
     ].join('|');
   }
 
-  private resetQualityAccumulation(options: { resetHistory: boolean }): void {
-    this.qualityProgressCounter = 0;
+  private resetQualityAccumulation(options: { resetHistory: boolean; reason?: string | null }): void {
     this.lastQualityCameraSignature = this.computeQualityCameraSignature();
-    if (!options.resetHistory || !this.taaPipeline) {
+    if (options.reason !== undefined) {
+      this.qualityLastResetReason = options.reason;
+      useAppStore.getState().setRenderDiagnostics({ qualityLastResetReason: this.qualityLastResetReason });
+    }
+    this.resetQualityPerfTracking();
+    this.qualityBackends?.resetActiveBackendAccumulation();
+    this.hideQualityPreviewOverlay();
+    if (!options.resetHistory) {
       return;
     }
-    const wasEnabled = this.taaPipeline.isEnabled;
-    if (!wasEnabled) {
-      return;
-    }
-    // Toggle to force Babylon TAA history/jitter reset when content changes.
-    this.taaPipeline.isEnabled = false;
-    this.taaPipeline.isEnabled = true;
+    this.qualityBackends?.resetActiveBackendHistory();
   }
 
   private disposeQualityPipeline(): void {
-    if (!this.taaPipeline) return;
-    try {
-      this.taaPipeline.dispose();
-    } catch (error) {
-      console.warn('TAA pipeline dispose failed (ignored)', error);
-    } finally {
-      this.taaPipeline = null;
-    }
+    if (!this.qualityBackends) return;
+    this.qualityBackends.dispose();
+    this.qualityBackends = null;
+    this.hideQualityPreviewOverlay();
+    this.setQualityRendererStatus('none', null);
   }
 
   private async waitForQualityReadyForExport(timeoutMs: number): Promise<'skipped' | 'ready' | 'timeout'> {
@@ -1405,8 +1624,17 @@ export class SceneController {
       if (render.mode !== 'quality') {
         return 'skipped';
       }
-      if (!render.qualityRunning && render.qualityCurrentSamples >= render.qualitySamplesTarget) {
+      if (render.qualityEarlyExportBehavior === 'immediate') {
+        return 'skipped';
+      }
+      if (!this.qualityBackends || !this.qualityBackends.isActiveBackendEnabled()) {
+        this.syncQualityPipeline(render);
+      }
+      if (this.qualityBackends?.isActiveBackendReadyForExport(render)) {
         return 'ready';
+      }
+      if (this.qualityBackends && !this.qualityBackends.isActiveBackendEnabled() && this.qualityFallbackReason) {
+        return 'skipped';
       }
       if (!announced) {
         useAppStore.getState().setStatusMessage('Waiting for quality accumulation before PNG export...');
@@ -1422,7 +1650,7 @@ export class SceneController {
   private readonly handleResize = () => {
     this.engine?.resize();
     if (useAppStore.getState().render.mode === 'quality') {
-      this.resetQualityAccumulation({ resetHistory: true });
+      this.resetQualityAccumulation({ resetHistory: true, reason: 'resize' });
     }
   };
 
@@ -1474,12 +1702,6 @@ function clamp01(value: number): number {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
-function qualityBlendFactor(samples: number): number {
-  const n = clamp(Math.round(samples), 1, 4096);
-  // Lower factor = slower but cleaner convergence for still-frame accumulation.
-  return clamp(1 / Math.max(8, n), 0.01, 0.125);
 }
 
 function stableAlphaIndex(id: string): number {
@@ -1572,4 +1794,63 @@ async function exportCanvasPng(canvas: HTMLCanvasElement, filename: string): Pro
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+async function exportScenePngViaRenderTarget(
+  engine: WebGPUEngine,
+  camera: ArcRotateCamera,
+  sourceCanvas: HTMLCanvasElement,
+  filename: string,
+): Promise<void> {
+  const width = Math.max(1, sourceCanvas.width);
+  const height = Math.max(1, sourceCanvas.height);
+  try {
+    const dataUrl = await CreateScreenshotUsingRenderTargetAsync(engine, camera, { width, height }, 'image/png');
+    if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image/png')) {
+      downloadDataUrl(dataUrl, filename);
+      return;
+    }
+    throw new Error('Babylon screenshot returned unexpected data');
+  } catch (error) {
+    console.warn('Render-target PNG export failed; falling back to canvas.toBlob()', error);
+    await exportCanvasPng(sourceCanvas, filename);
+  }
+}
+
+function downloadDataUrl(dataUrl: string, filename: string): void {
+  const link = document.createElement('a');
+  link.href = dataUrl;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
+
+function canvasLooksBlank(canvas: HTMLCanvasElement): boolean {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    return false;
+  }
+  const w = canvas.width;
+  const h = canvas.height;
+  if (w <= 0 || h <= 0) {
+    return true;
+  }
+  const probeCols = 5;
+  const probeRows = 5;
+  try {
+    for (let ry = 0; ry < probeRows; ry += 1) {
+      const y = Math.min(h - 1, Math.floor((ry + 0.5) * (h / probeRows)));
+      for (let rx = 0; rx < probeCols; rx += 1) {
+        const x = Math.min(w - 1, Math.floor((rx + 0.5) * (w / probeCols)));
+        const p = ctx.getImageData(x, y, 1, 1).data;
+        if (p[0] !== 0 || p[1] !== 0 || p[2] !== 0 || p[3] !== 0) {
+          return false;
+        }
+      }
+    }
+  } catch {
+    return false;
+  }
+  return true;
 }

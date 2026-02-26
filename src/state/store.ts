@@ -100,6 +100,11 @@ function defaultRenderDiagnostics(): RenderDiagnostics {
     shadowMapResolution: 0,
     pointShadowMode: 'off',
     pointShadowCapability: 'unknown',
+    qualityActiveRenderer: 'none',
+    qualityRendererFallbackReason: null,
+    qualityResolutionScale: 1,
+    qualitySamplesPerSecond: 0,
+    qualityLastResetReason: null,
   };
 }
 
@@ -824,6 +829,11 @@ function shallowDiagnosticsEqual(a: RenderDiagnostics, b: RenderDiagnostics): bo
     a.shadowMapResolution === b.shadowMapResolution &&
     a.pointShadowMode === b.pointShadowMode &&
     a.pointShadowCapability === b.pointShadowCapability &&
+    a.qualityActiveRenderer === b.qualityActiveRenderer &&
+    a.qualityRendererFallbackReason === b.qualityRendererFallbackReason &&
+    a.qualityResolutionScale === b.qualityResolutionScale &&
+    a.qualitySamplesPerSecond === b.qualitySamplesPerSecond &&
+    a.qualityLastResetReason === b.qualityLastResetReason &&
     shallowPointShadowCasterCountsEqual(a.pointShadowCasterCounts ?? {}, b.pointShadowCasterCounts ?? {})
   );
 }

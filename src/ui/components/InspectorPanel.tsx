@@ -326,6 +326,29 @@ function RenderTab() {
       </label>
       <RangeField label="Quality Samples" min={16} max={2048} step={1} value={render.qualitySamplesTarget} onChange={(v) => updateRender({ qualitySamplesTarget: Math.round(v) })} />
       <RangeField label="Resolution Scale" min={0.5} max={2} step={0.1} value={render.qualityResolutionScale} onChange={(v) => updateRender({ qualityResolutionScale: v })} />
+      <label>
+        Quality Renderer
+        <select value={render.qualityRenderer} onChange={(e) => updateRender({ qualityRenderer: e.target.value as typeof render.qualityRenderer })}>
+          <option value="taa_preview">TAA Preview (current)</option>
+          <option value="hybrid_gpu_preview">Hybrid GPU Preview (Phase 5A)</option>
+          <option value="path">Path (Phase 5B experimental)</option>
+        </select>
+      </label>
+      <RangeField label="Max Bounces" min={1} max={12} step={1} value={render.qualityMaxBounces} onChange={(v) => updateRender({ qualityMaxBounces: Math.round(v) })} />
+      <label className="checkbox-row">
+        <input type="checkbox" checked={render.qualityClampFireflies} onChange={(e) => updateRender({ qualityClampFireflies: e.target.checked })} />
+        Clamp fireflies (hybrid/path)
+      </label>
+      <label>
+        Quality Export
+        <select
+          value={render.qualityEarlyExportBehavior}
+          onChange={(e) => updateRender({ qualityEarlyExportBehavior: e.target.value as typeof render.qualityEarlyExportBehavior })}
+        >
+          <option value="wait">Wait for target samples</option>
+          <option value="immediate">Export immediately</option>
+        </select>
+      </label>
       <label className="checkbox-row">
         <input type="checkbox" checked={render.denoise} onChange={(e) => updateRender({ denoise: e.target.checked })} />
         Denoise (future)
@@ -341,10 +364,15 @@ function RenderTab() {
           <div>Point shadows: {diagnostics.pointShadowsEnabled}/{diagnostics.pointShadowLimit} ({diagnostics.pointShadowMode})</div>
           <div>Shadow receiver: {diagnostics.shadowReceiver}</div>
           <div>Point shadow capability: {diagnostics.pointShadowCapability}</div>
+          <div>Quality backend: {diagnostics.qualityActiveRenderer}</div>
+          <div>Quality res scale: {diagnostics.qualityResolutionScale.toFixed(2)}</div>
+          <div>Quality samples/sec: {diagnostics.qualitySamplesPerSecond}</div>
+          <div>Quality reset: {diagnostics.qualityLastResetReason ?? 'none'}</div>
+          {diagnostics.qualityRendererFallbackReason ? <div>Quality fallback: {diagnostics.qualityRendererFallbackReason}</div> : null}
         </div>
       ) : null}
       <div className="inspector-note">
-        Interactive rendering includes PBR, shadows, and transmission approximations. Quality mode now uses progressive temporal accumulation (TAA); a true path-traced still renderer is still future work.
+        Phase 5 is split: `Hybrid GPU Preview` (Phase 5A) is the fast GPU-backed accumulation path, while `Path` remains the slower experimental CPU tracer prototype for Phase 5B+.
       </div>
     </div>
   );

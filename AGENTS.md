@@ -26,6 +26,7 @@ Highlights already working:
 - Selection and drag interactions (camera/object/light)
 - Directional and point lights, with shadows (capability gated)
 - Quality mode baseline with progressive temporal accumulation (TAA), restart-on-change, and quality-aware PNG export wait behavior
+- Phase 5 quality-renderer routing/diagnostics/export plumbing is in place, with `hybrid_gpu_preview` (Phase 5A fast GPU-backed accumulation) and an experimental `path` backend (Phase 5B CPU hybrid/path tracer prototype with CPU BVH/triangle acceleration and worker offload; still not production-ready)
 - Local save/load/autosave and PNG export
 - Worker-based parse/meshing pipeline (preview/refine workflow + cancellation)
 - Playwright harness + shadow regression scenes (with WebGPU screenshot caveats)
@@ -223,7 +224,9 @@ Playwright scenarios for shadow smoke and visual regression workflows. Note: vis
 
 ### Partial / Placeholder / Unfinished
 
-- Quality render mode (`Render > Mode = Quality`) now provides progressive temporal accumulation (TAA-based) with restart-on-change and quality-aware PNG export (waits for accumulation with timeout behavior)
+- Quality render mode now provides progressive temporal accumulation (TAA-based) with restart-on-change and quality-aware PNG export (waits for accumulation with timeout behavior), plus backend selection/fallback/diagnostics plumbing for Phase 5
+- `Quality + Hybrid GPU Preview` (Phase 5A) now provides a fast GPU-backed backend-owned accumulation/export path using render-target captures + progressive accumulation (usable preview/export speed; realism limited vs true path tracing)
+- Experimental `Quality + Path` backend (Phase 5B prototype) exists with dedicated quality accumulation/export buffer and a CPU hybrid/path tracer prototype (direct lighting, shadows, bounded bounces, transmission/IOR approximation, CPU BVH/triangle acceleration, worker offload fallback path), but it is still very slow and not yet reliable enough for normal use
 - Implicit surface shading hemisphere issue is resolved in current renderer, but implicit meshing quality/topology remains in progress (marching-tetra artifacts/isotropy limits; marching cubes not yet implemented)
 - Advanced realism is still incomplete (true path-traced quality renderer and robust interactive reflections/transmission stacking are future work)
 - Playwright visual baselines are not fully trustworthy for WebGPU pixels in headless mode
@@ -307,7 +310,13 @@ Still needed (moved into next roadmap phase):
 
 ### Phase 5 — Advanced Quality Realism (True Quality Still Renderer)
 
-**Status:** Planned (next priority)
+**Status:** In progress (prototype implementation underway; not exit-criteria complete)
+
+Subphase status:
+
+- **Phase 5A — Hybrid GPU Preview backend:** Implemented (fast GPU-backed accumulation/export path complete for current prototype target)
+- **Phase 5B — True path/hybrid realism core:** In progress (experimental CPU path tracer prototype; performance and reliability not yet acceptable)
+- **Phase 5C — Realism polish/convergence/perf hardening:** Not complete
 
 Priority rationale:
 
@@ -319,6 +328,23 @@ Primary focus:
 - True quality still-render pipeline (path/hybrid progressive accumulation)
 - Quality-mode reflections, transmission, and IOR realism
 - Quality-buffer export and convergence diagnostics
+
+Implemented so far (current repo state):
+
+- Quality backend router/fallback architecture (`taa_preview` + `hybrid_gpu_preview` + `path`) with diagnostics/status plumbing
+- Quality render/export integration that can export backend-owned quality buffers
+- `hybrid_gpu_preview` (Phase 5A): GPU-backed render-target capture accumulation path with backend-owned accumulation/export buffer and quality-mode progressive sampling at practical preview speeds
+- Experimental `path` backend with dedicated float accumulation buffer, per-pixel sample counts, and convergence/export readiness tracking
+- CPU hybrid/path tracer prototype (scene ray picks, direct lighting/shadows, bounded continuation bounces, roughness/transmission/IOR approximations, firefly clamp hooks)
+- Recent path backend fixes: `ArcRotateCamera` capture-camera `upVector` setter sync for Z-up alignment (substantially improved placement/orientation matching) and improved transmission enter/exit IOR handling in the continuation path
+- Recent Phase 5B path-core upgrades: closest-hit tracing (fixing first-hit `fastCheck` behavior), top-level trace-mesh BVH, per-mesh world-space triangle cache + per-mesh triangle BVH, and preview-biased direct-light throughput reductions (one-light finite-light sampling / reduced secondary finite-light work)
+- Phase 5B worker offload is implemented: CPU path tracing batches can run in a dedicated worker with automatic fallback to main-thread CPU tracing when worker offload is unavailable or the scene snapshot is unsupported
+
+Current blockers (important):
+
+- Phase 5B (`path`) throughput is still far below usable targets (scene-dependent; minutes/sample at `1.0x` quality resolution is still possible on some scenes)
+- Path output alignment improved after recent camera-sync fixes, but still needs wider validation across resize/quality scales/hardware-scaling setups
+- CPU acceleration and worker offload are now implemented (trace-mesh BVH, per-mesh triangle BVH, worker batch tracing), but GPU traversal/path tracing is not implemented and overall throughput remains poor
 
 ### Phase 6 — Broad Command-Based Undo/Redo
 
@@ -372,6 +398,7 @@ Constraints:
 Current starting point:
 
 - Phase 4 baseline is complete: Quality mode now uses real progressive temporal accumulation (TAA), restart-on-change behavior, and quality-aware PNG export waiting.
+- Phase 5 is split: Phase 5A (`hybrid_gpu_preview`) is implemented as the fast GPU-backed accumulation/export backend, while Phase 5B (`path`) remains an experimental CPU hybrid/path tracer and is not yet performant enough for normal use.
 - Undo/redo exists but is snapshot-based.
 - Local save/open/autosave/import/export exist, but reliability/UX/schema hardening is still needed.
 
@@ -415,6 +442,15 @@ In scope:
 - Quality export path that exports the quality buffer (not only transient viewport frames)
 - Capability detection/fallback messaging if the advanced quality renderer cannot initialize
 
+Current implementation snapshot (as of this file):
+
+- The quality backend interface/router and diagnostics plumbing are implemented.
+- `Quality + Hybrid GPU Preview` (Phase 5A) uses a dedicated backend-owned accumulation/export buffer driven by GPU render-target captures and progressive accumulation for usable preview/export speed.
+- `Quality + Path` (Phase 5B prototype) uses a dedicated accumulation/export buffer and an experimental CPU hybrid/path tracer.
+- The Phase 5B `Quality + Path` prototype currently supports direct lighting + shadows and bounded continuation bounces with basic transmission/IOR handling, plus CPU acceleration (trace-mesh BVH, per-mesh triangle BVH) and worker batch offload, but it is not yet production quality.
+- Path alignment was substantially improved by fixing capture-camera `ArcRotateCamera.upVector` synchronization (Z-up internal matrix bug), but broader validation across resolution scaling/hardware scaling is still required.
+- Major unresolved limitation: performance is far below usable targets (often minutes/sample at `1.0x`).
+
 Out of scope:
 
 - Animation/timeline rendering
@@ -424,7 +460,11 @@ Out of scope:
 
 Implementation approach:
 
-- Keep the current TAA path as a stable quality-preview baseline/fallback while building a new `Quality Still Renderer v1`.
+- Split Phase 5 into:
+  - Phase 5A: fast `hybrid_gpu_preview` backend (GPU-backed accumulation/export path) for practical preview speed
+  - Phase 5B: true path/hybrid realism core (`path`) focusing on transport correctness/performance
+  - Phase 5C: realism polish, convergence diagnostics, and quality hardening
+- Keep the current TAA path as a stable quality-preview baseline/fallback while advancing the Phase 5A/5B quality backends.
 - Use a dedicated offscreen accumulation buffer + sample counter separate from the raster viewport frame.
 - Implement deterministic accumulation restart triggers for camera, scene/object/light/material changes, render settings changes, and resize/quality-resolution changes.
 - Prioritize quality shading features in v1:
@@ -587,19 +627,19 @@ Abort criteria:
 
 ### Planned API / Interface / Type Changes (Roadmap)
 
-#### Phase 5 planned (Quality Realism)
+#### Phase 5 status (Quality Realism API / diagnostics)
 
-- `RenderSettings` additions (proposed):
-  - `qualityRenderer` (e.g. `'taa_preview' | 'path'`)
+- `RenderSettings` additions (implemented):
+  - `qualityRenderer` (e.g. `'taa_preview' | 'hybrid_gpu_preview' | 'path'`)
   - `qualityMaxBounces`
   - `qualityClampFireflies`
   - `qualityEarlyExportBehavior` (default `'wait'`)
-- `RenderDiagnostics` additions (proposed):
+- `RenderDiagnostics` additions (implemented):
   - active quality renderer path
   - quality resolution
   - samples/sec
   - last reset reason
-- `ViewportApi.exportPng(options?)` quality-aware options (planned, backward-compatible)
+- `ViewportApi.exportPng(options?)` quality-aware behavior is implemented through the existing API (wait/immediate export behavior, backend export buffer selection)
 
 #### Phase 6 planned (Undo/Redo)
 
@@ -680,8 +720,9 @@ Abort criteria:
 
 ## Known Issues / Current Bugs (As of This File)
 
-1. **Quality render mode is not yet a true path-traced still renderer**
-- `Quality (progressive)` mode now performs real TAA-based temporal accumulation with restart-on-change and quality-aware export waiting, but it is still a baseline and not the final advanced quality realism path.
+1. **Phase 5 path renderer is experimental and currently unreliable**
+- `Quality (progressive)` now has three relevant paths: stable `TAA` baseline, fast `Hybrid GPU Preview` (Phase 5A), and experimental `Quality + Path` (Phase 5B CPU hybrid/path tracer prototype).
+- Current known blockers for `Quality + Path`: very slow convergence (minutes/sample at `1.0x` on some scenes), remaining alignment/validation work across resolutions/hardware scaling, worker-offload/runtime hardening and tuning, and no GPU traversal/path tracing yet (CPU BVH/triangle acceleration + worker offload are implemented).
 
 2. **Interactive realism is intentionally limited (for now)**
 - Advanced reflections/transmission realism in interactive mode is deferred to a later modest, time-boxed phase.
@@ -697,8 +738,9 @@ Abort criteria:
 
 Interactive realism was evaluated as lower-confidence / lower-priority for current goals. Quality realism is the primary realism investment, so the next phases should follow the revised ordering below.
 
-1. **Phase 5 — Advanced quality realism (true quality still renderer)**
-- Build the advanced quality still-render path (beyond the current TAA baseline), with reflections/transmission/IOR as core focus.
+1. **Phase 5B/5C — Advance the true quality renderer path after Phase 5A**
+- Phase 5A (`Hybrid GPU Preview`) is complete for the current prototype goal and should be used for practical quality previews/exports.
+- Next priority: validate remaining `Quality + Path` alignment edge cases across resize/quality-resolution/hardware-scaling scenarios, then harden/tune the existing Phase 5B CPU path stack (worker fallback diagnostics, snapshot compatibility, batching/buffer pooling, worker startup/bundle size, BVH traversal optimizations) before further realism tuning and eventual GPU path/hybrid path work.
 
 2. **Phase 6 — Command-based undo/redo**
 - Replace snapshot-style history with broad command-history coverage, drag coalescing, and transaction boundaries.
@@ -723,6 +765,12 @@ Interactive realism was evaluated as lower-confidence / lower-priority for curre
   - `/?testScene=point-shadow-regression`
 - Hard refresh after worker/mesher changes because worker bundles are cached separately by the dev server/browser.
 - Quality realism (advanced still renderer) is prioritized over interactive realism in the current roadmap.
+- Experimental Phase 5 quality work currently lives in `src/renderer/qualityBackends.ts` (router + `TaaPreviewQualityBackend` + `PathQualityBackendV1` modes for `hybrid_gpu_preview` and `path`).
+- Phase 5A (`Quality + Hybrid GPU Preview`) is the fast GPU-backed accumulation/export backend and is currently the practical way to preview quality output while Phase 5B path tracing matures.
+- `Quality + Path` remains a CPU hybrid/path tracer prototype with severe throughput limitations; alignment is improved after the capture-camera `upVector` setter fix, but still validate side-by-side at `Samples >= 1` across resize/quality scale/hardware scaling combinations.
+- Phase 5B CPU path tracing now includes top-level trace-mesh BVH, per-mesh triangle caches, per-mesh triangle BVHs, and worker batch offload (with fallback to main-thread CPU tracing when offload is unavailable/unsupported).
+- Worker offload implementation lives in `src/workers/pathTraceQualityWorker.ts` with protocol types in `src/workers/pathTraceQualityWorkerContracts.ts`.
+- `vite.config.ts` includes `worker.format = 'es'` for the Phase 5B path worker bundle; keep this in mind if changing worker build config.
 - Interactive realism is intentionally deferred and should be scoped as a modest, time-boxed pass unless priorities change.
 - Do not re-promote a broad interactive realism overhaul ahead of undo/redo or save/import hardening unless the user explicitly changes priorities.
 - The implicit lighting hemisphere issue is considered resolved unless new evidence/regressions appear.

@@ -18,6 +18,12 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
   const selectedId = useAppStore((s) => s.selectedId);
   const plotJobs = useAppStore((s) => s.plotJobs);
   const diagnostics = useAppStore((s) => s.renderDiagnostics);
+  const displayQualitySamples = Math.max(0, Math.floor(render.qualityCurrentSamples));
+  const showQualityFallback =
+    render.mode === 'quality'
+    && diagnostics.qualityRendererFallbackReason
+    && diagnostics.qualityActiveRenderer !== 'none'
+    && diagnostics.qualityActiveRenderer !== render.qualityRenderer;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -78,10 +84,17 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
         <div className="viewport-overlay viewport-overlay--quality">
           <div>Quality Render Mode (progressive accumulation)</div>
           <div>
-            Samples: {render.qualityCurrentSamples} / {render.qualitySamplesTarget}
+            Requested: {render.qualityRenderer} | Active: {diagnostics.qualityActiveRenderer}
+          </div>
+          <div>
+            Samples: {displayQualitySamples} / {render.qualitySamplesTarget}
             {render.qualityRunning ? ' (running)' : ' (idle)'}
           </div>
-          <div>Uses temporal accumulation (TAA). Camera/scene changes restart accumulation.</div>
+          <div>
+            Resolution: {diagnostics.qualityResolutionScale.toFixed(2)}x | {diagnostics.qualitySamplesPerSecond} samples/sec
+          </div>
+          <div>Last reset: {diagnostics.qualityLastResetReason ?? 'none'}</div>
+          {showQualityFallback ? <div>Fallback: {diagnostics.qualityRendererFallbackReason}</div> : null}
         </div>
       ) : null}
       {render.showDiagnostics ? (
@@ -105,6 +118,10 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
           <div>Transparent plots: {diagnostics.transparentPlotCount}</div>
           <div>Shadow map: {diagnostics.shadowMapResolution}px</div>
           <div>Point shadow support: {diagnostics.pointShadowCapability}</div>
+          <div>Quality backend: {diagnostics.qualityActiveRenderer}</div>
+          <div>Quality samples/sec: {diagnostics.qualitySamplesPerSecond}</div>
+          <div>Quality reset: {diagnostics.qualityLastResetReason ?? 'none'}</div>
+          {showQualityFallback ? <div>Quality fallback: {diagnostics.qualityRendererFallbackReason}</div> : null}
         </div>
       ) : null}
     </div>
