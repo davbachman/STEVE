@@ -378,6 +378,16 @@ function RenderTab() {
               {' '}| max dist err {diagnostics.qualityPathAlignmentMaxDistanceError.toFixed(4)}
             </div>
           ) : null}
+          {(diagnostics.qualityPathWorkerBatchCount > 0 || diagnostics.qualityPathMainThreadBatchCount > 0) ? (
+            <div>
+              Path work:
+              {' '}worker {diagnostics.qualityPathWorkerBatchCount} batches / {diagnostics.qualityPathWorkerPixelCount} px
+              {' '}({diagnostics.qualityPathWorkerPixelsPerSecond.toFixed(0)} px/s)
+              {' '}| worker avg {diagnostics.qualityPathWorkerBatchLatencyMs.toFixed(1)} ms / {diagnostics.qualityPathWorkerBatchPixelsPerBatch.toFixed(0)} px
+              {' '}| main {diagnostics.qualityPathMainThreadBatchCount} batches / {diagnostics.qualityPathMainThreadPixelCount} px
+              {' '}({diagnostics.qualityPathMainThreadPixelsPerSecond.toFixed(0)} px/s)
+            </div>
+          ) : null}
           {diagnostics.qualityRendererFallbackReason ? <div>Quality fallback: {diagnostics.qualityRendererFallbackReason}</div> : null}
         </div>
       ) : null}

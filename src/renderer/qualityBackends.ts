@@ -19,6 +19,7 @@ import type { RenderDiagnostics, RenderSettings } from '../types/contracts';
 import { useAppStore } from '../state/store';
 import type {
   PathTraceWorkerLight,
+  PathTraceWorkerLineAccel,
   PathTraceWorkerMaterial,
   PathTraceWorkerRenderParams,
   PathTraceWorkerRequest,
@@ -74,6 +75,7 @@ interface HybridBounceSample {
   direction: Vector3;
   throughput: Vector3;
   nextMediumIor: number;
+  wasTransmission: boolean;
 }
 
 interface HybridEnvironmentSample {
@@ -85,6 +87,7 @@ interface CpuPathWorkerPendingBatch {
   requestId: number;
   sceneVersion: number;
   generation: number;
+  dispatchedAtMs: number;
   pixelIndices: Uint32Array;
   nextTracePixelCursor: number;
   totalPixels: number;
@@ -103,7 +106,9 @@ interface HybridTracePixelContext {
 interface TraceMeshAccelEntry {
   mesh: AbstractMesh;
   worldMatrixUpdateFlag: number;
+  worldMatrixElements: Float32Array;
   triangleAccel: TraceTriangleAccel | null;
+  lineAccel: TraceLineAccel | null;
   minX: number;
   minY: number;
   minZ: number;
@@ -146,6 +151,12 @@ interface TraceTriangleAccel {
   triangleBvhRoot: TraceTriangleBvhNode | null;
 }
 
+interface TraceLineAccel {
+  positionsWorld: Float32Array; // [ax, ay, az, bx, by, bz] per segment
+  segmentCount: number;
+  intersectionThreshold: number;
+}
+
 interface TracePickResult {
   hit: true;
   distance: number;
@@ -164,7 +175,7 @@ interface QualityBackend {
   isReadyForExport(render: RenderSettings): boolean;
   getExportCanvas(): HTMLCanvasElement | null;
   resetAccumulation(): void;
-  resetHistory(): void;
+  resetHistory(reason?: string | null): void;
   dispose(): void;
 }
 
@@ -278,7 +289,7 @@ class TaaPreviewQualityBackend implements QualityBackend {
     this.progressCounter = 0;
   }
 
-  resetHistory(): void {
+  resetHistory(_reason?: string | null): void {
     if (!this.pipeline?.isEnabled) {
       return;
     }
@@ -342,12 +353,34 @@ class PathQualityBackendV1 implements QualityBackend {
   private cpuPathWorkerInitPendingSceneVersion = -1;
   private cpuPathWorkerRequestIdSeq = 0;
   private cpuPathWorkerPendingBatch: CpuPathWorkerPendingBatch | null = null;
+  private cpuPathWorkerBatchPixelScratch: Uint32Array | null = null;
+  private cpuPathWorkerBatchRayScratch: Float32Array | null = null;
+  private cpuPathPrimaryRayScratch: Ray | null = null;
+  private cpuPathShadowRayScratch: Ray | null = null;
+  private cpuPathEnvironmentSampleScratch: HybridEnvironmentSample | null = null;
+  private cpuPathDirectLightingScratch: Vector3 | null = null;
+  private cpuPathContinuationBounceSampleScratch: HybridBounceSample | null = null;
+  private cpuPathContinuationIncidentScratch: Vector3 | null = null;
+  private cpuPathContinuationInterfaceNormalScratch: Vector3 | null = null;
+  private cpuPathContinuationTangentScratch: Vector3 | null = null;
+  private cpuPathContinuationBitangentScratch: Vector3 | null = null;
   private cpuPathExecutionMode: string | null = null;
   private cpuPathAlignmentProbeStatus: string | null = null;
   private cpuPathAlignmentProbeCount = 0;
   private cpuPathAlignmentProbeHitMismatches = 0;
   private cpuPathAlignmentProbeMaxPointError = 0;
   private cpuPathAlignmentProbeMaxDistanceError = 0;
+  private cpuPathWorkerBatchCount = 0;
+  private cpuPathWorkerPixelCount = 0;
+  private cpuPathWorkerBatchLatencyEmaMs = 0;
+  private cpuPathWorkerBatchPixelsEma = 0;
+  private cpuPathMainThreadBatchCount = 0;
+  private cpuPathMainThreadPixelCount = 0;
+  private cpuPathWorkerPixelsPerSecond = 0;
+  private cpuPathMainThreadPixelsPerSecond = 0;
+  private cpuPathThroughputSnapshotMs = 0;
+  private cpuPathThroughputSnapshotWorkerPixels = 0;
+  private cpuPathThroughputSnapshotMainThreadPixels = 0;
   private cpuPathAlignmentProbeLastRunMs = 0;
   private cpuPathAlignmentProbeForceNext = true;
 
@@ -445,6 +478,17 @@ class PathQualityBackendV1 implements QualityBackend {
     this.runtimeFailureReason = null;
     this.runtimeFailureRetryAfterMs = 0;
     this.cpuPathWorkerPendingBatch = null;
+    this.cpuPathWorkerBatchPixelScratch = null;
+    this.cpuPathWorkerBatchRayScratch = null;
+    this.cpuPathPrimaryRayScratch = null;
+    this.cpuPathShadowRayScratch = null;
+    this.cpuPathEnvironmentSampleScratch = null;
+    this.cpuPathDirectLightingScratch = null;
+    this.cpuPathContinuationBounceSampleScratch = null;
+    this.cpuPathContinuationIncidentScratch = null;
+    this.cpuPathContinuationInterfaceNormalScratch = null;
+    this.cpuPathContinuationTangentScratch = null;
+    this.cpuPathContinuationBitangentScratch = null;
     this.captureInFlight = false;
     this.invalidateTraceMeshAcceleration();
     this.terminateCpuPathWorker();
@@ -588,11 +632,16 @@ class PathQualityBackendV1 implements QualityBackend {
     this.clearAccumCanvas();
   }
 
-  resetHistory(): void {
-    // Distinguish "history" resets (scene/render changes, resize, backend switches)
-    // from camera-only accumulation restarts so we can keep CPU trace BVHs warm while
-    // orbiting/panning in quality mode.
-    this.invalidateTraceMeshAcceleration();
+  resetHistory(reason?: string | null): void {
+    // Distinguish history reset reasons so resize / quality resolution changes don't
+    // force path BVH and worker-scene invalidation. Those changes affect accumulation
+    // buffers and ray generation, but not traceable geometry/material/light snapshots.
+    const preserveTraceAcceleration =
+      this.mode === 'cpu_path'
+      && (reason === 'resize' || reason === 'resolution_scale_change');
+    if (!preserveTraceAcceleration) {
+      this.invalidateTraceMeshAcceleration();
+    }
     this.cpuPathAlignmentProbeForceNext = true;
   }
 
@@ -617,6 +666,17 @@ class PathQualityBackendV1 implements QualityBackend {
     this.tracePixelCursor = 0;
     this.lastPreviewWriteMs = 0;
     this.cpuPathWorkerPendingBatch = null;
+    this.cpuPathWorkerBatchPixelScratch = null;
+    this.cpuPathWorkerBatchRayScratch = null;
+    this.cpuPathPrimaryRayScratch = null;
+    this.cpuPathShadowRayScratch = null;
+    this.cpuPathEnvironmentSampleScratch = null;
+    this.cpuPathDirectLightingScratch = null;
+    this.cpuPathContinuationBounceSampleScratch = null;
+    this.cpuPathContinuationIncidentScratch = null;
+    this.cpuPathContinuationInterfaceNormalScratch = null;
+    this.cpuPathContinuationTangentScratch = null;
+    this.cpuPathContinuationBitangentScratch = null;
     this.invalidateTraceMeshAcceleration();
     this.terminateCpuPathWorker();
     this.resetCpuPathInstrumentationState();
@@ -729,6 +789,17 @@ class PathQualityBackendV1 implements QualityBackend {
     this.cpuPathAlignmentProbeHitMismatches = 0;
     this.cpuPathAlignmentProbeMaxPointError = 0;
     this.cpuPathAlignmentProbeMaxDistanceError = 0;
+    this.cpuPathWorkerBatchCount = 0;
+    this.cpuPathWorkerPixelCount = 0;
+    this.cpuPathWorkerBatchLatencyEmaMs = 0;
+    this.cpuPathWorkerBatchPixelsEma = 0;
+    this.cpuPathMainThreadBatchCount = 0;
+    this.cpuPathMainThreadPixelCount = 0;
+    this.cpuPathWorkerPixelsPerSecond = 0;
+    this.cpuPathMainThreadPixelsPerSecond = 0;
+    this.cpuPathThroughputSnapshotMs = 0;
+    this.cpuPathThroughputSnapshotWorkerPixels = 0;
+    this.cpuPathThroughputSnapshotMainThreadPixels = 0;
     this.cpuPathAlignmentProbeLastRunMs = 0;
     this.cpuPathAlignmentProbeForceNext = true;
   }
@@ -745,6 +816,14 @@ class PathQualityBackendV1 implements QualityBackend {
         qualityPathAlignmentHitMismatches: this.cpuPathAlignmentProbeHitMismatches,
         qualityPathAlignmentMaxPointError: this.cpuPathAlignmentProbeMaxPointError,
         qualityPathAlignmentMaxDistanceError: this.cpuPathAlignmentProbeMaxDistanceError,
+        qualityPathWorkerBatchCount: this.cpuPathWorkerBatchCount,
+        qualityPathWorkerPixelCount: this.cpuPathWorkerPixelCount,
+        qualityPathWorkerBatchLatencyMs: this.cpuPathWorkerBatchLatencyEmaMs,
+        qualityPathWorkerBatchPixelsPerBatch: this.cpuPathWorkerBatchPixelsEma,
+        qualityPathMainThreadBatchCount: this.cpuPathMainThreadBatchCount,
+        qualityPathMainThreadPixelCount: this.cpuPathMainThreadPixelCount,
+        qualityPathWorkerPixelsPerSecond: this.cpuPathWorkerPixelsPerSecond,
+        qualityPathMainThreadPixelsPerSecond: this.cpuPathMainThreadPixelsPerSecond,
       });
     } catch {
       // Diagnostics are best-effort only.
@@ -762,6 +841,53 @@ class PathQualityBackendV1 implements QualityBackend {
     this.publishCpuPathInstrumentationDiagnostics();
   }
 
+  private updateCpuPathThroughputRates(now = nowMs()): void {
+    if (this.mode !== 'cpu_path') {
+      return;
+    }
+    if (!Number.isFinite(now) || now <= 0) {
+      return;
+    }
+    if (this.cpuPathThroughputSnapshotMs <= 0) {
+      this.cpuPathThroughputSnapshotMs = now;
+      this.cpuPathThroughputSnapshotWorkerPixels = this.cpuPathWorkerPixelCount;
+      this.cpuPathThroughputSnapshotMainThreadPixels = this.cpuPathMainThreadPixelCount;
+      return;
+    }
+    const dtMs = now - this.cpuPathThroughputSnapshotMs;
+    if (dtMs < 250) {
+      return;
+    }
+    const dWorkerPixels = Math.max(0, this.cpuPathWorkerPixelCount - this.cpuPathThroughputSnapshotWorkerPixels);
+    const dMainPixels = Math.max(0, this.cpuPathMainThreadPixelCount - this.cpuPathThroughputSnapshotMainThreadPixels);
+    const invDt = dtMs > 0 ? (1000 / dtMs) : 0;
+    this.cpuPathWorkerPixelsPerSecond = dWorkerPixels * invDt;
+    this.cpuPathMainThreadPixelsPerSecond = dMainPixels * invDt;
+    this.cpuPathThroughputSnapshotMs = now;
+    this.cpuPathThroughputSnapshotWorkerPixels = this.cpuPathWorkerPixelCount;
+    this.cpuPathThroughputSnapshotMainThreadPixels = this.cpuPathMainThreadPixelCount;
+  }
+
+  private updateCpuPathWorkerBatchTelemetry(completedPixels: number, batchLatencyMs: number): void {
+    if (this.mode !== 'cpu_path') {
+      return;
+    }
+    const pixels = Math.max(0, Math.floor(completedPixels));
+    if (pixels <= 0) {
+      return;
+    }
+    const alpha = 0.2;
+    if (Number.isFinite(batchLatencyMs) && batchLatencyMs > 0) {
+      const latencyMs = clamp(batchLatencyMs, 0, 60000);
+      this.cpuPathWorkerBatchLatencyEmaMs = this.cpuPathWorkerBatchLatencyEmaMs > 0
+        ? (this.cpuPathWorkerBatchLatencyEmaMs * (1 - alpha) + latencyMs * alpha)
+        : latencyMs;
+    }
+    this.cpuPathWorkerBatchPixelsEma = this.cpuPathWorkerBatchPixelsEma > 0
+      ? (this.cpuPathWorkerBatchPixelsEma * (1 - alpha) + pixels * alpha)
+      : pixels;
+  }
+
   private refreshCpuPathWorkerSceneSignatures(): void {
     if (this.mode !== 'cpu_path') {
       return;
@@ -771,7 +897,6 @@ class PathQualityBackendV1 implements QualityBackend {
     const geometryParts: string[] = [];
     const materialParts: string[] = [];
     const lightParts: string[] = [];
-    let lineMeshCount = 0;
     let otherUnsupportedMeshCount = 0;
 
     for (const entry of this.traceMeshAccelEntries) {
@@ -779,7 +904,9 @@ class PathQualityBackendV1 implements QualityBackend {
       const className = safeMeshClassName(mesh);
       const isLineMesh = mesh instanceof LinesMesh;
       if (isLineMesh) {
-        lineMeshCount += 1;
+        if (!entry.lineAccel) {
+          otherUnsupportedMeshCount += 1;
+        }
       } else if (!entry.triangleAccel) {
         otherUnsupportedMeshCount += 1;
       }
@@ -789,10 +916,12 @@ class PathQualityBackendV1 implements QualityBackend {
       geometryParts.push([
         mesh.uniqueId,
         className,
-        entry.worldMatrixUpdateFlag,
         entry.triangleAccel?.triangleCount ?? 0,
+        entry.lineAccel?.segmentCount ?? 0,
+        sigNum(entry.lineAccel?.intersectionThreshold ?? 0),
         indicesLength,
         positionLength,
+        ...Array.from(entry.worldMatrixElements, (value) => sigNum(value)),
         sigNum(entry.minX),
         sigNum(entry.minY),
         sigNum(entry.minZ),
@@ -902,11 +1031,7 @@ class PathQualityBackendV1 implements QualityBackend {
     }
 
     let unsupportedReason: string | null = null;
-    if (lineMeshCount > 0) {
-      unsupportedReason = lineMeshCount === 1
-        ? 'scene contains 1 line mesh (curve line mode); worker offload currently supports triangle meshes only'
-        : `scene contains ${lineMeshCount} line meshes (curve line mode); worker offload currently supports triangle meshes only`;
-    } else if (otherUnsupportedMeshCount > 0) {
+    if (otherUnsupportedMeshCount > 0) {
       unsupportedReason = otherUnsupportedMeshCount === 1
         ? 'scene contains 1 unsupported trace mesh for worker offload (falling back to main-thread CPU path tracing)'
         : `scene contains ${otherUnsupportedMeshCount} unsupported trace meshes for worker offload (falling back to main-thread CPU path tracing)`;
@@ -987,6 +1112,8 @@ class PathQualityBackendV1 implements QualityBackend {
       if (!this.enabled || pending.generation !== this.captureGeneration || this.mode !== 'cpu_path') {
         return;
       }
+      const batchLatencyMs = pending.dispatchedAtMs > 0 ? (nowMs() - pending.dispatchedAtMs) : 0;
+      this.updateCpuPathWorkerBatchTelemetry(pending.pixelIndices.length, batchLatencyMs);
       const expectedLength = pending.pixelIndices.length * 4;
       if (message.samples.length !== expectedLength) {
         this.disableCpuPathWorkerOffload(
@@ -996,17 +1123,19 @@ class PathQualityBackendV1 implements QualityBackend {
       }
       for (let i = 0; i < pending.pixelIndices.length; i += 1) {
         const base = i * 4;
-        this.accumulateHybridPixelSample(
+        this.accumulateHybridPixelSampleValues(
           pending.pixelIndices[i],
-          {
-            r: message.samples[base],
-            g: message.samples[base + 1],
-            b: message.samples[base + 2],
-            a: message.samples[base + 3],
-          },
+          message.samples[base],
+          message.samples[base + 1],
+          message.samples[base + 2],
+          message.samples[base + 3],
           pending.renderSnapshot,
         );
       }
+      this.cpuPathWorkerBatchCount += 1;
+      this.cpuPathWorkerPixelCount += pending.pixelIndices.length;
+      this.updateCpuPathThroughputRates();
+      this.publishCpuPathInstrumentationDiagnostics();
 
       this.tracePixelCursor = pending.nextTracePixelCursor;
       let sampleFinished = false;
@@ -1050,6 +1179,7 @@ class PathQualityBackendV1 implements QualityBackend {
     }
 
     try {
+      batch.pending.dispatchedAtMs = nowMs();
       const request: PathTraceWorkerRequest = {
         type: 'trace_batch',
         requestId: batch.pending.requestId,
@@ -1129,8 +1259,12 @@ class PathQualityBackendV1 implements QualityBackend {
     const meshSnapshots: PathTraceWorkerSceneSnapshot['meshes'] = [];
     for (let i = 0; i < meshes.length; i += 1) {
       const entry = meshes[i];
-      const accel = entry.triangleAccel;
-      if (!accel || !accel.positionsWorld || accel.triangleCount <= 0) {
+      const triangleAccel = entry.triangleAccel;
+      const lineAccel = entry.lineAccel;
+      if (
+        (!triangleAccel || !triangleAccel.positionsWorld || triangleAccel.triangleCount <= 0)
+        && (!lineAccel || !lineAccel.positionsWorld || lineAccel.segmentCount <= 0)
+      ) {
         return null;
       }
       const material = extractHybridSurfaceMaterial(entry.mesh.material);
@@ -1143,12 +1277,21 @@ class PathQualityBackendV1 implements QualityBackend {
         ior: material.ior,
         opacity: material.opacity,
       };
-      const workerAccel: WorkerTraceTriangleAccel = {
-        positionsWorld: accel.positionsWorld,
-        normalsWorld: accel.normalsWorld ?? null,
-        triangleCount: accel.triangleCount,
-        triangleBvhRoot: (accel.triangleBvhRoot as PathTraceWorkerTriangleBvhNode | null) ?? null,
-      };
+      const workerTriangleAccel: WorkerTraceTriangleAccel | null = triangleAccel
+        ? {
+            positionsWorld: triangleAccel.positionsWorld,
+            normalsWorld: triangleAccel.normalsWorld ?? null,
+            triangleCount: triangleAccel.triangleCount,
+            triangleBvhRoot: (triangleAccel.triangleBvhRoot as PathTraceWorkerTriangleBvhNode | null) ?? null,
+          }
+        : null;
+      const workerLineAccel: PathTraceWorkerLineAccel | null = lineAccel
+        ? {
+            positionsWorld: lineAccel.positionsWorld,
+            segmentCount: lineAccel.segmentCount,
+            intersectionThreshold: lineAccel.intersectionThreshold,
+          }
+        : null;
       meshSnapshots.push({
         meshIndex: i,
         minX: entry.minX,
@@ -1161,7 +1304,8 @@ class PathQualityBackendV1 implements QualityBackend {
         centerY: entry.centerY,
         centerZ: entry.centerZ,
         material: workerMaterial,
-        triangleAccel: workerAccel,
+        triangleAccel: workerTriangleAccel,
+        lineAccel: workerLineAccel,
       });
     }
 
@@ -1260,8 +1404,7 @@ class PathQualityBackendV1 implements QualityBackend {
     const minPixelsBeforeBudgetCheck = 16;
     const batchStartMs = nowMs();
 
-    const pixelIndices = new Uint32Array(hardMaxPixels);
-    const rays = new Float32Array(hardMaxPixels * 6);
+    const { pixelIndices, rays } = this.ensureCpuPathWorkerBatchScratch(hardMaxPixels);
     let localCursor = this.tracePixelCursor;
     let tracedPixels = 0;
 
@@ -1296,13 +1439,17 @@ class PathQualityBackendV1 implements QualityBackend {
       return null;
     }
 
-    const rayBuffer = tracedPixels === hardMaxPixels ? rays : rays.slice(0, tracedPixels * 6);
-    const pixelIndexBuffer = tracedPixels === hardMaxPixels ? pixelIndices : pixelIndices.slice(0, tracedPixels);
+    // Always copy the populated ray subset into a dedicated transfer buffer because the
+    // worker transfer detaches the underlying ArrayBuffer. This keeps our scratch buffers
+    // reusable across batches and avoids one extra large allocation for the fill path.
+    const rayBuffer = rays.slice(0, tracedPixels * 6);
+    const pixelIndexBuffer = pixelIndices.subarray(0, tracedPixels);
     const requestId = ++this.cpuPathWorkerRequestIdSeq;
     const pending: CpuPathWorkerPendingBatch = {
       requestId,
       sceneVersion: this.cpuPathWorkerSceneVersion,
       generation: this.captureGeneration,
+      dispatchedAtMs: 0,
       pixelIndices: pixelIndexBuffer,
       nextTracePixelCursor: localCursor,
       totalPixels,
@@ -1332,12 +1479,17 @@ class PathQualityBackendV1 implements QualityBackend {
     const jy = sampleHash01(pixelIndex, sampleIndex, 1) - 0.5;
     const localX = (x + 0.5 + jx) * tracePixelContext.pixelScaleX;
     const localY = (y + 0.5 + jy) * tracePixelContext.pixelScaleY;
-    return this.scene.createPickingRay(
+    const ray = this.cpuPathPrimaryRayScratch
+      ?? (this.cpuPathPrimaryRayScratch = new Ray(new Vector3(0, 0, 0), new Vector3(0, 0, 1), 1e6));
+    this.scene.createPickingRayToRef(
       (localX + tracePixelContext.viewportX) * tracePixelContext.hardwareScale,
       (localY + tracePixelContext.viewportY) * tracePixelContext.hardwareScale,
       PATH_PICK_WORLD_MATRIX,
+      ray,
       captureCamera,
     );
+    ray.length = 1e6;
+    return ray;
   }
 
   private traceHybridBatch(render: RenderSettings, width: number, height: number): void {
@@ -1387,6 +1539,12 @@ class PathQualityBackendV1 implements QualityBackend {
       ) {
         break;
       }
+    }
+    if (this.mode === 'cpu_path' && tracedPixels > 0) {
+      this.cpuPathMainThreadBatchCount += 1;
+      this.cpuPathMainThreadPixelCount += tracedPixels;
+      this.updateCpuPathThroughputRates();
+      this.publishCpuPathInstrumentationDiagnostics();
     }
 
     let sampleFinished = false;
@@ -1575,8 +1733,12 @@ class PathQualityBackendV1 implements QualityBackend {
     let ray = initialRay;
     let throughput = new Vector3(1, 1, 1);
     const radiance = new Vector3(0, 0, 0);
+    const outwardNormal = new Vector3(0, 0, 1);
+    const shadingNormal = new Vector3(0, 0, 1);
+    const viewDir = new Vector3(0, 0, 1);
     let alpha = 0;
     let currentMediumIor = 1;
+    let previousBounceWasTransmission = false;
 
     for (let bounce = 0; bounce < maxBounces; bounce += 1) {
       const pick = this.pickTraceRayClosest(ray, null);
@@ -1593,19 +1755,34 @@ class PathQualityBackendV1 implements QualityBackend {
       alpha = 1;
 
       const hitPoint = pick.pickedPoint;
-      let outwardNormal = pick.getNormal(true, true) ?? ray.direction.scale(-1);
+      const pickedNormal = pick.getNormal(true, true);
+      if (pickedNormal) {
+        outwardNormal.x = pickedNormal.x;
+        outwardNormal.y = pickedNormal.y;
+        outwardNormal.z = pickedNormal.z;
+      } else {
+        outwardNormal.x = -ray.direction.x;
+        outwardNormal.y = -ray.direction.y;
+        outwardNormal.z = -ray.direction.z;
+      }
       if (outwardNormal.lengthSquared() < 1e-10) {
-        outwardNormal = ray.direction.scale(-1);
+        outwardNormal.x = -ray.direction.x;
+        outwardNormal.y = -ray.direction.y;
+        outwardNormal.z = -ray.direction.z;
       }
       outwardNormal.normalize();
       const frontFace = Vector3.Dot(outwardNormal, ray.direction) < 0;
-      const shadingNormal = outwardNormal.clone();
-      if (!frontFace) {
-        shadingNormal.scaleInPlace(-1);
-      }
+      shadingNormal.x = frontFace ? outwardNormal.x : -outwardNormal.x;
+      shadingNormal.y = frontFace ? outwardNormal.y : -outwardNormal.y;
+      shadingNormal.z = frontFace ? outwardNormal.z : -outwardNormal.z;
 
       const material = extractHybridSurfaceMaterial(pick.pickedMesh.material);
-      const viewDir = ray.direction.scale(-1).normalize();
+      viewDir.x = -ray.direction.x;
+      viewDir.y = -ray.direction.y;
+      viewDir.z = -ray.direction.z;
+      if (viewDir.lengthSquared() > 1e-12) {
+        viewDir.normalize();
+      }
       const direct = this.sampleHybridDirectLighting(
         hitPoint,
         shadingNormal,
@@ -1615,6 +1792,7 @@ class PathQualityBackendV1 implements QualityBackend {
         sampleIndex,
         pixelIndex,
         bounce,
+        previousBounceWasTransmission,
       );
       radiance.x += throughput.x * direct.x;
       radiance.y += throughput.y * direct.y;
@@ -1639,8 +1817,9 @@ class PathQualityBackendV1 implements QualityBackend {
         break;
       }
 
-      throughput = multiplyVec3(throughput, bounceSample.throughput);
+      multiplyVec3InPlace(throughput, bounceSample.throughput);
       currentMediumIor = bounceSample.nextMediumIor;
+      previousBounceWasTransmission = bounceSample.wasTransmission;
       const rrStartBounce = this.mode === 'cpu_path' ? 1 : 2;
       if (bounce >= rrStartBounce) {
         const rrMin = this.mode === 'cpu_path' ? 0.05 : 0.1;
@@ -1652,8 +1831,13 @@ class PathQualityBackendV1 implements QualityBackend {
         throughput.scaleInPlace(1 / continueProb);
       }
 
-      const nextOrigin = hitPoint.add(bounceSample.direction.scale(0.0025));
-      ray = new Ray(nextOrigin, bounceSample.direction, 1e6);
+      ray.origin.x = hitPoint.x + bounceSample.direction.x * 0.0025;
+      ray.origin.y = hitPoint.y + bounceSample.direction.y * 0.0025;
+      ray.origin.z = hitPoint.z + bounceSample.direction.z * 0.0025;
+      ray.direction.x = bounceSample.direction.x;
+      ray.direction.y = bounceSample.direction.y;
+      ray.direction.z = bounceSample.direction.z;
+      ray.length = 1e6;
     }
 
     return {
@@ -1665,18 +1849,25 @@ class PathQualityBackendV1 implements QualityBackend {
   }
 
   private sampleHybridEnvironment(direction: Vector3): HybridEnvironmentSample {
-    const dir = direction.clone();
-    if (dir.lengthSquared() < 1e-10) {
-      return { radiance: new Vector3(0, 0, 0), alpha: 1 };
+    const out = this.cpuPathEnvironmentSampleScratch
+      ?? (this.cpuPathEnvironmentSampleScratch = { radiance: new Vector3(0, 0, 0), alpha: 1 });
+    const dirLenSq = direction.lengthSquared();
+    if (dirLenSq < 1e-10) {
+      out.radiance.x = 0;
+      out.radiance.y = 0;
+      out.radiance.z = 0;
+      out.alpha = 1;
+      return out;
     }
-    dir.normalize();
+    const invDirLen = 1 / Math.sqrt(dirLenSq);
+    const dirX = direction.x * invDirLen;
+    const dirY = direction.y * invDirLen;
+    const dirZ = direction.z * invDirLen;
 
     const clear = this.scene.clearColor;
-    const base = new Vector3(
-      Number.isFinite(clear?.r) ? clear.r : 0,
-      Number.isFinite(clear?.g) ? clear.g : 0,
-      Number.isFinite(clear?.b) ? clear.b : 0,
-    );
+    let baseX = Number.isFinite(clear?.r) ? clear.r : 0;
+    let baseY = Number.isFinite(clear?.g) ? clear.g : 0;
+    let baseZ = Number.isFinite(clear?.b) ? clear.b : 0;
     // Quality path output should be visually self-contained during partial accumulation
     // previews and exports, so treat environment/background rays as opaque even if the
     // raster scene clear alpha is 0 (the raster viewport may rely on CSS compositing).
@@ -1684,33 +1875,42 @@ class PathQualityBackendV1 implements QualityBackend {
 
     const ambient = this.scene.ambientColor;
     if (ambient) {
-      base.x += ambient.r * 0.35;
-      base.y += ambient.g * 0.35;
-      base.z += ambient.b * 0.35;
+      baseX += ambient.r * 0.35;
+      baseY += ambient.g * 0.35;
+      baseZ += ambient.b * 0.35;
     }
 
     for (const light of this.scene.lights) {
       if (!(light instanceof HemisphericLight) || !light.isEnabled() || light.intensity <= 0) {
         continue;
       }
-      const hemiDir = light.direction.clone();
-      if (hemiDir.lengthSquared() < 1e-10) {
+      const hemiDir = light.direction;
+      const hemiLenSq = hemiDir.lengthSquared();
+      if (hemiLenSq < 1e-10) {
         continue;
       }
-      hemiDir.normalize();
-      const t = clamp(0.5 + 0.5 * Vector3.Dot(dir, hemiDir), 0, 1);
-      const sky = color3ToVector(light.diffuse ?? Color3.White()).scale(light.intensity);
-      const ground = color3ToVector(light.groundColor ?? Color3.Black()).scale(light.intensity);
-      const dome = lerpVec3(ground, sky, t);
-      base.x += dome.x;
-      base.y += dome.y;
-      base.z += dome.z;
+      const invHemiLen = 1 / Math.sqrt(hemiLenSq);
+      const dot = (dirX * hemiDir.x + dirY * hemiDir.y + dirZ * hemiDir.z) * invHemiLen;
+      const t = clamp(0.5 + 0.5 * dot, 0, 1);
+      const li = light.intensity;
+      const diffuse = light.diffuse;
+      const groundColor = light.groundColor;
+      const skyR = (diffuse?.r ?? 1) * li;
+      const skyG = (diffuse?.g ?? 1) * li;
+      const skyB = (diffuse?.b ?? 1) * li;
+      const groundR = (groundColor?.r ?? 0) * li;
+      const groundG = (groundColor?.g ?? 0) * li;
+      const groundB = (groundColor?.b ?? 0) * li;
+      baseX += groundR + (skyR - groundR) * t;
+      baseY += groundG + (skyG - groundG) * t;
+      baseZ += groundB + (skyB - groundB) * t;
     }
 
-    return {
-      radiance: new Vector3(clampFinite(base.x), clampFinite(base.y), clampFinite(base.z)),
-      alpha,
-    };
+    out.radiance.x = clampFinite(baseX);
+    out.radiance.y = clampFinite(baseY);
+    out.radiance.z = clampFinite(baseZ);
+    out.alpha = alpha;
+    return out;
   }
 
   private sampleHybridDirectLighting(
@@ -1722,16 +1922,23 @@ class PathQualityBackendV1 implements QualityBackend {
     sampleIndex: number,
     pixelIndex: number,
     bounce: number,
+    previousBounceWasTransmission: boolean,
   ): Vector3 {
-    const out = new Vector3(0, 0, 0);
+    const out = this.cpuPathDirectLightingScratch ?? (this.cpuPathDirectLightingScratch = new Vector3(0, 0, 0));
+    out.x = 0;
+    out.y = 0;
+    out.z = 0;
     const diffuseWeight = clamp01Safe((1 - material.metallic) * (1 - material.transmission) * material.opacity);
     const specWeight = clamp01Safe(Math.max(material.reflectance, material.metallic));
-    const specColor = lerpVec3(new Vector3(1, 1, 1), material.baseColor, material.metallic);
+    const specColorX = 1 + (material.baseColor.x - 1) * material.metallic;
+    const specColorY = 1 + (material.baseColor.y - 1) * material.metallic;
+    const specColorZ = 1 + (material.baseColor.z - 1) * material.metallic;
     const roughness = clamp(material.roughness, 0.03, 1);
     const shininess = clamp(Math.round((1 - roughness) * 180 + 8), 8, 256);
     // CPU path backend is throughput-constrained; sample finite direct lights only on the first hit.
     // This is a preview-biased tradeoff (fewer shadow rays / less secondary-light accuracy).
-    const sampleFiniteDirectThisBounce = !(this.mode === 'cpu_path' && bounce > 0);
+    const allowExtraFiniteDirectAfterTransmission = this.mode === 'cpu_path' && bounce === 1 && previousBounceWasTransmission;
+    const sampleFiniteDirectThisBounce = !(this.mode === 'cpu_path' && bounce > 0 && !allowExtraFiniteDirectAfterTransmission);
     const useSingleFiniteLightSample = this.mode === 'cpu_path' && sampleFiniteDirectThisBounce;
     let finiteLightCount = 0;
     if (useSingleFiniteLightSample) {
@@ -1761,18 +1968,26 @@ class PathQualityBackendV1 implements QualityBackend {
       }
 
       if (light instanceof HemisphericLight) {
-        const hemiDir = light.direction.clone();
-        if (hemiDir.lengthSquared() < 1e-10) {
+        const hemiDir = light.direction;
+        const hemiLenSq = hemiDir.lengthSquared();
+        if (hemiLenSq < 1e-10) {
           continue;
         }
-        hemiDir.normalize();
-        const t = clamp(0.5 + 0.5 * Vector3.Dot(normal, hemiDir), 0, 1);
-        const sky = color3ToVector(light.diffuse ?? Color3.White()).scale(light.intensity);
-        const ground = color3ToVector(light.groundColor ?? Color3.Black()).scale(light.intensity);
-        const hemi = lerpVec3(ground, sky, t);
-        out.x += hemi.x * material.baseColor.x * diffuseWeight;
-        out.y += hemi.y * material.baseColor.y * diffuseWeight;
-        out.z += hemi.z * material.baseColor.z * diffuseWeight;
+        const invHemiLen = 1 / Math.sqrt(hemiLenSq);
+        const dot = (normal.x * hemiDir.x + normal.y * hemiDir.y + normal.z * hemiDir.z) * invHemiLen;
+        const t = clamp(0.5 + 0.5 * dot, 0, 1);
+        const li = light.intensity;
+        const diffuse = light.diffuse;
+        const groundColor = light.groundColor;
+        const skyR = (diffuse?.r ?? 1) * li;
+        const skyG = (diffuse?.g ?? 1) * li;
+        const skyB = (diffuse?.b ?? 1) * li;
+        const groundR = (groundColor?.r ?? 0) * li;
+        const groundG = (groundColor?.g ?? 0) * li;
+        const groundB = (groundColor?.b ?? 0) * li;
+        out.x += (groundR + (skyR - groundR) * t) * material.baseColor.x * diffuseWeight;
+        out.y += (groundG + (skyG - groundG) * t) * material.baseColor.y * diffuseWeight;
+        out.z += (groundB + (skyB - groundB) * t) * material.baseColor.z * diffuseWeight;
         continue;
       }
 
@@ -1796,24 +2011,38 @@ class PathQualityBackendV1 implements QualityBackend {
             light.direction,
             sampleIndex + bounce * 31 + pixelIndex,
             currentDirIndex,
-          ) ?? light.direction.clone();
-        if (jitteredDir.lengthSquared() < 1e-10) {
+          ) ?? light.direction;
+        const jitteredLenSq = jitteredDir.lengthSquared();
+        if (jitteredLenSq < 1e-10) {
           continue;
         }
-        jitteredDir.normalize();
-        const lightDir = jitteredDir.scale(-1).normalize();
-        const ndl = Math.max(0, Vector3.Dot(normal, lightDir));
+        const invJitteredLen = 1 / Math.sqrt(jitteredLenSq);
+        const lightDirX = -jitteredDir.x * invJitteredLen;
+        const lightDirY = -jitteredDir.y * invJitteredLen;
+        const lightDirZ = -jitteredDir.z * invJitteredLen;
+        const ndl = Math.max(0, normal.x * lightDirX + normal.y * lightDirY + normal.z * lightDirZ);
         if (ndl <= 0) continue;
-        if (this.isShadowedDirectional(hitPoint, normal, lightDir, hitMesh)) {
+        if (this.isShadowedDirectional(hitPoint, normal, lightDirX, lightDirY, lightDirZ, hitMesh)) {
           continue;
         }
-        const lightColor = color3ToVector(light.diffuse ?? Color3.White()).scale(light.intensity * finiteLightWeight);
-        const h = lightDir.add(viewDir).normalize();
-        const ndh = Math.max(0, Vector3.Dot(normal, h));
-        const specTerm = specWeight > 0 ? Math.pow(ndh, shininess) * ndl : 0;
-        out.x += lightColor.x * (material.baseColor.x * diffuseWeight * ndl + specColor.x * specTerm * specWeight);
-        out.y += lightColor.y * (material.baseColor.y * diffuseWeight * ndl + specColor.y * specTerm * specWeight);
-        out.z += lightColor.z * (material.baseColor.z * diffuseWeight * ndl + specColor.z * specTerm * specWeight);
+        const li = light.intensity * finiteLightWeight;
+        const diffuseColor = light.diffuse;
+        const lightColorX = (diffuseColor?.r ?? 1) * li;
+        const lightColorY = (diffuseColor?.g ?? 1) * li;
+        const lightColorZ = (diffuseColor?.b ?? 1) * li;
+        const halfX = lightDirX + viewDir.x;
+        const halfY = lightDirY + viewDir.y;
+        const halfZ = lightDirZ + viewDir.z;
+        const halfLenSq = halfX * halfX + halfY * halfY + halfZ * halfZ;
+        let specTerm = 0;
+        if (specWeight > 0 && halfLenSq > 1e-10) {
+          const invHalfLen = 1 / Math.sqrt(halfLenSq);
+          const ndh = Math.max(0, normal.x * halfX * invHalfLen + normal.y * halfY * invHalfLen + normal.z * halfZ * invHalfLen);
+          specTerm = Math.pow(ndh, shininess) * ndl;
+        }
+        out.x += lightColorX * (material.baseColor.x * diffuseWeight * ndl + specColorX * specTerm * specWeight);
+        out.y += lightColorY * (material.baseColor.y * diffuseWeight * ndl + specColorY * specTerm * specWeight);
+        out.z += lightColorZ * (material.baseColor.z * diffuseWeight * ndl + specColorZ * specTerm * specWeight);
         continue;
       }
 
@@ -1833,28 +2062,44 @@ class PathQualityBackendV1 implements QualityBackend {
           continue;
         }
         const samplePos =
-          this.computeJitteredPointLightPosition(light, sampleIndex + bounce * 47 + pixelIndex, currentPointIndex) ?? light.position.clone();
-        const toLight = samplePos.subtract(hitPoint);
-        const dist2 = toLight.lengthSquared();
+          this.computeJitteredPointLightPosition(light, sampleIndex + bounce * 47 + pixelIndex, currentPointIndex) ?? light.position;
+        const toLightX = samplePos.x - hitPoint.x;
+        const toLightY = samplePos.y - hitPoint.y;
+        const toLightZ = samplePos.z - hitPoint.z;
+        const dist2 = toLightX * toLightX + toLightY * toLightY + toLightZ * toLightZ;
         if (dist2 <= 1e-8) continue;
         const dist = Math.sqrt(dist2);
-        const lightDir = toLight.scale(1 / dist);
-        const ndl = Math.max(0, Vector3.Dot(normal, lightDir));
+        const invDist = 1 / dist;
+        const lightDirX = toLightX * invDist;
+        const lightDirY = toLightY * invDist;
+        const lightDirZ = toLightZ * invDist;
+        const ndl = Math.max(0, normal.x * lightDirX + normal.y * lightDirY + normal.z * lightDirZ);
         if (ndl <= 0) continue;
-        if (this.isShadowedPoint(hitPoint, normal, lightDir, dist, hitMesh)) {
+        if (this.isShadowedPoint(hitPoint, normal, lightDirX, lightDirY, lightDirZ, dist, hitMesh)) {
           continue;
         }
         const range = Number.isFinite(light.range) && light.range > 0 ? light.range : dist * 2;
         const rangeFalloff = clamp(1 - (dist / Math.max(range, 1e-3)) ** 2, 0, 1);
         const attenuation = rangeFalloff * rangeFalloff / (1 + dist2 * 0.03);
         if (attenuation <= 0) continue;
-        const lightColor = color3ToVector(light.diffuse ?? Color3.White()).scale(light.intensity * attenuation * finiteLightWeight);
-        const h = lightDir.add(viewDir).normalize();
-        const ndh = Math.max(0, Vector3.Dot(normal, h));
-        const specTerm = specWeight > 0 ? Math.pow(ndh, shininess) * ndl : 0;
-        out.x += lightColor.x * (material.baseColor.x * diffuseWeight * ndl + specColor.x * specTerm * specWeight);
-        out.y += lightColor.y * (material.baseColor.y * diffuseWeight * ndl + specColor.y * specTerm * specWeight);
-        out.z += lightColor.z * (material.baseColor.z * diffuseWeight * ndl + specColor.z * specTerm * specWeight);
+        const li = light.intensity * attenuation * finiteLightWeight;
+        const diffuseColor = light.diffuse;
+        const lightColorX = (diffuseColor?.r ?? 1) * li;
+        const lightColorY = (diffuseColor?.g ?? 1) * li;
+        const lightColorZ = (diffuseColor?.b ?? 1) * li;
+        const halfX = lightDirX + viewDir.x;
+        const halfY = lightDirY + viewDir.y;
+        const halfZ = lightDirZ + viewDir.z;
+        const halfLenSq = halfX * halfX + halfY * halfY + halfZ * halfZ;
+        let specTerm = 0;
+        if (specWeight > 0 && halfLenSq > 1e-10) {
+          const invHalfLen = 1 / Math.sqrt(halfLenSq);
+          const ndh = Math.max(0, normal.x * halfX * invHalfLen + normal.y * halfY * invHalfLen + normal.z * halfZ * invHalfLen);
+          specTerm = Math.pow(ndh, shininess) * ndl;
+        }
+        out.x += lightColorX * (material.baseColor.x * diffuseWeight * ndl + specColorX * specTerm * specWeight);
+        out.y += lightColorY * (material.baseColor.y * diffuseWeight * ndl + specColorY * specTerm * specWeight);
+        out.z += lightColorZ * (material.baseColor.z * diffuseWeight * ndl + specColorZ * specTerm * specWeight);
       }
     }
 
@@ -1872,7 +2117,26 @@ class PathQualityBackendV1 implements QualityBackend {
     pixelIndex: number,
     bounce: number,
   ): HybridBounceSample | null {
-    const incident = incomingDir.clone().normalize();
+    const incident = this.cpuPathContinuationIncidentScratch
+      ?? (this.cpuPathContinuationIncidentScratch = new Vector3(0, 0, 1));
+    incident.x = incomingDir.x;
+    incident.y = incomingDir.y;
+    incident.z = incomingDir.z;
+    if (incident.lengthSquared() < 1e-10) {
+      return null;
+    }
+    incident.normalize();
+    const out = this.cpuPathContinuationBounceSampleScratch
+      ?? (this.cpuPathContinuationBounceSampleScratch = {
+        direction: new Vector3(0, 0, 1),
+        throughput: new Vector3(1, 1, 1),
+        nextMediumIor: 1,
+        wasTransmission: false,
+      });
+    const tangentScratch = this.cpuPathContinuationTangentScratch
+      ?? (this.cpuPathContinuationTangentScratch = new Vector3(1, 0, 0));
+    const bitangentScratch = this.cpuPathContinuationBitangentScratch
+      ?? (this.cpuPathContinuationBitangentScratch = new Vector3(0, 1, 0));
     const mediumIor = sanitizeIor(currentMediumIor);
     const materialIor = sanitizeIor(material.ior);
     const nextMediumIorForTransmission = frontFace ? materialIor : 1;
@@ -1881,7 +2145,7 @@ class PathQualityBackendV1 implements QualityBackend {
     const fresnel = schlickFresnel(cosTheta, Math.max(dielectricF0, material.reflectance));
 
     let reflectWeight = clamp01Safe(Math.max(material.reflectance, material.metallic));
-    let transmitWeight = clamp01Safe(material.transmission * material.opacity);
+    let transmitWeight = clamp01Safe(material.transmission);
     if (transmitWeight > 0) {
       reflectWeight = clamp01Safe(reflectWeight + transmitWeight * fresnel);
       transmitWeight = clamp01Safe(transmitWeight * (1 - fresnel));
@@ -1896,82 +2160,130 @@ class PathQualityBackendV1 implements QualityBackend {
     const roughness = clamp(material.roughness, 0, 1);
 
     if (xi < transmitWeight) {
-      const refracted = refractDirectionAcrossInterface(
+      const interfaceNormal = this.cpuPathContinuationInterfaceNormalScratch
+        ?? (this.cpuPathContinuationInterfaceNormalScratch = new Vector3(0, 0, 1));
+      interfaceNormal.x = frontFace ? outwardNormal.x : -outwardNormal.x;
+      interfaceNormal.y = frontFace ? outwardNormal.y : -outwardNormal.y;
+      interfaceNormal.z = frontFace ? outwardNormal.z : -outwardNormal.z;
+      const refracted = refractDirectionAcrossInterfaceToRef(
         incident,
-        frontFace ? outwardNormal : outwardNormal.scale(-1),
+        interfaceNormal,
         mediumIor,
         nextMediumIorForTransmission,
+        out.direction,
       );
-      const continuedDirection = refracted ?? reflectDirection(incident, shadingNormal);
-      const direction = jitterDirection(
-        continuedDirection,
+      if (!refracted && !reflectDirectionToRef(incident, shadingNormal, out.direction)) {
+        return null;
+      }
+      if (!jitterDirectionToRef(
+        out.direction,
         clamp(roughness * 0.35, 0, 0.4),
         pixelIndex,
         sampleIndex,
         bounce,
         17,
-      );
-      if (!direction) return null;
-      const tint = lerpVec3(new Vector3(1, 1, 1), material.baseColor, 0.2);
-      return {
-        direction,
-        throughput: tint.scale(Math.max(0.15, transmitWeight / total)),
-        nextMediumIor: refracted ? nextMediumIorForTransmission : mediumIor,
-      };
+        out.direction,
+        tangentScratch,
+        bitangentScratch,
+      )) {
+        return null;
+      }
+      const tintScale = Math.max(0.15, transmitWeight / total);
+      out.throughput.x = (1 + (material.baseColor.x - 1) * 0.2) * tintScale;
+      out.throughput.y = (1 + (material.baseColor.y - 1) * 0.2) * tintScale;
+      out.throughput.z = (1 + (material.baseColor.z - 1) * 0.2) * tintScale;
+      out.nextMediumIor = refracted ? nextMediumIorForTransmission : mediumIor;
+      out.wasTransmission = refracted;
+      return out;
     }
 
     if (xi < transmitWeight + reflectWeight) {
-      const reflected = reflectDirection(incident, shadingNormal);
-      const direction = jitterDirection(
-        reflected,
+      if (!reflectDirectionToRef(incident, shadingNormal, out.direction)) {
+        return null;
+      }
+      if (!jitterDirectionToRef(
+        out.direction,
         clamp(roughness * 0.6, 0, 0.75),
         pixelIndex,
         sampleIndex,
         bounce,
         23,
-      );
-      if (!direction) return null;
-      const specColor = lerpVec3(new Vector3(1, 1, 1), material.baseColor, material.metallic);
-      return {
-        direction,
-        throughput: specColor.scale(Math.max(0.1, reflectWeight / total)),
-        nextMediumIor: mediumIor,
-      };
+        out.direction,
+        tangentScratch,
+        bitangentScratch,
+      )) {
+        return null;
+      }
+      const specScale = Math.max(0.1, reflectWeight / total);
+      out.throughput.x = (1 + (material.baseColor.x - 1) * material.metallic) * specScale;
+      out.throughput.y = (1 + (material.baseColor.y - 1) * material.metallic) * specScale;
+      out.throughput.z = (1 + (material.baseColor.z - 1) * material.metallic) * specScale;
+      out.nextMediumIor = mediumIor;
+      out.wasTransmission = false;
+      return out;
     }
 
-    const diffuseDir = cosineSampleHemisphere(
+    if (!cosineSampleHemisphereToRef(
       shadingNormal,
       pixelIndex,
       sampleIndex,
       bounce,
       29,
-    );
-    if (!diffuseDir) {
+      out.direction,
+      tangentScratch,
+      bitangentScratch,
+    )) {
       return null;
     }
-    return {
-      direction: diffuseDir,
-      throughput: material.baseColor.scale(Math.max(0.1, diffuseWeight / total)),
-      nextMediumIor: mediumIor,
-    };
+    const diffuseScale = Math.max(0.1, diffuseWeight / total);
+    out.throughput.x = material.baseColor.x * diffuseScale;
+    out.throughput.y = material.baseColor.y * diffuseScale;
+    out.throughput.z = material.baseColor.z * diffuseScale;
+    out.nextMediumIor = mediumIor;
+    out.wasTransmission = false;
+    return out;
   }
 
-  private isShadowedDirectional(hitPoint: Vector3, normal: Vector3, lightDir: Vector3, hitMesh: AbstractMesh): boolean {
-    const origin = hitPoint.add(normal.scale(0.0035));
-    const shadowRay = new Ray(origin, lightDir, 1e6);
+  private isShadowedDirectional(
+    hitPoint: Vector3,
+    normal: Vector3,
+    lightDirX: number,
+    lightDirY: number,
+    lightDirZ: number,
+    hitMesh: AbstractMesh,
+  ): boolean {
+    const shadowRay = this.cpuPathShadowRayScratch
+      ?? (this.cpuPathShadowRayScratch = new Ray(new Vector3(0, 0, 0), new Vector3(0, 0, 1), 1e6));
+    shadowRay.origin.x = hitPoint.x + normal.x * 0.0035;
+    shadowRay.origin.y = hitPoint.y + normal.y * 0.0035;
+    shadowRay.origin.z = hitPoint.z + normal.z * 0.0035;
+    shadowRay.direction.x = lightDirX;
+    shadowRay.direction.y = lightDirY;
+    shadowRay.direction.z = lightDirZ;
+    shadowRay.length = 1e6;
     return this.hasAnyTraceHit(shadowRay, hitMesh);
   }
 
   private isShadowedPoint(
     hitPoint: Vector3,
     normal: Vector3,
-    lightDir: Vector3,
+    lightDirX: number,
+    lightDirY: number,
+    lightDirZ: number,
     lightDistance: number,
     hitMesh: AbstractMesh,
   ): boolean {
-    const origin = hitPoint.add(normal.scale(0.0035));
-    const shadowRay = new Ray(origin, lightDir, Math.max(0, lightDistance - 0.005));
-    return this.hasAnyTraceHit(shadowRay, hitMesh, lightDistance - 0.005);
+    const shadowRay = this.cpuPathShadowRayScratch
+      ?? (this.cpuPathShadowRayScratch = new Ray(new Vector3(0, 0, 0), new Vector3(0, 0, 1), 1e6));
+    shadowRay.origin.x = hitPoint.x + normal.x * 0.0035;
+    shadowRay.origin.y = hitPoint.y + normal.y * 0.0035;
+    shadowRay.origin.z = hitPoint.z + normal.z * 0.0035;
+    shadowRay.direction.x = lightDirX;
+    shadowRay.direction.y = lightDirY;
+    shadowRay.direction.z = lightDirZ;
+    const shadowMaxDistance = lightDistance - 0.005;
+    shadowRay.length = Math.max(0, shadowMaxDistance);
+    return this.hasAnyTraceHit(shadowRay, hitMesh, shadowMaxDistance);
   }
 
   private invalidateTraceMeshAcceleration(): void {
@@ -2028,9 +2340,14 @@ class PathQualityBackendV1 implements QualityBackend {
       }
       try {
         mesh.computeWorldMatrix(false);
+        const worldMatrix = mesh.getWorldMatrix();
+        const worldM = worldMatrix.m;
         const worldMatrixUpdateFlag = getMeshWorldMatrixUpdateFlag(mesh);
         if (worldMatrixUpdateFlag !== entry.worldMatrixUpdateFlag) {
-          return true;
+          if (!matrixElementsApproxEqual(worldM, entry.worldMatrixElements)) {
+            return true;
+          }
+          entry.worldMatrixUpdateFlag = worldMatrixUpdateFlag;
         }
         const bounds = mesh.getBoundingInfo()?.boundingBox;
         if (!bounds) {
@@ -2074,7 +2391,9 @@ class PathQualityBackendV1 implements QualityBackend {
         entries.push({
           mesh,
           worldMatrixUpdateFlag: getMeshWorldMatrixUpdateFlag(mesh),
+          worldMatrixElements: new Float32Array(mesh.getWorldMatrix().m),
           triangleAccel: buildTraceTriangleAccel(mesh),
+          lineAccel: buildTraceLineAccel(mesh),
           minX: min.x,
           minY: min.y,
           minZ: min.z,
@@ -2138,6 +2457,24 @@ class PathQualityBackendV1 implements QualityBackend {
           return null;
         }
       },
+    };
+  }
+
+  private ensureCpuPathWorkerBatchScratch(hardMaxPixels: number): {
+    pixelIndices: Uint32Array;
+    rays: Float32Array;
+  } {
+    const pixelScratch = this.cpuPathWorkerBatchPixelScratch;
+    const rayScratch = this.cpuPathWorkerBatchRayScratch;
+    if (!pixelScratch || pixelScratch.length < hardMaxPixels) {
+      this.cpuPathWorkerBatchPixelScratch = new Uint32Array(hardMaxPixels);
+    }
+    if (!rayScratch || rayScratch.length < hardMaxPixels * 6) {
+      this.cpuPathWorkerBatchRayScratch = new Float32Array(hardMaxPixels * 6);
+    }
+    return {
+      pixelIndices: this.cpuPathWorkerBatchPixelScratch!,
+      rays: this.cpuPathWorkerBatchRayScratch!,
     };
   }
 
@@ -2387,26 +2724,36 @@ class PathQualityBackendV1 implements QualityBackend {
   }
 
   private accumulateHybridPixelSample(pixelIndex: number, sample: HybridPixelSample, render: RenderSettings): void {
+    this.accumulateHybridPixelSampleValues(pixelIndex, sample.r, sample.g, sample.b, sample.a, render);
+  }
+
+  private accumulateHybridPixelSampleValues(
+    pixelIndex: number,
+    sampleR: number,
+    sampleG: number,
+    sampleB: number,
+    sampleA: number,
+    render: RenderSettings,
+  ): void {
     if (!this.accumLinear || !this.pixelSampleCounts) {
       return;
     }
     const base4 = pixelIndex * 4;
     const count = this.pixelSampleCounts[pixelIndex];
-    let r = sample.r;
-    let g = sample.g;
-    let b = sample.b;
-    const a = clamp(sample.a, 0, 1);
+    let r = sampleR;
+    let g = sampleG;
+    let b = sampleB;
+    const a = clamp(sampleA, 0, 1);
 
-    if (render.qualityClampFireflies && count > 0) {
+    // Path mode is especially sensitive to early-sample highlight loss; delay clamp startup
+    // slightly so legitimate bright reflections/transmission are visible sooner.
+    if (render.qualityClampFireflies && count > 2) {
       const avgR = this.accumLinear[base4] / count;
       const avgG = this.accumLinear[base4 + 1] / count;
       const avgB = this.accumLinear[base4 + 2] / count;
-      const avgLum = luminance(avgR, avgG, avgB);
-      const sampleLum = luminance(r, g, b);
       const maxBounces = clamp(Math.round(render.qualityMaxBounces), 1, 12);
-      const maxLum = Math.max(0.03, avgLum * (2.2 + (maxBounces - 1) * 0.35));
-      if (sampleLum > maxLum && sampleLum > 1e-6) {
-        const scale = maxLum / sampleLum;
+      const scale = computeQualityFireflyClampScale(r, g, b, avgR, avgG, avgB, count, maxBounces);
+      if (scale < 0.999999) {
         r *= scale;
         g *= scale;
         b *= scale;
@@ -2783,15 +3130,27 @@ class PathQualityBackendV1 implements QualityBackend {
       let b = srgbByteToLinear(samplePixels[i + 2]);
       const a = samplePixels[i + 3] / 255;
 
-      if (clampFireflies && previousSamples > 0) {
-        const avgR = accum[i] / previousSamples;
-        const avgG = accum[i + 1] / previousSamples;
-        const avgB = accum[i + 2] / previousSamples;
-        const avgLum = luminance(avgR, avgG, avgB);
-        const sampleLum = luminance(r, g, b);
-        const maxLum = Math.max(fireflyFloor, avgLum * fireflyThresholdScale);
-        if (sampleLum > maxLum && sampleLum > 1e-6) {
-          const scale = maxLum / sampleLum;
+      const priorCount = counts ? counts[p] : previousSamples;
+      if (clampFireflies && priorCount > 0) {
+        const invPriorCount = 1 / Math.max(1, priorCount);
+        const avgR = accum[i] * invPriorCount;
+        const avgG = accum[i + 1] * invPriorCount;
+        const avgB = accum[i + 2] * invPriorCount;
+        const effectiveThresholdScale = fireflyThresholdScale + Math.max(0, (10 - Math.min(priorCount, 10)) * 0.4);
+        const effectiveFloor = fireflyFloor + Math.max(0, (6 - Math.min(priorCount, 6)) * 0.01);
+        const scale = computeQualityFireflyClampScale(
+          r,
+          g,
+          b,
+          avgR,
+          avgG,
+          avgB,
+          priorCount,
+          maxBounces,
+          effectiveThresholdScale,
+          effectiveFloor,
+        );
+        if (scale < 0.999999) {
           r *= scale;
           g *= scale;
           b *= scale;
@@ -3075,17 +3434,17 @@ export class QualityBackendRouter {
     }
   }
 
-  resetActiveBackendHistory(): void {
+  resetActiveBackendHistory(reason?: string | null): void {
     if (this._activeRenderer === 'taa_preview') {
-      this.taaPreview.resetHistory();
+      this.taaPreview.resetHistory(reason);
       return;
     }
     if (this._activeRenderer === 'hybrid_gpu_preview') {
-      this.hybridGpuPreview.resetHistory();
+      this.hybridGpuPreview.resetHistory(reason);
       return;
     }
     if (this._activeRenderer === 'path') {
-      this.path.resetHistory();
+      this.path.resetHistory(reason);
     }
   }
 
@@ -3246,6 +3605,64 @@ function buildTraceTriangleAccel(mesh: AbstractMesh): TraceTriangleAccel | null 
     normalsWorld,
     triangleCount,
     triangleBvhRoot,
+  };
+}
+
+function buildTraceLineAccel(mesh: AbstractMesh): TraceLineAccel | null {
+  if (!(mesh instanceof LinesMesh)) {
+    return null;
+  }
+
+  const lineLikeMesh = mesh as LinesMesh & { skeleton?: unknown; hasThinInstances?: boolean };
+  if (lineLikeMesh.skeleton || lineLikeMesh.hasThinInstances) {
+    return null;
+  }
+
+  const positions = mesh.getVerticesData('position');
+  if (!positions || positions.length < 6) {
+    return null;
+  }
+
+  const indices = mesh.getIndices();
+  const indexed = Boolean(indices && indices.length >= 2);
+  const segmentCount = indexed
+    ? Math.floor((indices?.length ?? 0) / 2)
+    : Math.floor(positions.length / 6);
+  if (segmentCount <= 0) {
+    return null;
+  }
+
+  const worldM = mesh.getWorldMatrix().m;
+  const positionsWorld = new Float32Array(segmentCount * 6);
+  let outBase = 0;
+
+  if (indexed && indices) {
+    for (let i = 0; i + 1 < indices.length; i += 2) {
+      const i0 = indices[i] * 3;
+      const i1 = indices[i + 1] * 3;
+      if (
+        i0 < 0 || i1 < 0
+        || i0 + 2 >= positions.length
+        || i1 + 2 >= positions.length
+      ) {
+        return null;
+      }
+      writeTransformedPosition(positionsWorld, outBase + 0, positions[i0], positions[i0 + 1], positions[i0 + 2], worldM);
+      writeTransformedPosition(positionsWorld, outBase + 3, positions[i1], positions[i1 + 1], positions[i1 + 2], worldM);
+      outBase += 6;
+    }
+  } else {
+    for (let i = 0; i + 5 < positions.length; i += 6) {
+      writeTransformedPosition(positionsWorld, outBase + 0, positions[i + 0], positions[i + 1], positions[i + 2], worldM);
+      writeTransformedPosition(positionsWorld, outBase + 3, positions[i + 3], positions[i + 4], positions[i + 5], worldM);
+      outBase += 6;
+    }
+  }
+
+  return {
+    positionsWorld,
+    segmentCount,
+    intersectionThreshold: Math.max(1e-4, Number.isFinite(mesh.intersectionThreshold) ? mesh.intersectionThreshold : 0.1),
   };
 }
 
@@ -4135,6 +4552,18 @@ function approxEqual(a: number, b: number, epsilon = 1e-8): boolean {
   return Math.abs(a - b) <= epsilon;
 }
 
+function matrixElementsApproxEqual(a: ArrayLike<number>, b: ArrayLike<number>, epsilon = 1e-8): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let i = 0; i < a.length; i += 1) {
+    if (!approxEqual(a[i], b[i], epsilon)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -4155,17 +4584,11 @@ function vector3ToWorkerVec3(vector: Vector3): PathTraceWorkerVec3 {
   return { x: vector.x, y: vector.y, z: vector.z };
 }
 
-function multiplyVec3(a: Vector3, b: Vector3): Vector3 {
-  return new Vector3(a.x * b.x, a.y * b.y, a.z * b.z);
-}
-
-function lerpVec3(a: Vector3, b: Vector3, t: number): Vector3 {
-  const k = clamp01Safe(t);
-  return new Vector3(
-    a.x + (b.x - a.x) * k,
-    a.y + (b.y - a.y) * k,
-    a.z + (b.z - a.z) * k,
-  );
+function multiplyVec3InPlace(a: Vector3, b: Vector3): Vector3 {
+  a.x *= b.x;
+  a.y *= b.y;
+  a.z *= b.z;
+  return a;
 }
 
 function srgbByteToLinear(value: number): number {
@@ -4184,6 +4607,42 @@ function linearToSrgbByte(value: number): number {
 
 function luminance(r: number, g: number, b: number): number {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function computeQualityFireflyClampScale(
+  sampleR: number,
+  sampleG: number,
+  sampleB: number,
+  avgR: number,
+  avgG: number,
+  avgB: number,
+  previousSamples: number,
+  maxBounces: number,
+  thresholdScaleOverride?: number,
+  floorOverride?: number,
+): number {
+  const prior = Math.max(0, Math.floor(previousSamples));
+  // Avoid over-clamping legitimate highlights during very early convergence.
+  if (prior < 2) {
+    return 1;
+  }
+  const sampleLum = luminance(sampleR, sampleG, sampleB);
+  if (!(sampleLum > 1e-6)) {
+    return 1;
+  }
+  const avgLum = luminance(avgR, avgG, avgB);
+  const boundedBounces = clamp(Math.round(maxBounces), 1, 12);
+  const baseThresholdScale = 2.4 + (boundedBounces - 1) * 0.4;
+  const lowSampleRelax = Math.max(0, (10 - Math.min(prior, 10)) * 0.4);
+  const thresholdScale = thresholdScaleOverride ?? (baseThresholdScale + lowSampleRelax);
+  const baseFloor = 0.04 + (boundedBounces - 1) * 0.01;
+  const lowSampleFloorBoost = Math.max(0, (6 - Math.min(prior, 6)) * 0.01);
+  const floor = floorOverride ?? (baseFloor + lowSampleFloorBoost);
+  const maxLum = Math.max(floor, avgLum * thresholdScale);
+  if (sampleLum <= maxLum) {
+    return 1;
+  }
+  return clamp(maxLum / sampleLum, 0, 1);
 }
 
 function sampleHash01(pixelIndex: number, sampleIndex: number, dimension: number): number {
@@ -4261,91 +4720,184 @@ function gcdInt(a: number, b: number): number {
   return x || 1;
 }
 
-function makeOrthonormalBasis(n: Vector3): { tangent: Vector3; bitangent: Vector3 } | null {
-  const normal = n.clone();
-  if (normal.lengthSquared() < 1e-10) {
-    return null;
+function normalizeVec3ToRef(input: Vector3, out: Vector3): boolean {
+  const x = input.x;
+  const y = input.y;
+  const z = input.z;
+  const lenSq = x * x + y * y + z * z;
+  if (lenSq < 1e-10) {
+    return false;
   }
-  normal.normalize();
-  const upA = Math.abs(normal.z) < 0.95 ? new Vector3(0, 0, 1) : new Vector3(0, 1, 0);
-  let tangent = Vector3.Cross(upA, normal);
-  if (tangent.lengthSquared() < 1e-10) {
-    tangent = Vector3.Cross(new Vector3(1, 0, 0), normal);
-    if (tangent.lengthSquared() < 1e-10) {
-      return null;
-    }
-  }
-  tangent.normalize();
-  const bitangent = Vector3.Cross(normal, tangent);
-  if (bitangent.lengthSquared() < 1e-10) {
-    return null;
-  }
-  bitangent.normalize();
-  return { tangent, bitangent };
+  const invLen = 1 / Math.sqrt(lenSq);
+  out.x = x * invLen;
+  out.y = y * invLen;
+  out.z = z * invLen;
+  return true;
 }
 
-function cosineSampleHemisphere(
+function makeOrthonormalBasisToRef(normal: Vector3, tangentOut: Vector3, bitangentOut: Vector3): boolean {
+  let nx = normal.x;
+  let ny = normal.y;
+  let nz = normal.z;
+  const nLenSq = nx * nx + ny * ny + nz * nz;
+  if (nLenSq < 1e-10) {
+    return false;
+  }
+  const invNLen = 1 / Math.sqrt(nLenSq);
+  nx *= invNLen;
+  ny *= invNLen;
+  nz *= invNLen;
+
+  const upAx = 0;
+  const upAy = Math.abs(nz) < 0.95 ? 0 : 1;
+  const upAz = Math.abs(nz) < 0.95 ? 1 : 0;
+  let tx = upAy * nz - upAz * ny;
+  let ty = upAz * nx - upAx * nz;
+  let tz = upAx * ny - upAy * nx;
+  let tLenSq = tx * tx + ty * ty + tz * tz;
+  if (tLenSq < 1e-10) {
+    tx = 0;
+    ty = -nz;
+    tz = ny;
+    tLenSq = tx * tx + ty * ty + tz * tz;
+    if (tLenSq < 1e-10) {
+      return false;
+    }
+  }
+  const invTLen = 1 / Math.sqrt(tLenSq);
+  tx *= invTLen;
+  ty *= invTLen;
+  tz *= invTLen;
+  tangentOut.x = tx;
+  tangentOut.y = ty;
+  tangentOut.z = tz;
+
+  let bx = ny * tz - nz * ty;
+  let by = nz * tx - nx * tz;
+  let bz = nx * ty - ny * tx;
+  const bLenSq = bx * bx + by * by + bz * bz;
+  if (bLenSq < 1e-10) {
+    return false;
+  }
+  const invBLen = 1 / Math.sqrt(bLenSq);
+  bitangentOut.x = bx * invBLen;
+  bitangentOut.y = by * invBLen;
+  bitangentOut.z = bz * invBLen;
+  return true;
+}
+
+function cosineSampleHemisphereToRef(
   normal: Vector3,
   pixelIndex: number,
   sampleIndex: number,
   bounce: number,
   dimensionOffset: number,
-): Vector3 | null {
-  const basis = makeOrthonormalBasis(normal);
-  if (!basis) {
-    return null;
+  out: Vector3,
+  tangentScratch: Vector3,
+  bitangentScratch: Vector3,
+): boolean {
+  if (!normalizeVec3ToRef(normal, out)) {
+    return false;
   }
+  const nx = out.x;
+  const ny = out.y;
+  const nz = out.z;
+  if (!makeOrthonormalBasisToRef(out, tangentScratch, bitangentScratch)) {
+    return false;
+  }
+  const tx = tangentScratch.x;
+  const ty = tangentScratch.y;
+  const tz = tangentScratch.z;
+  const bx = bitangentScratch.x;
+  const by = bitangentScratch.y;
+  const bz = bitangentScratch.z;
+
   const u1 = sampleHash01(pixelIndex, sampleIndex + bounce * 53, dimensionOffset);
   const u2 = sampleHash01(pixelIndex, sampleIndex + bounce * 53, dimensionOffset + 1);
   const r = Math.sqrt(u1);
   const theta = 2 * Math.PI * u2;
-  const x = r * Math.cos(theta);
-  const y = r * Math.sin(theta);
-  const z = Math.sqrt(Math.max(0, 1 - u1));
-  const dir = basis.tangent.scale(x).add(basis.bitangent.scale(y)).add(normal.clone().normalize().scale(z));
-  if (dir.lengthSquared() < 1e-10) {
-    return null;
+  const sx = r * Math.cos(theta);
+  const sy = r * Math.sin(theta);
+  const sz = Math.sqrt(Math.max(0, 1 - u1));
+  const dx = tx * sx + bx * sy + nx * sz;
+  const dy = ty * sx + by * sy + ny * sz;
+  const dz = tz * sx + bz * sy + nz * sz;
+  const dLenSq = dx * dx + dy * dy + dz * dz;
+  if (dLenSq < 1e-10) {
+    return false;
   }
-  return dir.normalize();
+  const invDLen = 1 / Math.sqrt(dLenSq);
+  out.x = dx * invDLen;
+  out.y = dy * invDLen;
+  out.z = dz * invDLen;
+  return true;
 }
 
-function jitterDirection(
+function jitterDirectionToRef(
   direction: Vector3,
   roughness: number,
   pixelIndex: number,
   sampleIndex: number,
   bounce: number,
   dimensionOffset: number,
-): Vector3 | null {
-  const base = direction.clone();
-  if (base.lengthSquared() < 1e-10) {
-    return null;
+  out: Vector3,
+  tangentScratch: Vector3,
+  bitangentScratch: Vector3,
+): boolean {
+  if (!normalizeVec3ToRef(direction, out)) {
+    return false;
   }
-  base.normalize();
   if (roughness <= 1e-4) {
-    return base;
+    return true;
   }
-  const basis = makeOrthonormalBasis(base);
-  if (!basis) {
-    return base;
+  if (!makeOrthonormalBasisToRef(out, tangentScratch, bitangentScratch)) {
+    return true;
   }
+  const spread = roughness * roughness;
   const u1 = sampleHash01(pixelIndex, sampleIndex + bounce * 61, dimensionOffset) * 2 - 1;
   const u2 = sampleHash01(pixelIndex, sampleIndex + bounce * 61, dimensionOffset + 1) * 2 - 1;
-  const spread = roughness * roughness;
-  const dir = base
-    .add(basis.tangent.scale(u1 * spread))
-    .add(basis.bitangent.scale(u2 * spread));
-  if (dir.lengthSquared() < 1e-10) {
-    return base;
+  const dx = out.x + tangentScratch.x * (u1 * spread) + bitangentScratch.x * (u2 * spread);
+  const dy = out.y + tangentScratch.y * (u1 * spread) + bitangentScratch.y * (u2 * spread);
+  const dz = out.z + tangentScratch.z * (u1 * spread) + bitangentScratch.z * (u2 * spread);
+  const dLenSq = dx * dx + dy * dy + dz * dz;
+  if (dLenSq < 1e-10) {
+    return true;
   }
-  return dir.normalize();
+  const invDLen = 1 / Math.sqrt(dLenSq);
+  out.x = dx * invDLen;
+  out.y = dy * invDLen;
+  out.z = dz * invDLen;
+  return true;
 }
 
-function reflectDirection(incident: Vector3, normal: Vector3): Vector3 {
-  const i = incident.clone().normalize();
-  const n = normal.clone().normalize();
-  const d = Vector3.Dot(i, n);
-  return i.subtract(n.scale(2 * d)).normalize();
+function reflectDirectionToRef(incident: Vector3, normal: Vector3, out: Vector3): boolean {
+  if (!normalizeVec3ToRef(incident, out)) {
+    return false;
+  }
+  let nx = normal.x;
+  let ny = normal.y;
+  let nz = normal.z;
+  const nLenSq = nx * nx + ny * ny + nz * nz;
+  if (nLenSq < 1e-10) {
+    return false;
+  }
+  const invNLen = 1 / Math.sqrt(nLenSq);
+  nx *= invNLen;
+  ny *= invNLen;
+  nz *= invNLen;
+  const d = out.x * nx + out.y * ny + out.z * nz;
+  const rx = out.x - nx * (2 * d);
+  const ry = out.y - ny * (2 * d);
+  const rz = out.z - nz * (2 * d);
+  const rLenSq = rx * rx + ry * ry + rz * rz;
+  if (rLenSq < 1e-10) {
+    return false;
+  }
+  const invRLen = 1 / Math.sqrt(rLenSq);
+  out.x = rx * invRLen;
+  out.y = ry * invRLen;
+  out.z = rz * invRLen;
+  return true;
 }
 
 function sanitizeIor(ior: number): number {
@@ -4366,33 +4918,52 @@ function schlickFresnel(cosTheta: number, f0: number): number {
   return clamp(base + (1 - base) * m * m * m * m * m, 0, 1);
 }
 
-function refractDirectionAcrossInterface(
+function refractDirectionAcrossInterfaceToRef(
   incident: Vector3,
   faceNormal: Vector3,
   etaI: number,
   etaT: number,
-): Vector3 | null {
-  const i = incident.clone().normalize();
-  const n = faceNormal.clone().normalize();
-  if (n.lengthSquared() < 1e-10 || i.lengthSquared() < 1e-10) {
-    return null;
+  out: Vector3,
+): boolean {
+  if (!normalizeVec3ToRef(incident, out)) {
+    return false;
   }
-  if (Vector3.Dot(i, n) > 0) {
-    n.scaleInPlace(-1);
+  let nx = faceNormal.x;
+  let ny = faceNormal.y;
+  let nz = faceNormal.z;
+  const nLenSq = nx * nx + ny * ny + nz * nz;
+  if (nLenSq < 1e-10) {
+    return false;
+  }
+  const invNLen = 1 / Math.sqrt(nLenSq);
+  nx *= invNLen;
+  ny *= invNLen;
+  nz *= invNLen;
+  if (out.x * nx + out.y * ny + out.z * nz > 0) {
+    nx = -nx;
+    ny = -ny;
+    nz = -nz;
   }
   const etaFrom = sanitizeIor(etaI);
   const etaTo = sanitizeIor(etaT);
   const eta = etaFrom / etaTo;
-  const cosi = clamp(-Vector3.Dot(i, n), 0, 1);
+  const cosi = clamp(-(out.x * nx + out.y * ny + out.z * nz), 0, 1);
   const k = 1 - eta * eta * (1 - cosi * cosi);
   if (k < 0) {
-    return null;
+    return false;
   }
-  const dir = i.scale(eta).add(n.scale(eta * cosi - Math.sqrt(k)));
-  if (dir.lengthSquared() < 1e-10) {
-    return null;
+  const dirX = out.x * eta + nx * (eta * cosi - Math.sqrt(k));
+  const dirY = out.y * eta + ny * (eta * cosi - Math.sqrt(k));
+  const dirZ = out.z * eta + nz * (eta * cosi - Math.sqrt(k));
+  const dirLenSq = dirX * dirX + dirY * dirY + dirZ * dirZ;
+  if (dirLenSq < 1e-10) {
+    return false;
   }
-  return dir.normalize();
+  const invDirLen = 1 / Math.sqrt(dirLenSq);
+  out.x = dirX * invDirLen;
+  out.y = dirY * invDirLen;
+  out.z = dirZ * invDirLen;
+  return true;
 }
 
 function buildAlignmentProbePixels(width: number, height: number): Array<{ x: number; y: number }> {

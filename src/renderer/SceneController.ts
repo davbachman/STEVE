@@ -1451,6 +1451,14 @@ export class SceneController {
       qualityPathAlignmentHitMismatches: pathDiagnosticsActive ? currentDiagnostics.qualityPathAlignmentHitMismatches : 0,
       qualityPathAlignmentMaxPointError: pathDiagnosticsActive ? currentDiagnostics.qualityPathAlignmentMaxPointError : 0,
       qualityPathAlignmentMaxDistanceError: pathDiagnosticsActive ? currentDiagnostics.qualityPathAlignmentMaxDistanceError : 0,
+      qualityPathWorkerBatchCount: pathDiagnosticsActive ? currentDiagnostics.qualityPathWorkerBatchCount : 0,
+      qualityPathWorkerPixelCount: pathDiagnosticsActive ? currentDiagnostics.qualityPathWorkerPixelCount : 0,
+      qualityPathWorkerBatchLatencyMs: pathDiagnosticsActive ? currentDiagnostics.qualityPathWorkerBatchLatencyMs : 0,
+      qualityPathWorkerBatchPixelsPerBatch: pathDiagnosticsActive ? currentDiagnostics.qualityPathWorkerBatchPixelsPerBatch : 0,
+      qualityPathWorkerPixelsPerSecond: pathDiagnosticsActive ? currentDiagnostics.qualityPathWorkerPixelsPerSecond : 0,
+      qualityPathMainThreadBatchCount: pathDiagnosticsActive ? currentDiagnostics.qualityPathMainThreadBatchCount : 0,
+      qualityPathMainThreadPixelCount: pathDiagnosticsActive ? currentDiagnostics.qualityPathMainThreadPixelCount : 0,
+      qualityPathMainThreadPixelsPerSecond: pathDiagnosticsActive ? currentDiagnostics.qualityPathMainThreadPixelsPerSecond : 0,
     });
   }
 
@@ -1610,7 +1618,7 @@ export class SceneController {
     if (!options.resetHistory) {
       return;
     }
-    this.qualityBackends?.resetActiveBackendHistory();
+    this.qualityBackends?.resetActiveBackendHistory(options.reason ?? null);
   }
 
   private disposeQualityPipeline(): void {

@@ -28,6 +28,14 @@ interface RenderDiagnosticsSnapshot {
   qualityPathAlignmentHitMismatches: number;
   qualityPathAlignmentMaxPointError: number;
   qualityPathAlignmentMaxDistanceError: number;
+  qualityPathWorkerBatchCount: number;
+  qualityPathWorkerPixelCount: number;
+  qualityPathWorkerBatchLatencyMs: number;
+  qualityPathWorkerBatchPixelsPerBatch: number;
+  qualityPathWorkerPixelsPerSecond: number;
+  qualityPathMainThreadBatchCount: number;
+  qualityPathMainThreadPixelCount: number;
+  qualityPathMainThreadPixelsPerSecond: number;
 }
 
 interface AppSnapshot {
@@ -71,6 +79,16 @@ interface ScenarioResult {
     probes: number;
     hitMismatches: number;
   } | null;
+  perfSmoke: {
+    resizePhaseMs: number;
+    workerPixelsDelta: number;
+    mainThreadPixelsDelta: number;
+    workerPixelsPerSecondDuringResize: number | null;
+    mainThreadPixelsPerSecondDuringResize: number | null;
+    workerBatchLatencyMsDuringResize: number | null;
+    workerBatchPixelsDuringResize: number | null;
+    warnings: string[];
+  } | null;
   consoleWarnings: string[];
 }
 
@@ -92,6 +110,7 @@ interface CampaignReport {
     warning: number;
     fail: number;
     skipped: number;
+    perfWarnings: number;
   };
 }
 
@@ -188,6 +207,7 @@ test.describe.serial('Phase 5B Path Alignment Campaign', () => {
         warning: scenarioResults.filter((r) => r.status === 'warning').length,
         fail: scenarioResults.filter((r) => r.status === 'fail').length,
         skipped: scenarioResults.filter((r) => r.status === 'skipped').length,
+        perfWarnings: scenarioResults.reduce((sum, r) => sum + (r.perfSmoke?.warnings.length ?? 0), 0),
       },
     };
 
@@ -214,8 +234,17 @@ test.describe.serial('Phase 5B Path Alignment Campaign', () => {
         + ` exec=${afterResize?.qualityPathExecutionMode ?? baseline?.qualityPathExecutionMode ?? 'n/a'}`
         + ` align=${afterResize?.qualityPathAlignmentStatus ?? baseline?.qualityPathAlignmentStatus ?? 'n/a'}`
         + ` probes=${afterResize?.qualityPathAlignmentProbeCount ?? baseline?.qualityPathAlignmentProbeCount ?? 0}`
-        + ` mismatches=${afterResize?.qualityPathAlignmentHitMismatches ?? baseline?.qualityPathAlignmentHitMismatches ?? 0}`,
+        + ` mismatches=${afterResize?.qualityPathAlignmentHitMismatches ?? baseline?.qualityPathAlignmentHitMismatches ?? 0}`
+        + ` worker_pxps=${Math.round(afterResize?.qualityPathWorkerPixelsPerSecond ?? baseline?.qualityPathWorkerPixelsPerSecond ?? 0)}`
+        + ` main_pxps=${Math.round(afterResize?.qualityPathMainThreadPixelsPerSecond ?? baseline?.qualityPathMainThreadPixelsPerSecond ?? 0)}`
+        + ` worker_batch_ms=${(afterResize?.qualityPathWorkerBatchLatencyMs ?? baseline?.qualityPathWorkerBatchLatencyMs ?? 0).toFixed(1)}`
+        + ` worker_batch_px=${Math.round(afterResize?.qualityPathWorkerBatchPixelsPerBatch ?? baseline?.qualityPathWorkerBatchPixelsPerBatch ?? 0)}`
+        + ` resize_worker_pxps=${Math.round(item.perfSmoke?.workerPixelsPerSecondDuringResize ?? 0)}`
+        + ` perf_warns=${item.perfSmoke?.warnings.length ?? 0}`,
       );
+      for (const warning of item.perfSmoke?.warnings ?? []) {
+        console.log(`[warning] ${item.scenario.id} perf-smoke: ${warning}`);
+      }
     }
 
     const failed = scenarioResults.filter((r) => r.status === 'fail');
@@ -254,6 +283,7 @@ async function runScenario(
         failureReason: `WebGPU unavailable in Playwright project ${projectName}`,
         phases: [],
         deltaAfterResize: null,
+        perfSmoke: null,
         consoleWarnings,
       };
     }
@@ -288,14 +318,19 @@ async function runScenario(
     };
 
     const evaluation = evaluateScenarioResult(baselineFinal, afterResizeFinal, deltaAfterResize, afterResizeSnapshot);
+    const perfSmoke = evaluatePerfSmoke(baselinePhase, afterResizePhase);
+    const status = evaluation.status === 'fail'
+      ? 'fail'
+      : (evaluation.status === 'warning' || perfSmoke.warnings.length > 0 ? 'warning' : 'pass');
 
     return {
       scenario,
-      ok: evaluation.status !== 'fail',
-      status: evaluation.status,
+      ok: status !== 'fail',
+      status,
       failureReason: evaluation.failureReason,
       phases: [baselinePhase, afterResizePhase],
       deltaAfterResize,
+      perfSmoke,
       consoleWarnings,
     };
   } catch (error) {
@@ -306,6 +341,7 @@ async function runScenario(
       failureReason: error instanceof Error ? error.message : String(error),
       phases: [],
       deltaAfterResize: null,
+      perfSmoke: null,
       consoleWarnings,
     };
   } finally {
@@ -354,6 +390,52 @@ function evaluateScenarioResult(
   return {
     status: anyWarning ? 'warning' : 'pass',
     failureReason: null,
+  };
+}
+
+function evaluatePerfSmoke(
+  baselinePhase: ScenarioPhaseResult,
+  afterResizePhase: ScenarioPhaseResult,
+): NonNullable<ScenarioResult['perfSmoke']> {
+  const baseline = baselinePhase.snapshot.diagnostics;
+  const afterResize = afterResizePhase.snapshot.diagnostics;
+  const resizePhaseMs = Math.max(0, afterResizePhase.elapsedMs - baselinePhase.elapsedMs);
+  const workerPixelsDelta = Math.max(0, afterResize.qualityPathWorkerPixelCount - baseline.qualityPathWorkerPixelCount);
+  const mainThreadPixelsDelta = Math.max(0, afterResize.qualityPathMainThreadPixelCount - baseline.qualityPathMainThreadPixelCount);
+  const workerPixelsPerSecondDuringResize = resizePhaseMs > 0 ? (workerPixelsDelta * 1000) / resizePhaseMs : null;
+  const mainThreadPixelsPerSecondDuringResize = resizePhaseMs > 0 ? (mainThreadPixelsDelta * 1000) / resizePhaseMs : null;
+  const workerBatchLatencyMsDuringResize = afterResize.qualityPathWorkerBatchLatencyMs > 0
+    ? afterResize.qualityPathWorkerBatchLatencyMs
+    : null;
+  const workerBatchPixelsDuringResize = afterResize.qualityPathWorkerBatchPixelsPerBatch > 0
+    ? afterResize.qualityPathWorkerBatchPixelsPerBatch
+    : null;
+  const warnings: string[] = [];
+  const execMode = afterResize.qualityPathExecutionMode ?? baseline.qualityPathExecutionMode ?? null;
+  const workerExpected = execMode === 'worker';
+
+  if (workerExpected && resizePhaseMs >= 2000 && workerPixelsDelta <= 0) {
+    warnings.push(`worker traced 0 pixels during resize phase (${resizePhaseMs} ms)`);
+  }
+  if (workerExpected && workerPixelsPerSecondDuringResize !== null && workerPixelsDelta > 0 && workerPixelsPerSecondDuringResize < 10) {
+    warnings.push(`very low resize-phase worker throughput (${workerPixelsPerSecondDuringResize.toFixed(1)} px/s)`);
+  }
+  if (workerExpected && mainThreadPixelsDelta > 0) {
+    warnings.push(`main-thread fallback work observed during resize phase (${mainThreadPixelsDelta} px)`);
+  }
+  if (workerExpected && workerBatchPixelsDuringResize !== null && workerBatchPixelsDuringResize < 64) {
+    warnings.push(`very small worker batch size during resize (${workerBatchPixelsDuringResize.toFixed(0)} px/batch avg)`);
+  }
+
+  return {
+    resizePhaseMs,
+    workerPixelsDelta,
+    mainThreadPixelsDelta,
+    workerPixelsPerSecondDuringResize,
+    mainThreadPixelsPerSecondDuringResize,
+    workerBatchLatencyMsDuringResize,
+    workerBatchPixelsDuringResize,
+    warnings,
   };
 }
 
@@ -472,6 +554,14 @@ async function readAppSnapshot(page: Page): Promise<AppSnapshot> {
         qualityPathAlignmentHitMismatches: state.renderDiagnostics.qualityPathAlignmentHitMismatches,
         qualityPathAlignmentMaxPointError: state.renderDiagnostics.qualityPathAlignmentMaxPointError,
         qualityPathAlignmentMaxDistanceError: state.renderDiagnostics.qualityPathAlignmentMaxDistanceError,
+        qualityPathWorkerBatchCount: state.renderDiagnostics.qualityPathWorkerBatchCount,
+        qualityPathWorkerPixelCount: state.renderDiagnostics.qualityPathWorkerPixelCount,
+        qualityPathWorkerBatchLatencyMs: state.renderDiagnostics.qualityPathWorkerBatchLatencyMs,
+        qualityPathWorkerBatchPixelsPerBatch: state.renderDiagnostics.qualityPathWorkerBatchPixelsPerBatch,
+        qualityPathWorkerPixelsPerSecond: state.renderDiagnostics.qualityPathWorkerPixelsPerSecond,
+        qualityPathMainThreadBatchCount: state.renderDiagnostics.qualityPathMainThreadBatchCount,
+        qualityPathMainThreadPixelCount: state.renderDiagnostics.qualityPathMainThreadPixelCount,
+        qualityPathMainThreadPixelsPerSecond: state.renderDiagnostics.qualityPathMainThreadPixelsPerSecond,
       },
       objects: state.objects.map((obj) => obj.name),
       canvas: canvas

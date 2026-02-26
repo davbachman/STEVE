@@ -111,6 +111,14 @@ function defaultRenderDiagnostics(): RenderDiagnostics {
     qualityPathAlignmentHitMismatches: 0,
     qualityPathAlignmentMaxPointError: 0,
     qualityPathAlignmentMaxDistanceError: 0,
+    qualityPathWorkerBatchCount: 0,
+    qualityPathWorkerPixelCount: 0,
+    qualityPathWorkerBatchLatencyMs: 0,
+    qualityPathWorkerBatchPixelsPerBatch: 0,
+    qualityPathWorkerPixelsPerSecond: 0,
+    qualityPathMainThreadBatchCount: 0,
+    qualityPathMainThreadPixelCount: 0,
+    qualityPathMainThreadPixelsPerSecond: 0,
   };
 }
 
@@ -846,6 +854,14 @@ function shallowDiagnosticsEqual(a: RenderDiagnostics, b: RenderDiagnostics): bo
     a.qualityPathAlignmentHitMismatches === b.qualityPathAlignmentHitMismatches &&
     a.qualityPathAlignmentMaxPointError === b.qualityPathAlignmentMaxPointError &&
     a.qualityPathAlignmentMaxDistanceError === b.qualityPathAlignmentMaxDistanceError &&
+    a.qualityPathWorkerBatchCount === b.qualityPathWorkerBatchCount &&
+    a.qualityPathWorkerPixelCount === b.qualityPathWorkerPixelCount &&
+    a.qualityPathWorkerBatchLatencyMs === b.qualityPathWorkerBatchLatencyMs &&
+    a.qualityPathWorkerBatchPixelsPerBatch === b.qualityPathWorkerBatchPixelsPerBatch &&
+    a.qualityPathWorkerPixelsPerSecond === b.qualityPathWorkerPixelsPerSecond &&
+    a.qualityPathMainThreadBatchCount === b.qualityPathMainThreadBatchCount &&
+    a.qualityPathMainThreadPixelCount === b.qualityPathMainThreadPixelCount &&
+    a.qualityPathMainThreadPixelsPerSecond === b.qualityPathMainThreadPixelsPerSecond &&
     shallowPointShadowCasterCountsEqual(a.pointShadowCasterCounts ?? {}, b.pointShadowCasterCounts ?? {})
   );
 }

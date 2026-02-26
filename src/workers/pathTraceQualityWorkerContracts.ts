@@ -33,6 +33,12 @@ export interface PathTraceWorkerTriangleAccel {
   triangleBvhRoot: PathTraceWorkerTriangleBvhNode | null;
 }
 
+export interface PathTraceWorkerLineAccel {
+  positionsWorld: Float32Array; // [ax, ay, az, bx, by, bz] per segment
+  segmentCount: number;
+  intersectionThreshold: number;
+}
+
 export interface PathTraceWorkerMeshSnapshot {
   meshIndex: number;
   minX: number;
@@ -45,7 +51,8 @@ export interface PathTraceWorkerMeshSnapshot {
   centerY: number;
   centerZ: number;
   material: PathTraceWorkerMaterial;
-  triangleAccel: PathTraceWorkerTriangleAccel;
+  triangleAccel: PathTraceWorkerTriangleAccel | null;
+  lineAccel: PathTraceWorkerLineAccel | null;
 }
 
 export type PathTraceWorkerLight =

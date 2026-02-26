@@ -3,6 +3,7 @@
 import { Ray, Vector3 } from '@babylonjs/core';
 import type {
   PathTraceWorkerLight,
+  PathTraceWorkerLineAccel,
   PathTraceWorkerRequest,
   PathTraceWorkerResponse,
   PathTraceWorkerSceneSnapshot,
@@ -23,7 +24,8 @@ interface WorkerMeshEntry {
   centerY: number;
   centerZ: number;
   material: WorkerMaterial;
-  triangleAccel: PathTraceWorkerTriangleAccel;
+  triangleAccel: PathTraceWorkerTriangleAccel | null;
+  lineAccel: PathTraceWorkerLineAccel | null;
 }
 
 interface WorkerMaterial {
@@ -94,13 +96,7 @@ interface WorkerBounceSample {
   direction: Vector3;
   throughput: Vector3;
   nextMediumIor: number;
-}
-
-interface WorkerPixelSample {
-  r: number;
-  g: number;
-  b: number;
-  a: number;
+  wasTransmission: boolean;
 }
 
 interface WorkerEnvironmentSample {
@@ -114,7 +110,33 @@ interface TriangleHitResult {
   normal: Vector3;
 }
 
+interface LineHitResult {
+  distance: number;
+  point: Vector3;
+  normal: Vector3;
+}
+
 const TRACE_MESH_BVH_LEAF_SIZE = 4;
+const RAY_SEGMENT_INTERSECTION_RAY_LENGTH = 1_000_000_000;
+const RAY_SEGMENT_INTERSECTION_SMALL_NUM = 1e-8;
+const shadowRayScratchOrigin = new Vector3(0, 0, 0);
+const shadowRayScratchDirection = new Vector3(0, 0, 1);
+const shadowRayScratch = new Ray(shadowRayScratchOrigin, shadowRayScratchDirection, 1e6);
+const environmentSampleScratch: WorkerEnvironmentSample = {
+  radiance: new Vector3(0, 0, 0),
+  alpha: 1,
+};
+const directLightingScratchOut = new Vector3(0, 0, 0);
+const continuationBounceSampleScratch: WorkerBounceSample = {
+  direction: new Vector3(0, 0, 1),
+  throughput: new Vector3(1, 1, 1),
+  nextMediumIor: 1,
+  wasTransmission: false,
+};
+const continuationIncidentScratch = new Vector3(0, 0, 1);
+const continuationInterfaceNormalScratch = new Vector3(0, 0, 1);
+const continuationTangentScratch = new Vector3(1, 0, 0);
+const continuationBitangentScratch = new Vector3(0, 1, 0);
 
 let currentScene: WorkerSceneState | null = null;
 
@@ -159,20 +181,20 @@ self.onmessage = (event: MessageEvent<PathTraceWorkerRequest>) => {
       }
       const samples = new Float32Array(pixelCount * 4);
       const maxBounces = clamp(Math.round(req.render.qualityMaxBounces), 1, 6);
+      const rayOrigin = new Vector3(0, 0, 0);
+      const rayDirection = new Vector3(0, 0, 1);
+      const ray = new Ray(rayOrigin, rayDirection, 1e6);
       for (let i = 0; i < pixelCount; i += 1) {
         const rayBase = i * 6;
-        const ray = new Ray(
-          new Vector3(req.rays[rayBase], req.rays[rayBase + 1], req.rays[rayBase + 2]),
-          new Vector3(req.rays[rayBase + 3], req.rays[rayBase + 4], req.rays[rayBase + 5]),
-          1e6,
-        );
+        rayOrigin.x = req.rays[rayBase];
+        rayOrigin.y = req.rays[rayBase + 1];
+        rayOrigin.z = req.rays[rayBase + 2];
+        rayDirection.x = req.rays[rayBase + 3];
+        rayDirection.y = req.rays[rayBase + 4];
+        rayDirection.z = req.rays[rayBase + 5];
         const pixelIndex = req.pixelIndices[i];
-        const sample = traceHybridRay(currentScene, ray, maxBounces, req.sampleIndex, pixelIndex);
         const outBase = i * 4;
-        samples[outBase] = sample.r;
-        samples[outBase + 1] = sample.g;
-        samples[outBase + 2] = sample.b;
-        samples[outBase + 3] = sample.a;
+        traceHybridRay(currentScene, ray, maxBounces, req.sampleIndex, pixelIndex, samples, outBase);
       }
       const res: PathTraceWorkerResponse = {
         type: 'trace_batch_result',
@@ -215,6 +237,7 @@ function buildWorkerScene(snapshot: PathTraceWorkerSceneSnapshot): WorkerSceneSt
       opacity: mesh.material.opacity,
     },
     triangleAccel: mesh.triangleAccel,
+    lineAccel: mesh.lineAccel,
   }));
 
   return {
@@ -260,12 +283,18 @@ function traceHybridRay(
   maxBounces: number,
   sampleIndex: number,
   pixelIndex: number,
-): WorkerPixelSample {
+  samples: Float32Array,
+  outBase: number,
+): void {
   let ray = initialRay;
   let throughput = new Vector3(1, 1, 1);
   const radiance = new Vector3(0, 0, 0);
+  const outwardNormal = new Vector3(0, 0, 1);
+  const shadingNormal = new Vector3(0, 0, 1);
+  const viewDir = new Vector3(0, 0, 1);
   let alpha = 0;
   let currentMediumIor = 1;
+  let previousBounceWasTransmission = false;
 
   for (let bounce = 0; bounce < maxBounces; bounce += 1) {
     const hit = pickTraceRayClosest(scene, ray, -1);
@@ -282,18 +311,26 @@ function traceHybridRay(
     alpha = 1;
 
     const hitPoint = hit.point;
-    let outwardNormal = hit.normal.clone();
+    outwardNormal.x = hit.normal.x;
+    outwardNormal.y = hit.normal.y;
+    outwardNormal.z = hit.normal.z;
     if (outwardNormal.lengthSquared() < 1e-10) {
-      outwardNormal = ray.direction.scale(-1);
+      outwardNormal.x = -ray.direction.x;
+      outwardNormal.y = -ray.direction.y;
+      outwardNormal.z = -ray.direction.z;
     }
     outwardNormal.normalize();
     const frontFace = Vector3.Dot(outwardNormal, ray.direction) < 0;
-    const shadingNormal = outwardNormal.clone();
-    if (!frontFace) {
-      shadingNormal.scaleInPlace(-1);
-    }
+    shadingNormal.x = frontFace ? outwardNormal.x : -outwardNormal.x;
+    shadingNormal.y = frontFace ? outwardNormal.y : -outwardNormal.y;
+    shadingNormal.z = frontFace ? outwardNormal.z : -outwardNormal.z;
 
-    const viewDir = ray.direction.scale(-1).normalize();
+    viewDir.x = -ray.direction.x;
+    viewDir.y = -ray.direction.y;
+    viewDir.z = -ray.direction.z;
+    if (viewDir.lengthSquared() > 1e-12) {
+      viewDir.normalize();
+    }
     const direct = sampleHybridDirectLighting(
       scene,
       hitPoint,
@@ -304,6 +341,7 @@ function traceHybridRay(
       sampleIndex,
       pixelIndex,
       bounce,
+      previousBounceWasTransmission,
     );
     radiance.x += throughput.x * direct.x;
     radiance.y += throughput.y * direct.y;
@@ -328,8 +366,9 @@ function traceHybridRay(
       break;
     }
 
-    throughput = multiplyVec3(throughput, bounceSample.throughput);
+    multiplyVec3InPlace(throughput, bounceSample.throughput);
     currentMediumIor = bounceSample.nextMediumIor;
+    previousBounceWasTransmission = bounceSample.wasTransmission;
     const rrStartBounce = 1;
     if (bounce >= rrStartBounce) {
       const continueProb = clamp(Math.max(throughput.x, throughput.y, throughput.z), 0.05, 0.95);
@@ -339,53 +378,70 @@ function traceHybridRay(
       throughput.scaleInPlace(1 / continueProb);
     }
 
-    const nextOrigin = hitPoint.add(bounceSample.direction.scale(0.0025));
-    ray = new Ray(nextOrigin, bounceSample.direction, 1e6);
+    ray.origin.x = hitPoint.x + bounceSample.direction.x * 0.0025;
+    ray.origin.y = hitPoint.y + bounceSample.direction.y * 0.0025;
+    ray.origin.z = hitPoint.z + bounceSample.direction.z * 0.0025;
+    ray.direction.x = bounceSample.direction.x;
+    ray.direction.y = bounceSample.direction.y;
+    ray.direction.z = bounceSample.direction.z;
+    ray.length = 1e6;
   }
 
-  return {
-    r: clampFinite(radiance.x),
-    g: clampFinite(radiance.y),
-    b: clampFinite(radiance.z),
-    a: alpha,
-  };
+  samples[outBase] = clampFinite(radiance.x);
+  samples[outBase + 1] = clampFinite(radiance.y);
+  samples[outBase + 2] = clampFinite(radiance.z);
+  samples[outBase + 3] = alpha;
 }
 
 function sampleHybridEnvironment(scene: WorkerSceneState, direction: Vector3): WorkerEnvironmentSample {
-  const dir = direction.clone();
-  if (dir.lengthSquared() < 1e-10) {
-    return { radiance: new Vector3(0, 0, 0), alpha: 1 };
+  const dirLenSq = direction.lengthSquared();
+  if (dirLenSq < 1e-10) {
+    environmentSampleScratch.radiance.x = 0;
+    environmentSampleScratch.radiance.y = 0;
+    environmentSampleScratch.radiance.z = 0;
+    environmentSampleScratch.alpha = 1;
+    return environmentSampleScratch;
   }
-  dir.normalize();
+  const invDirLen = 1 / Math.sqrt(dirLenSq);
+  const dirX = direction.x * invDirLen;
+  const dirY = direction.y * invDirLen;
+  const dirZ = direction.z * invDirLen;
 
-  const base = scene.clearColor.clone();
+  let baseX = scene.clearColor.x + scene.ambientColor.x * 0.35;
+  let baseY = scene.clearColor.y + scene.ambientColor.y * 0.35;
+  let baseZ = scene.clearColor.z + scene.ambientColor.z * 0.35;
   const alpha = 1;
-  base.x += scene.ambientColor.x * 0.35;
-  base.y += scene.ambientColor.y * 0.35;
-  base.z += scene.ambientColor.z * 0.35;
 
   for (const light of scene.lights) {
     if (light.kind !== 'hemispheric' || light.intensity <= 0) {
       continue;
     }
-    const hemiDir = light.direction.clone();
-    if (hemiDir.lengthSquared() < 1e-10) {
+    const hemiLenSq = light.direction.lengthSquared();
+    if (hemiLenSq < 1e-10) {
       continue;
     }
-    hemiDir.normalize();
-    const t = clamp(0.5 + 0.5 * Vector3.Dot(dir, hemiDir), 0, 1);
-    const sky = light.diffuse.scale(light.intensity);
-    const ground = light.ground.scale(light.intensity);
-    const dome = lerpVec3(ground, sky, t);
-    base.x += dome.x;
-    base.y += dome.y;
-    base.z += dome.z;
+    const invHemiLen = 1 / Math.sqrt(hemiLenSq);
+    const dot = dirX * light.direction.x * invHemiLen
+      + dirY * light.direction.y * invHemiLen
+      + dirZ * light.direction.z * invHemiLen;
+    const t = clamp(0.5 + 0.5 * dot, 0, 1);
+    const li = light.intensity;
+    const skyX = light.diffuse.x * li;
+    const skyY = light.diffuse.y * li;
+    const skyZ = light.diffuse.z * li;
+    const groundX = light.ground.x * li;
+    const groundY = light.ground.y * li;
+    const groundZ = light.ground.z * li;
+    baseX += groundX + (skyX - groundX) * t;
+    baseY += groundY + (skyY - groundY) * t;
+    baseZ += groundZ + (skyZ - groundZ) * t;
   }
 
-  return {
-    radiance: new Vector3(clampFinite(base.x), clampFinite(base.y), clampFinite(base.z)),
-    alpha,
-  };
+  environmentSampleScratch.radiance.x = clampFinite(baseX);
+  environmentSampleScratch.radiance.y = clampFinite(baseY);
+  environmentSampleScratch.radiance.z = clampFinite(baseZ);
+  environmentSampleScratch.alpha = alpha;
+  return environmentSampleScratch;
 }
 
 function sampleHybridDirectLighting(
@@ -398,15 +454,22 @@ function sampleHybridDirectLighting(
   sampleIndex: number,
   pixelIndex: number,
   bounce: number,
+  previousBounceWasTransmission: boolean,
 ): Vector3 {
-  const out = new Vector3(0, 0, 0);
+  const out = directLightingScratchOut;
+  out.x = 0;
+  out.y = 0;
+  out.z = 0;
+  const baseColor = material.baseColor;
   const diffuseWeight = clamp01Safe((1 - material.metallic) * (1 - material.transmission) * material.opacity);
   const specWeight = clamp01Safe(Math.max(material.reflectance, material.metallic));
-  const specColor = lerpVec3(new Vector3(1, 1, 1), material.baseColor, material.metallic);
+  const specColorX = 1 + (baseColor.x - 1) * material.metallic;
+  const specColorY = 1 + (baseColor.y - 1) * material.metallic;
+  const specColorZ = 1 + (baseColor.z - 1) * material.metallic;
   const roughness = clamp(material.roughness, 0.03, 1);
   const shininess = clamp(Math.round((1 - roughness) * 180 + 8), 8, 256);
 
-  const sampleFiniteDirectThisBounce = bounce === 0;
+  const sampleFiniteDirectThisBounce = bounce === 0 || (bounce === 1 && previousBounceWasTransmission);
   const useSingleFiniteLightSample = sampleFiniteDirectThisBounce;
   let finiteLightCount = 0;
   if (useSingleFiniteLightSample) {
@@ -433,14 +496,25 @@ function sampleHybridDirectLighting(
     if (light.intensity <= 0) continue;
 
     if (light.kind === 'hemispheric') {
-      const hemiDir = light.direction.clone();
-      if (hemiDir.lengthSquared() < 1e-10) continue;
-      hemiDir.normalize();
-      const t = clamp(0.5 + 0.5 * Vector3.Dot(normal, hemiDir), 0, 1);
-      const hemi = lerpVec3(light.ground.scale(light.intensity), light.diffuse.scale(light.intensity), t);
-      out.x += hemi.x * material.baseColor.x * diffuseWeight;
-      out.y += hemi.y * material.baseColor.y * diffuseWeight;
-      out.z += hemi.z * material.baseColor.z * diffuseWeight;
+      const hemiLenSq = light.direction.lengthSquared();
+      if (hemiLenSq < 1e-10) continue;
+      const invHemiLen = 1 / Math.sqrt(hemiLenSq);
+      const t = clamp(
+        0.5 + 0.5 * (
+          normal.x * light.direction.x * invHemiLen
+          + normal.y * light.direction.y * invHemiLen
+          + normal.z * light.direction.z * invHemiLen
+        ),
+        0,
+        1,
+      );
+      const li = light.intensity;
+      const hemiX = (light.ground.x + (light.diffuse.x - light.ground.x) * t) * li;
+      const hemiY = (light.ground.y + (light.diffuse.y - light.ground.y) * t) * li;
+      const hemiZ = (light.ground.z + (light.diffuse.z - light.ground.z) * t) * li;
+      out.x += hemiX * baseColor.x * diffuseWeight;
+      out.y += hemiY * baseColor.y * diffuseWeight;
+      out.z += hemiZ * baseColor.z * diffuseWeight;
       continue;
     }
 
@@ -455,22 +529,34 @@ function sampleHybridDirectLighting(
       }
       const jitteredDir =
         computeJitteredDirectionalLightDirection(light.direction, sampleIndex + bounce * 31 + pixelIndex, currentDirIndex)
-        ?? light.direction.clone();
-      if (jitteredDir.lengthSquared() < 1e-10) continue;
-      jitteredDir.normalize();
-      const lightDir = jitteredDir.scale(-1).normalize();
-      const ndl = Math.max(0, Vector3.Dot(normal, lightDir));
+        ?? light.direction;
+      const jitteredLenSq = jitteredDir.lengthSquared();
+      if (jitteredLenSq < 1e-10) continue;
+      const invJitteredLen = 1 / Math.sqrt(jitteredLenSq);
+      const lightDirX = -jitteredDir.x * invJitteredLen;
+      const lightDirY = -jitteredDir.y * invJitteredLen;
+      const lightDirZ = -jitteredDir.z * invJitteredLen;
+      const ndl = Math.max(0, normal.x * lightDirX + normal.y * lightDirY + normal.z * lightDirZ);
       if (ndl <= 0) continue;
-      if (isShadowedDirectional(scene, hitPoint, normal, lightDir, hitMeshIndex)) {
+      if (isShadowedDirectional(scene, hitPoint, normal, lightDirX, lightDirY, lightDirZ, hitMeshIndex)) {
         continue;
       }
-      const lightColor = light.diffuse.scale(light.intensity * finiteLightWeight);
-      const h = lightDir.add(viewDir).normalize();
-      const ndh = Math.max(0, Vector3.Dot(normal, h));
-      const specTerm = specWeight > 0 ? Math.pow(ndh, shininess) * ndl : 0;
-      out.x += lightColor.x * (material.baseColor.x * diffuseWeight * ndl + specColor.x * specTerm * specWeight);
-      out.y += lightColor.y * (material.baseColor.y * diffuseWeight * ndl + specColor.y * specTerm * specWeight);
-      out.z += lightColor.z * (material.baseColor.z * diffuseWeight * ndl + specColor.z * specTerm * specWeight);
+      const halfX = lightDirX + viewDir.x;
+      const halfY = lightDirY + viewDir.y;
+      const halfZ = lightDirZ + viewDir.z;
+      const halfLenSq = halfX * halfX + halfY * halfY + halfZ * halfZ;
+      let specTerm = 0;
+      if (specWeight > 0 && halfLenSq > 1e-12) {
+        const invHalfLen = 1 / Math.sqrt(halfLenSq);
+        const ndh = Math.max(0, normal.x * halfX * invHalfLen + normal.y * halfY * invHalfLen + normal.z * halfZ * invHalfLen);
+        specTerm = Math.pow(ndh, shininess) * ndl;
+      }
+      const li = light.intensity * finiteLightWeight;
+      const diffuseTerm = diffuseWeight * ndl;
+      const specScale = specTerm * specWeight;
+      out.x += light.diffuse.x * li * (baseColor.x * diffuseTerm + specColorX * specScale);
+      out.y += light.diffuse.y * li * (baseColor.y * diffuseTerm + specColorY * specScale);
+      out.z += light.diffuse.z * li * (baseColor.z * diffuseTerm + specColorZ * specScale);
       continue;
     }
 
@@ -483,28 +569,42 @@ function sampleHybridDirectLighting(
       if (useSingleFiniteLightSample && finiteLightCount > 1 && currentFiniteLightIndex !== selectedFiniteLightIndex) {
         continue;
       }
-      const samplePos = computeJitteredPointLightPosition(light, sampleIndex + bounce * 47 + pixelIndex, currentPointIndex) ?? light.position.clone();
-      const toLight = samplePos.subtract(hitPoint);
-      const dist2 = toLight.lengthSquared();
+      const samplePos = computeJitteredPointLightPosition(light, sampleIndex + bounce * 47 + pixelIndex, currentPointIndex) ?? light.position;
+      const toLightX = samplePos.x - hitPoint.x;
+      const toLightY = samplePos.y - hitPoint.y;
+      const toLightZ = samplePos.z - hitPoint.z;
+      const dist2 = toLightX * toLightX + toLightY * toLightY + toLightZ * toLightZ;
       if (dist2 <= 1e-8) continue;
       const dist = Math.sqrt(dist2);
-      const lightDir = toLight.scale(1 / dist);
-      const ndl = Math.max(0, Vector3.Dot(normal, lightDir));
+      const invDist = 1 / dist;
+      const lightDirX = toLightX * invDist;
+      const lightDirY = toLightY * invDist;
+      const lightDirZ = toLightZ * invDist;
+      const ndl = Math.max(0, normal.x * lightDirX + normal.y * lightDirY + normal.z * lightDirZ);
       if (ndl <= 0) continue;
-      if (isShadowedPoint(scene, hitPoint, normal, lightDir, dist, hitMeshIndex)) {
+      if (isShadowedPoint(scene, hitPoint, normal, lightDirX, lightDirY, lightDirZ, dist, hitMeshIndex)) {
         continue;
       }
       const range = Number.isFinite(light.range) && light.range > 0 ? light.range : dist * 2;
       const rangeFalloff = clamp(1 - (dist / Math.max(range, 1e-3)) ** 2, 0, 1);
       const attenuation = rangeFalloff * rangeFalloff / (1 + dist2 * 0.03);
       if (attenuation <= 0) continue;
-      const lightColor = light.diffuse.scale(light.intensity * attenuation * finiteLightWeight);
-      const h = lightDir.add(viewDir).normalize();
-      const ndh = Math.max(0, Vector3.Dot(normal, h));
-      const specTerm = specWeight > 0 ? Math.pow(ndh, shininess) * ndl : 0;
-      out.x += lightColor.x * (material.baseColor.x * diffuseWeight * ndl + specColor.x * specTerm * specWeight);
-      out.y += lightColor.y * (material.baseColor.y * diffuseWeight * ndl + specColor.y * specTerm * specWeight);
-      out.z += lightColor.z * (material.baseColor.z * diffuseWeight * ndl + specColor.z * specTerm * specWeight);
+      const halfX = lightDirX + viewDir.x;
+      const halfY = lightDirY + viewDir.y;
+      const halfZ = lightDirZ + viewDir.z;
+      const halfLenSq = halfX * halfX + halfY * halfY + halfZ * halfZ;
+      let specTerm = 0;
+      if (specWeight > 0 && halfLenSq > 1e-12) {
+        const invHalfLen = 1 / Math.sqrt(halfLenSq);
+        const ndh = Math.max(0, normal.x * halfX * invHalfLen + normal.y * halfY * invHalfLen + normal.z * halfZ * invHalfLen);
+        specTerm = Math.pow(ndh, shininess) * ndl;
+      }
+      const li = light.intensity * attenuation * finiteLightWeight;
+      const diffuseTerm = diffuseWeight * ndl;
+      const specScale = specTerm * specWeight;
+      out.x += light.diffuse.x * li * (baseColor.x * diffuseTerm + specColorX * specScale);
+      out.y += light.diffuse.y * li * (baseColor.y * diffuseTerm + specColorY * specScale);
+      out.z += light.diffuse.z * li * (baseColor.z * diffuseTerm + specColorZ * specScale);
     }
   }
 
@@ -522,7 +622,10 @@ function sampleHybridContinuation(
   pixelIndex: number,
   bounce: number,
 ): WorkerBounceSample | null {
-  const incident = incomingDir.clone().normalize();
+  if (!normalizeVec3ToRef(incomingDir, continuationIncidentScratch)) {
+    return null;
+  }
+  const incident = continuationIncidentScratch;
   const mediumIor = sanitizeIor(currentMediumIor);
   const materialIor = sanitizeIor(material.ior);
   const nextMediumIorForTransmission = frontFace ? materialIor : 1;
@@ -531,7 +634,7 @@ function sampleHybridContinuation(
   const fresnel = schlickFresnel(cosTheta, Math.max(dielectricF0, material.reflectance));
 
   let reflectWeight = clamp01Safe(Math.max(material.reflectance, material.metallic));
-  let transmitWeight = clamp01Safe(material.transmission * material.opacity);
+  let transmitWeight = clamp01Safe(material.transmission);
   if (transmitWeight > 0) {
     reflectWeight = clamp01Safe(reflectWeight + transmitWeight * fresnel);
     transmitWeight = clamp01Safe(transmitWeight * (1 - fresnel));
@@ -544,85 +647,131 @@ function sampleHybridContinuation(
 
   const xi = sampleHash01(pixelIndex, sampleIndex + bounce * 19, 7) * total;
   const roughness = clamp(material.roughness, 0, 1);
+  const out = continuationBounceSampleScratch;
 
   if (xi < transmitWeight) {
-    const refracted = refractDirectionAcrossInterface(
+    continuationInterfaceNormalScratch.x = frontFace ? outwardNormal.x : -outwardNormal.x;
+    continuationInterfaceNormalScratch.y = frontFace ? outwardNormal.y : -outwardNormal.y;
+    continuationInterfaceNormalScratch.z = frontFace ? outwardNormal.z : -outwardNormal.z;
+    const refracted = refractDirectionAcrossInterfaceToRef(
       incident,
-      frontFace ? outwardNormal : outwardNormal.scale(-1),
+      continuationInterfaceNormalScratch,
       mediumIor,
       nextMediumIorForTransmission,
+      out.direction,
     );
-    const continuedDirection = refracted ?? reflectDirection(incident, shadingNormal);
-    const direction = jitterDirection(
-      continuedDirection,
+    if (!refracted) {
+      if (!reflectDirectionToRef(incident, shadingNormal, out.direction)) {
+        return null;
+      }
+    }
+    if (!jitterDirectionToRef(
+      out.direction,
       clamp(roughness * 0.35, 0, 0.4),
       pixelIndex,
       sampleIndex,
       bounce,
       17,
-    );
-    if (!direction) return null;
-    const tint = lerpVec3(new Vector3(1, 1, 1), material.baseColor, 0.2);
-    return {
-      direction,
-      throughput: tint.scale(Math.max(0.15, transmitWeight / total)),
-      nextMediumIor: refracted ? nextMediumIorForTransmission : mediumIor,
-    };
+      out.direction,
+      continuationTangentScratch,
+      continuationBitangentScratch,
+    )) {
+      return null;
+    }
+    const tintScale = Math.max(0.15, transmitWeight / total);
+    out.throughput.x = (1 + (material.baseColor.x - 1) * 0.2) * tintScale;
+    out.throughput.y = (1 + (material.baseColor.y - 1) * 0.2) * tintScale;
+    out.throughput.z = (1 + (material.baseColor.z - 1) * 0.2) * tintScale;
+    out.nextMediumIor = refracted ? nextMediumIorForTransmission : mediumIor;
+    out.wasTransmission = Boolean(refracted);
+    return out;
   }
 
   if (xi < transmitWeight + reflectWeight) {
-    const reflected = reflectDirection(incident, shadingNormal);
-    const direction = jitterDirection(
-      reflected,
+    if (!reflectDirectionToRef(incident, shadingNormal, out.direction)) {
+      return null;
+    }
+    if (!jitterDirectionToRef(
+      out.direction,
       clamp(roughness * 0.6, 0, 0.75),
       pixelIndex,
       sampleIndex,
       bounce,
       23,
-    );
-    if (!direction) return null;
-    const specColor = lerpVec3(new Vector3(1, 1, 1), material.baseColor, material.metallic);
-    return {
-      direction,
-      throughput: specColor.scale(Math.max(0.1, reflectWeight / total)),
-      nextMediumIor: mediumIor,
-    };
+      out.direction,
+      continuationTangentScratch,
+      continuationBitangentScratch,
+    )) {
+      return null;
+    }
+    const specScale = Math.max(0.1, reflectWeight / total);
+    out.throughput.x = (1 + (material.baseColor.x - 1) * material.metallic) * specScale;
+    out.throughput.y = (1 + (material.baseColor.y - 1) * material.metallic) * specScale;
+    out.throughput.z = (1 + (material.baseColor.z - 1) * material.metallic) * specScale;
+    out.nextMediumIor = mediumIor;
+    out.wasTransmission = false;
+    return out;
   }
 
-  const diffuseDir = cosineSampleHemisphere(shadingNormal, pixelIndex, sampleIndex, bounce, 29);
-  if (!diffuseDir) {
+  if (!cosineSampleHemisphereToRef(
+    shadingNormal,
+    pixelIndex,
+    sampleIndex,
+    bounce,
+    29,
+    out.direction,
+    continuationTangentScratch,
+    continuationBitangentScratch,
+  )) {
     return null;
   }
-  return {
-    direction: diffuseDir,
-    throughput: material.baseColor.scale(Math.max(0.1, diffuseWeight / total)),
-    nextMediumIor: mediumIor,
-  };
+  const diffuseScale = Math.max(0.1, diffuseWeight / total);
+  out.throughput.x = material.baseColor.x * diffuseScale;
+  out.throughput.y = material.baseColor.y * diffuseScale;
+  out.throughput.z = material.baseColor.z * diffuseScale;
+  out.nextMediumIor = mediumIor;
+  out.wasTransmission = false;
+  return out;
 }
 
 function isShadowedDirectional(
   scene: WorkerSceneState,
   hitPoint: Vector3,
   normal: Vector3,
-  lightDir: Vector3,
+  lightDirX: number,
+  lightDirY: number,
+  lightDirZ: number,
   hitMeshIndex: number,
 ): boolean {
-  const origin = hitPoint.add(normal.scale(0.0035));
-  const shadowRay = new Ray(origin, lightDir, 1e6);
-  return hasAnyTraceHit(scene, shadowRay, hitMeshIndex);
+  shadowRayScratchOrigin.x = hitPoint.x + normal.x * 0.0035;
+  shadowRayScratchOrigin.y = hitPoint.y + normal.y * 0.0035;
+  shadowRayScratchOrigin.z = hitPoint.z + normal.z * 0.0035;
+  shadowRayScratchDirection.x = lightDirX;
+  shadowRayScratchDirection.y = lightDirY;
+  shadowRayScratchDirection.z = lightDirZ;
+  shadowRayScratch.length = 1e6;
+  return hasAnyTraceHit(scene, shadowRayScratch, hitMeshIndex);
 }
 
 function isShadowedPoint(
   scene: WorkerSceneState,
   hitPoint: Vector3,
   normal: Vector3,
-  lightDir: Vector3,
+  lightDirX: number,
+  lightDirY: number,
+  lightDirZ: number,
   lightDistance: number,
   hitMeshIndex: number,
 ): boolean {
-  const origin = hitPoint.add(normal.scale(0.0035));
-  const shadowRay = new Ray(origin, lightDir, Math.max(0, lightDistance - 0.005));
-  return hasAnyTraceHit(scene, shadowRay, hitMeshIndex, lightDistance - 0.005);
+  shadowRayScratchOrigin.x = hitPoint.x + normal.x * 0.0035;
+  shadowRayScratchOrigin.y = hitPoint.y + normal.y * 0.0035;
+  shadowRayScratchOrigin.z = hitPoint.z + normal.z * 0.0035;
+  shadowRayScratchDirection.x = lightDirX;
+  shadowRayScratchDirection.y = lightDirY;
+  shadowRayScratchDirection.z = lightDirZ;
+  const shadowMaxDistance = lightDistance - 0.005;
+  shadowRayScratch.length = Math.max(0, shadowMaxDistance);
+  return hasAnyTraceHit(scene, shadowRayScratch, hitMeshIndex, shadowMaxDistance);
 }
 
 function pickTraceRayClosest(scene: WorkerSceneState, ray: Ray, ignoreMeshIndex: number): WorkerHit | null {
@@ -658,15 +807,17 @@ function pickTraceRayClosest(scene: WorkerSceneState, ray: Ray, ignoreMeshIndex:
         if (entryHitDist === null) {
           continue;
         }
-        const triangleHit = intersectTraceTriangleAccelClosest(ray, entry.triangleAccel, bestDistance);
-        if (!triangleHit) {
+        const hit = entry.triangleAccel
+          ? intersectTraceTriangleAccelClosest(ray, entry.triangleAccel, bestDistance)
+          : intersectTraceLineAccelClosest(ray, entry.lineAccel, bestDistance);
+        if (!hit) {
           continue;
         }
-        bestDistance = triangleHit.distance;
+        bestDistance = hit.distance;
         bestHit = {
-          distance: triangleHit.distance,
-          point: triangleHit.point,
-          normal: triangleHit.normal,
+          distance: hit.distance,
+          point: hit.point,
+          normal: hit.normal,
           meshIndex: entry.meshIndex,
           material: entry.material,
         };
@@ -738,7 +889,10 @@ function hasAnyTraceHit(
         if (entryHitDist === null) {
           continue;
         }
-        if (intersectTraceTriangleAccelAny(ray, entry.triangleAccel, limit)) {
+        const hasHit = entry.triangleAccel
+          ? intersectTraceTriangleAccelAny(ray, entry.triangleAccel, limit)
+          : intersectTraceLineAccelAny(ray, entry.lineAccel, limit);
+        if (hasHit) {
           return true;
         }
       }
@@ -876,6 +1030,83 @@ function intersectTraceTriangleAccelClosest(
   return intersectTraceTriangleSoupClosest(ray, accel, maxDistance);
 }
 
+function intersectTraceLineAccelClosest(
+  ray: Ray,
+  accel: PathTraceWorkerLineAccel | null,
+  maxDistance: number,
+): LineHitResult | null {
+  if (!accel || accel.segmentCount <= 0) {
+    return null;
+  }
+  const positions = accel.positionsWorld;
+  const limit = Number.isFinite(maxDistance) ? Math.max(0, maxDistance) : Number.POSITIVE_INFINITY;
+  let bestDistance = limit;
+  let hit = false;
+  const ox = ray.origin.x;
+  const oy = ray.origin.y;
+  const oz = ray.origin.z;
+  const dx = ray.direction.x;
+  const dy = ray.direction.y;
+  const dz = ray.direction.z;
+  for (let base = 0; base + 5 < positions.length; base += 6) {
+    const distance = rayIntersectsTraceLineSegmentDistance(
+      ray,
+      positions[base],
+      positions[base + 1],
+      positions[base + 2],
+      positions[base + 3],
+      positions[base + 4],
+      positions[base + 5],
+      accel.intersectionThreshold,
+      bestDistance,
+    );
+    if (!(distance >= 0) || distance >= bestDistance) {
+      continue;
+    }
+    bestDistance = distance;
+    hit = true;
+  }
+  if (!hit || !Number.isFinite(bestDistance)) {
+    return null;
+  }
+  return {
+    distance: bestDistance,
+    point: new Vector3(ox + dx * bestDistance, oy + dy * bestDistance, oz + dz * bestDistance),
+    // Babylon line picks generally don't provide a geometric normal; match the main-thread
+    // CPU path fallback behavior by using the inverse ray direction as a shading fallback.
+    normal: new Vector3(-dx, -dy, -dz),
+  };
+}
+
+function intersectTraceLineAccelAny(
+  ray: Ray,
+  accel: PathTraceWorkerLineAccel | null,
+  maxDistance: number | null,
+): boolean {
+  if (!accel || accel.segmentCount <= 0) {
+    return false;
+  }
+  const positions = accel.positionsWorld;
+  const limit = maxDistance === null ? Number.POSITIVE_INFINITY : Math.max(0, maxDistance);
+  for (let base = 0; base + 5 < positions.length; base += 6) {
+    const distance = rayIntersectsTraceLineSegmentDistance(
+      ray,
+      positions[base],
+      positions[base + 1],
+      positions[base + 2],
+      positions[base + 3],
+      positions[base + 4],
+      positions[base + 5],
+      accel.intersectionThreshold,
+      limit,
+    );
+    if (distance >= 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function intersectTraceTriangleAccelAny(
   ray: Ray,
   accel: PathTraceWorkerTriangleAccel,
@@ -885,6 +1116,112 @@ function intersectTraceTriangleAccelAny(
     return intersectTraceTriangleLocalBvhAny(ray, accel, maxDistance);
   }
   return intersectTraceTriangleSoupAny(ray, accel, maxDistance);
+}
+
+function rayIntersectsTraceLineSegmentDistance(
+  ray: Ray,
+  ax: number,
+  ay: number,
+  az: number,
+  bx: number,
+  by: number,
+  bz: number,
+  threshold: number,
+  maxDistance: number,
+): number {
+  const ox = ray.origin.x;
+  const oy = ray.origin.y;
+  const oz = ray.origin.z;
+  const dx = ray.direction.x;
+  const dy = ray.direction.y;
+  const dz = ray.direction.z;
+  const ux = bx - ax;
+  const uy = by - ay;
+  const uz = bz - az;
+  const vx = dx * RAY_SEGMENT_INTERSECTION_RAY_LENGTH;
+  const vy = dy * RAY_SEGMENT_INTERSECTION_RAY_LENGTH;
+  const vz = dz * RAY_SEGMENT_INTERSECTION_RAY_LENGTH;
+  const wx = ax - ox;
+  const wy = ay - oy;
+  const wz = az - oz;
+  const a = ux * ux + uy * uy + uz * uz;
+  const b = ux * vx + uy * vy + uz * vz;
+  const c = vx * vx + vy * vy + vz * vz;
+  const d = ux * wx + uy * wy + uz * wz;
+  const e = vx * wx + vy * wy + vz * wz;
+  const discriminant = a * c - b * b;
+  let sN: number;
+  let sD = discriminant;
+  let tN: number;
+  let tD = discriminant;
+
+  if (discriminant < RAY_SEGMENT_INTERSECTION_SMALL_NUM) {
+    sN = 0;
+    sD = 1;
+    tN = e;
+    tD = c;
+  } else {
+    sN = b * e - c * d;
+    tN = a * e - b * d;
+    if (sN < 0) {
+      sN = 0;
+      tN = e;
+      tD = c;
+    } else if (sN > sD) {
+      sN = sD;
+      tN = e + b;
+      tD = c;
+    }
+  }
+
+  if (tN < 0) {
+    tN = 0;
+    if (-d < 0) {
+      sN = 0;
+    } else if (-d > a) {
+      sN = sD;
+    } else {
+      sN = -d;
+      sD = a;
+    }
+  } else if (tN > tD) {
+    tN = tD;
+    if (-d + b < 0) {
+      sN = 0;
+    } else if (-d + b > a) {
+      sN = sD;
+    } else {
+      sN = -d + b;
+      sD = a;
+    }
+  }
+
+  const sc = Math.abs(sN) < RAY_SEGMENT_INTERSECTION_SMALL_NUM ? 0 : sN / sD;
+  const tc = Math.abs(tN) < RAY_SEGMENT_INTERSECTION_SMALL_NUM ? 0 : tN / tD;
+
+  const qscx = wx + ux * sc;
+  const qscy = wy + uy * sc;
+  const qscz = wz + uz * sc;
+  const qtcx = vx * tc;
+  const qtcy = vy * tc;
+  const qtcz = vz * tc;
+  const dPx = qscx - qtcx;
+  const dPy = qscy - qtcy;
+  const dPz = qscz - qtcz;
+  const thresholdSq = Math.max(0, threshold) * Math.max(0, threshold);
+  const dP2 = dPx * dPx + dPy * dPy + dPz * dPz;
+  if (!(tc > 0) || dP2 >= thresholdSq) {
+    return -1;
+  }
+
+  const distance = Math.sqrt(qscx * qscx + qscy * qscy + qscz * qscz);
+  const rayLength = Number.isFinite(ray.length) ? Math.max(0, ray.length) : Number.POSITIVE_INFINITY;
+  const limit = Number.isFinite(maxDistance) ? Math.max(0, maxDistance) : Number.POSITIVE_INFINITY;
+  const maxAllowed = Math.min(rayLength, limit);
+  if (!(distance > 0) || distance > maxAllowed) {
+    return -1;
+  }
+  return distance;
 }
 
 function intersectTraceTriangleSoupClosest(
@@ -1443,102 +1780,248 @@ function halton(index: number, base: number): number {
   return r;
 }
 
-function cosineSampleHemisphere(
+function normalizeVec3ToRef(input: Vector3, out: Vector3): boolean {
+  const x = input.x;
+  const y = input.y;
+  const z = input.z;
+  const lenSq = x * x + y * y + z * z;
+  if (lenSq < 1e-12) {
+    return false;
+  }
+  const invLen = 1 / Math.sqrt(lenSq);
+  out.x = x * invLen;
+  out.y = y * invLen;
+  out.z = z * invLen;
+  return true;
+}
+
+function orthonormalTangentToRef(normal: Vector3, out: Vector3): boolean {
+  let nx = normal.x;
+  let ny = normal.y;
+  let nz = normal.z;
+  const nLenSq = nx * nx + ny * ny + nz * nz;
+  if (nLenSq < 1e-12) {
+    return false;
+  }
+  const invNLen = 1 / Math.sqrt(nLenSq);
+  nx *= invNLen;
+  ny *= invNLen;
+  nz *= invNLen;
+
+  const upX = 0;
+  const upY = Math.abs(nz) > 0.95 ? 1 : 0;
+  const upZ = Math.abs(nz) > 0.95 ? 0 : 1;
+  const tx = upY * nz - upZ * ny;
+  const ty = upZ * nx - upX * nz;
+  const tz = upX * ny - upY * nx;
+  const tLenSq = tx * tx + ty * ty + tz * tz;
+  if (tLenSq < 1e-12) {
+    return false;
+  }
+  const invTLen = 1 / Math.sqrt(tLenSq);
+  out.x = tx * invTLen;
+  out.y = ty * invTLen;
+  out.z = tz * invTLen;
+  return true;
+}
+
+function cosineSampleHemisphereToRef(
   normal: Vector3,
   pixelIndex: number,
   sampleIndex: number,
   bounce: number,
   dimensionOffset: number,
-): Vector3 | null {
-  const n = normal.clone();
-  if (n.lengthSquared() < 1e-12) {
-    return null;
+  out: Vector3,
+  tangentScratch: Vector3,
+  bitangentScratch: Vector3,
+): boolean {
+  if (!normalizeVec3ToRef(normal, out)) {
+    return false;
   }
-  n.normalize();
-  const tangent = orthonormalTangent(n);
-  if (!tangent) return null;
-  const bitangent = Vector3.Cross(n, tangent).normalize();
+  const nx = out.x;
+  const ny = out.y;
+  const nz = out.z;
+  if (!orthonormalTangentToRef(out, tangentScratch)) {
+    return false;
+  }
+  const tx = tangentScratch.x;
+  const ty = tangentScratch.y;
+  const tz = tangentScratch.z;
+  let bx = ny * tz - nz * ty;
+  let by = nz * tx - nx * tz;
+  let bz = nx * ty - ny * tx;
+  const bLenSq = bx * bx + by * by + bz * bz;
+  if (bLenSq < 1e-12) {
+    return false;
+  }
+  const invBLen = 1 / Math.sqrt(bLenSq);
+  bx *= invBLen;
+  by *= invBLen;
+  bz *= invBLen;
+  bitangentScratch.x = bx;
+  bitangentScratch.y = by;
+  bitangentScratch.z = bz;
+
   const u1 = sampleHash01(pixelIndex, sampleIndex + bounce * 53, dimensionOffset);
   const u2 = sampleHash01(pixelIndex, sampleIndex + bounce * 53, dimensionOffset + 1);
   const r = Math.sqrt(u1);
   const theta = 2 * Math.PI * u2;
-  const x = r * Math.cos(theta);
-  const y = r * Math.sin(theta);
-  const z = Math.sqrt(Math.max(0, 1 - u1));
-  const dir = tangent.scale(x).add(bitangent.scale(y)).add(n.scale(z));
-  if (dir.lengthSquared() < 1e-12) return null;
-  return dir.normalize();
+  const sx = r * Math.cos(theta);
+  const sy = r * Math.sin(theta);
+  const sz = Math.sqrt(Math.max(0, 1 - u1));
+  const dx = tx * sx + bx * sy + nx * sz;
+  const dy = ty * sx + by * sy + ny * sz;
+  const dz = tz * sx + bz * sy + nz * sz;
+  const dLenSq = dx * dx + dy * dy + dz * dz;
+  if (dLenSq < 1e-12) {
+    return false;
+  }
+  const invDLen = 1 / Math.sqrt(dLenSq);
+  out.x = dx * invDLen;
+  out.y = dy * invDLen;
+  out.z = dz * invDLen;
+  return true;
 }
 
-function jitterDirection(
+function jitterDirectionToRef(
   direction: Vector3,
   amount: number,
   pixelIndex: number,
   sampleIndex: number,
   bounce: number,
   dimensionOffset: number,
-): Vector3 | null {
-  const d = direction.clone();
-  if (d.lengthSquared() < 1e-12) {
-    return null;
+  out: Vector3,
+  tangentScratch: Vector3,
+  bitangentScratch: Vector3,
+): boolean {
+  if (!normalizeVec3ToRef(direction, out)) {
+    return false;
   }
-  d.normalize();
+  const baseX = out.x;
+  const baseY = out.y;
+  const baseZ = out.z;
   const jitterAmount = clamp(amount, 0, 1);
   if (jitterAmount <= 1e-5) {
-    return d;
+    return true;
   }
-  const tangent = orthonormalTangent(d);
-  if (!tangent) return d;
-  const bitangent = Vector3.Cross(d, tangent).normalize();
+  if (!orthonormalTangentToRef(out, tangentScratch)) {
+    return true;
+  }
+  const tx = tangentScratch.x;
+  const ty = tangentScratch.y;
+  const tz = tangentScratch.z;
+  let bx = baseY * tz - baseZ * ty;
+  let by = baseZ * tx - baseX * tz;
+  let bz = baseX * ty - baseY * tx;
+  const bLenSq = bx * bx + by * by + bz * bz;
+  if (bLenSq < 1e-12) {
+    return true;
+  }
+  const invBLen = 1 / Math.sqrt(bLenSq);
+  bx *= invBLen;
+  by *= invBLen;
+  bz *= invBLen;
+  bitangentScratch.x = bx;
+  bitangentScratch.y = by;
+  bitangentScratch.z = bz;
   const u1 = sampleHash01(pixelIndex, sampleIndex + bounce * 61, dimensionOffset) * 2 - 1;
   const u2 = sampleHash01(pixelIndex, sampleIndex + bounce * 61, dimensionOffset + 1) * 2 - 1;
-  const jittered = d
-    .scale(1)
-    .add(tangent.scale(u1 * jitterAmount))
-    .add(bitangent.scale(u2 * jitterAmount));
-  if (jittered.lengthSquared() < 1e-12) {
-    return d;
+  const jx = baseX + tx * (u1 * jitterAmount) + bx * (u2 * jitterAmount);
+  const jy = baseY + ty * (u1 * jitterAmount) + by * (u2 * jitterAmount);
+  const jz = baseZ + tz * (u1 * jitterAmount) + bz * (u2 * jitterAmount);
+  const jLenSq = jx * jx + jy * jy + jz * jz;
+  if (jLenSq < 1e-12) {
+    out.x = baseX;
+    out.y = baseY;
+    out.z = baseZ;
+    return true;
   }
-  return jittered.normalize();
+  const invJLen = 1 / Math.sqrt(jLenSq);
+  out.x = jx * invJLen;
+  out.y = jy * invJLen;
+  out.z = jz * invJLen;
+  return true;
 }
 
-function orthonormalTangent(normal: Vector3): Vector3 | null {
-  const n = normal.clone();
-  if (n.lengthSquared() < 1e-12) return null;
-  n.normalize();
-  const up = Math.abs(n.z) > 0.95 ? new Vector3(0, 1, 0) : new Vector3(0, 0, 1);
-  const tangent = Vector3.Cross(up, n);
-  if (tangent.lengthSquared() < 1e-12) return null;
-  return tangent.normalize();
+function reflectDirectionToRef(incident: Vector3, normal: Vector3, out: Vector3): boolean {
+  let nx = normal.x;
+  let ny = normal.y;
+  let nz = normal.z;
+  const nLenSq = nx * nx + ny * ny + nz * nz;
+  if (nLenSq < 1e-12) {
+    return false;
+  }
+  const invNLen = 1 / Math.sqrt(nLenSq);
+  nx *= invNLen;
+  ny *= invNLen;
+  nz *= invNLen;
+  const dot = incident.x * nx + incident.y * ny + incident.z * nz;
+  const rx = incident.x - nx * (2 * dot);
+  const ry = incident.y - ny * (2 * dot);
+  const rz = incident.z - nz * (2 * dot);
+  const rLenSq = rx * rx + ry * ry + rz * rz;
+  if (rLenSq < 1e-12) {
+    return false;
+  }
+  const invRLen = 1 / Math.sqrt(rLenSq);
+  out.x = rx * invRLen;
+  out.y = ry * invRLen;
+  out.z = rz * invRLen;
+  return true;
 }
 
-function reflectDirection(incident: Vector3, normal: Vector3): Vector3 {
-  const n = normal.clone().normalize();
-  return incident.subtract(n.scale(2 * Vector3.Dot(incident, n))).normalize();
-}
-
-function refractDirectionAcrossInterface(
+function refractDirectionAcrossInterfaceToRef(
   incident: Vector3,
   interfaceNormal: Vector3,
   etaI: number,
   etaT: number,
-): Vector3 | null {
-  const i = incident.clone().normalize();
-  const n = interfaceNormal.clone().normalize();
+  out: Vector3,
+): boolean {
+  let ix = incident.x;
+  let iy = incident.y;
+  let iz = incident.z;
+  const iLenSq = ix * ix + iy * iy + iz * iz;
+  if (iLenSq < 1e-12) {
+    return false;
+  }
+  const invILen = 1 / Math.sqrt(iLenSq);
+  ix *= invILen;
+  iy *= invILen;
+  iz *= invILen;
+
+  let nx = interfaceNormal.x;
+  let ny = interfaceNormal.y;
+  let nz = interfaceNormal.z;
+  const nLenSq = nx * nx + ny * ny + nz * nz;
+  if (nLenSq < 1e-12) {
+    return false;
+  }
+  const invNLen = 1 / Math.sqrt(nLenSq);
+  nx *= invNLen;
+  ny *= invNLen;
+  nz *= invNLen;
+
   const ei = sanitizeIor(etaI);
   const et = sanitizeIor(etaT);
   const eta = ei / et;
-  const cosI = clamp(-Vector3.Dot(i, n), -1, 1);
+  const cosI = clamp(-(ix * nx + iy * ny + iz * nz), -1, 1);
   const sinT2 = eta * eta * Math.max(0, 1 - cosI * cosI);
   if (sinT2 > 1) {
-    return null;
+    return false;
   }
   const cosT = Math.sqrt(Math.max(0, 1 - sinT2));
-  const t = i.scale(eta).add(n.scale(eta * cosI - cosT));
-  if (t.lengthSquared() < 1e-12) {
-    return null;
+  const tx = ix * eta + nx * (eta * cosI - cosT);
+  const ty = iy * eta + ny * (eta * cosI - cosT);
+  const tz = iz * eta + nz * (eta * cosI - cosT);
+  const tLenSq = tx * tx + ty * ty + tz * tz;
+  if (tLenSq < 1e-12) {
+    return false;
   }
-  return t.normalize();
+  const invTLen = 1 / Math.sqrt(tLenSq);
+  out.x = tx * invTLen;
+  out.y = ty * invTLen;
+  out.z = tz * invTLen;
+  return true;
 }
 
 function sanitizeIor(value: number): number {
@@ -1574,17 +2057,11 @@ function clampFinite(value: number): number {
   return Number.isFinite(value) ? clamp(value, 0, 64) : 0;
 }
 
-function multiplyVec3(a: Vector3, b: Vector3): Vector3 {
-  return new Vector3(a.x * b.x, a.y * b.y, a.z * b.z);
-}
-
-function lerpVec3(a: Vector3, b: Vector3, t: number): Vector3 {
-  const k = clamp01Safe(t);
-  return new Vector3(
-    a.x + (b.x - a.x) * k,
-    a.y + (b.y - a.y) * k,
-    a.z + (b.z - a.z) * k,
-  );
+function multiplyVec3InPlace(a: Vector3, b: Vector3): Vector3 {
+  a.x *= b.x;
+  a.y *= b.y;
+  a.z *= b.z;
+  return a;
 }
 
 export {};

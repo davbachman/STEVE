@@ -339,11 +339,18 @@ Implemented so far (current repo state):
 - Recent path backend fixes: `ArcRotateCamera` capture-camera `upVector` setter sync for Z-up alignment (substantially improved placement/orientation matching) and improved transmission enter/exit IOR handling in the continuation path
 - Recent Phase 5B path-core upgrades: closest-hit tracing (fixing first-hit `fastCheck` behavior), top-level trace-mesh BVH, per-mesh world-space triangle cache + per-mesh triangle BVH, and preview-biased direct-light throughput reductions (one-light finite-light sampling / reduced secondary finite-light work)
 - Phase 5B worker offload is implemented: CPU path tracing batches can run in a dedicated worker with automatic fallback to main-thread CPU tracing when worker offload is unavailable or the scene snapshot is unsupported
+- Additional Phase 5B worker/path hardening completed: worker scene signatures (geometry/material/light), reset-reason-aware cache preservation (camera-only + resize/resolution changes keep path BVHs/worker scene warm), explicit worker fallback diagnostics, and mixed line-geometry worker support (worker line accel + line segment intersections) so `LinesMesh` scenes can stay on worker offload
+- Path alignment validation/instrumentation is now implemented: runtime alignment probes + diagnostics, a Playwright alignment campaign (`tests/e2e/path-alignment-campaign.spec.ts`), and repeated local matrix passes (resize + DPR + quality-resolution-scale cases) with zero hit mismatches on the current machine; reports are written under `artifacts/validation/`
+- Path throughput instrumentation is expanded: worker/main-thread batch + pixel counts, `px/s`, and worker average batch latency / px-per-batch telemetry are exposed in diagnostics/UI and captured by the alignment campaign report
+- Phase 5B CPU path throughput passes landed in both main-thread and worker paths (buffer/scratch reuse, reduced allocation churn, reusable rays/vectors, packed worker result accumulation, `createPickingRayToRef(...)` primary ray generation)
+- Transport visibility improvements landed for transmissive scenes (notably glass): transmission continuation no longer scales by `opacity`, and the first hit after a transmission bounce gets an extra finite direct-light sample to improve visible secondary objects
+- Convergence/firefly clamp tuning is in progress: a shared clamp helper with early-sample relaxation landed, and a small path-only clamp startup delay (skip until `count > 2`) was added most recently; this latest tweak needs manual visual verification before further tuning
 
 Current blockers (important):
 
 - Phase 5B (`path`) throughput is still far below usable targets (scene-dependent; minutes/sample at `1.0x` quality resolution is still possible on some scenes)
-- Path output alignment improved after recent camera-sync fixes, but still needs wider validation across resize/quality scales/hardware-scaling setups
+- Path output alignment validation is much stronger now (instrumentation + local campaign coverage), but wider cross-hardware validation is still required
+- Convergence/realism tuning remains visual-sensitive and unfinished (firefly clamp vs highlight preservation, reflective/transmissive scene behavior, convergence stability)
 - CPU acceleration and worker offload are now implemented (trace-mesh BVH, per-mesh triangle BVH, worker batch tracing), but GPU traversal/path tracing is not implemented and overall throughput remains poor
 
 ### Phase 6 — Broad Command-Based Undo/Redo
@@ -448,7 +455,10 @@ Current implementation snapshot (as of this file):
 - `Quality + Hybrid GPU Preview` (Phase 5A) uses a dedicated backend-owned accumulation/export buffer driven by GPU render-target captures and progressive accumulation for usable preview/export speed.
 - `Quality + Path` (Phase 5B prototype) uses a dedicated accumulation/export buffer and an experimental CPU hybrid/path tracer.
 - The Phase 5B `Quality + Path` prototype currently supports direct lighting + shadows and bounded continuation bounces with basic transmission/IOR handling, plus CPU acceleration (trace-mesh BVH, per-mesh triangle BVH) and worker batch offload, but it is not yet production quality.
-- Path alignment was substantially improved by fixing capture-camera `ArcRotateCamera.upVector` synchronization (Z-up internal matrix bug), but broader validation across resolution scaling/hardware scaling is still required.
+- Path alignment was substantially improved by fixing capture-camera `ArcRotateCamera.upVector` synchronization (Z-up internal matrix bug), and the repo now includes runtime alignment probes plus a Playwright alignment-campaign harness with local matrix validation; broader cross-hardware validation is still required.
+- Mixed line/surface scenes are now worker-offload compatible in the Phase 5B path worker (line accel snapshot + worker line intersections), and a built-in regression/demo scene exists at `?testScene=phase5b-path-mixed-geometry`.
+- Current Phase 5B diagnostics include path execution mode, alignment probe metrics, worker/main throughput counters, `px/s`, and worker average batch latency / px-per-batch telemetry.
+- Recent transport/convergence tuning improved glass visibility (transmission no longer damped by `opacity`, extra secondary direct-light sample after transmission), and firefly clamp tuning is active; the latest path-only early-clamp delay still needs manual visual confirmation.
 - Major unresolved limitation: performance is far below usable targets (often minutes/sample at `1.0x`).
 
 Out of scope:
@@ -722,7 +732,7 @@ Abort criteria:
 
 1. **Phase 5 path renderer is experimental and currently unreliable**
 - `Quality (progressive)` now has three relevant paths: stable `TAA` baseline, fast `Hybrid GPU Preview` (Phase 5A), and experimental `Quality + Path` (Phase 5B CPU hybrid/path tracer prototype).
-- Current known blockers for `Quality + Path`: very slow convergence (minutes/sample at `1.0x` on some scenes), remaining alignment/validation work across resolutions/hardware scaling, worker-offload/runtime hardening and tuning, and no GPU traversal/path tracing yet (CPU BVH/triangle acceleration + worker offload are implemented).
+- Current known blockers for `Quality + Path`: very slow convergence (minutes/sample at `1.0x` on some scenes), remaining cross-hardware alignment/validation work (local instrumentation + campaign harness are now in place and passing locally), convergence/firefly tuning and visual hardening for reflective/transmissive scenes, worker-offload/runtime tuning, and no GPU traversal/path tracing yet (CPU BVH/triangle acceleration + worker offload are implemented).
 
 2. **Interactive realism is intentionally limited (for now)**
 - Advanced reflections/transmission realism in interactive mode is deferred to a later modest, time-boxed phase.
@@ -740,7 +750,8 @@ Interactive realism was evaluated as lower-confidence / lower-priority for curre
 
 1. **Phase 5B/5C — Advance the true quality renderer path after Phase 5A**
 - Phase 5A (`Hybrid GPU Preview`) is complete for the current prototype goal and should be used for practical quality previews/exports.
-- Next priority: validate remaining `Quality + Path` alignment edge cases across resize/quality-resolution/hardware-scaling scenarios, then harden/tune the existing Phase 5B CPU path stack (worker fallback diagnostics, snapshot compatibility, batching/buffer pooling, worker startup/bundle size, BVH traversal optimizations) before further realism tuning and eventual GPU path/hybrid path work.
+- Next priority: continue Phase 5B/5C convergence/realism tuning (especially firefly-clamp/highlight preservation and reflective/transmissive scene behavior) using the new path diagnostics + alignment campaign telemetry, while continuing non-visual CPU path throughput hardening and cross-hardware reruns of the alignment campaign as hardware becomes available.
+- Handoff note (current manual-check boundary): a small path-only firefly-clamp startup delay (`qualityClampFireflies` path accumulation now skips clamping until prior sample count `> 2`) landed most recently and passed build + local alignment campaign, but it still needs manual visual checks on glass/highlight scenes before further convergence tuning.
 
 2. **Phase 6 — Command-based undo/redo**
 - Replace snapshot-style history with broad command-history coverage, drag coalescing, and transaction boundaries.

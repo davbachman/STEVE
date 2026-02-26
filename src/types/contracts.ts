@@ -286,6 +286,14 @@ export interface RenderDiagnostics {
   qualityPathAlignmentHitMismatches: number;
   qualityPathAlignmentMaxPointError: number;
   qualityPathAlignmentMaxDistanceError: number;
+  qualityPathWorkerBatchCount: number;
+  qualityPathWorkerPixelCount: number;
+  qualityPathWorkerBatchLatencyMs: number;
+  qualityPathWorkerBatchPixelsPerBatch: number;
+  qualityPathWorkerPixelsPerSecond: number;
+  qualityPathMainThreadBatchCount: number;
+  qualityPathMainThreadPixelCount: number;
+  qualityPathMainThreadPixelsPerSecond: number;
 }
 
 export type PlotJobPhase = 'idle' | 'queued' | 'parsing' | 'mesh_preview' | 'mesh_final' | 'ready' | 'error' | 'skipped';

@@ -1,0 +1,862 @@
+{
+  "generatedAt": "2026-02-26T13:56:15.113Z",
+  "host": {
+    "hostname": "Davids-MacBook-Air-3.local",
+    "platform": "darwin",
+    "release": "25.3.0",
+    "arch": "arm64",
+    "cpuModel": "Apple M4",
+    "cpuCount": 10
+  },
+  "browserProject": "chromium-webgpu",
+  "scenarios": [
+    {
+      "scenario": {
+        "id": "shadow-dpr1-qrs1.0-960x640",
+        "sceneId": "shadow-regression",
+        "expectedObjectName": {},
+        "viewport": {
+          "width": 960,
+          "height": 640
+        },
+        "resizeViewport": {
+          "width": 1111,
+          "height": 713
+        },
+        "deviceScaleFactor": 1,
+        "qualityResolutionScale": 1
+      },
+      "ok": true,
+      "status": "pass",
+      "failureReason": null,
+      "phases": [
+        {
+          "phase": "baseline",
+          "elapsedMs": 4472,
+          "snapshot": {
+            "render": {
+              "mode": "quality",
+              "qualityRenderer": "path",
+              "qualityResolutionScale": 1,
+              "qualityMaxBounces": 1,
+              "qualitySamplesTarget": 4096,
+              "qualityCurrentSamples": 2,
+              "qualityRunning": true
+            },
+            "diagnostics": {
+              "webgpuReady": true,
+              "qualityActiveRenderer": "path",
+              "qualityRendererFallbackReason": null,
+              "qualityResolutionScale": 1,
+              "qualitySamplesPerSecond": 0.88,
+              "qualityLastResetReason": "scene_or_render_change",
+              "qualityPathExecutionMode": "worker",
+              "qualityPathAlignmentStatus": "ok",
+              "qualityPathAlignmentProbeCount": 4,
+              "qualityPathAlignmentHitMismatches": 0,
+              "qualityPathAlignmentMaxPointError": 0.000012380521614538672,
+              "qualityPathAlignmentMaxDistanceError": 0.000012638420924915295,
+              "qualityPathWorkerBatchCount": 120,
+              "qualityPathWorkerPixelCount": 487558,
+              "qualityPathWorkerPixelsPerSecond": 245760,
+              "qualityPathMainThreadBatchCount": 20,
+              "qualityPathMainThreadPixelCount": 81920,
+              "qualityPathMainThreadPixelsPerSecond": 0
+            },
+            "objects": [
+              "Shadow Ribbon",
+              "Shadow Sphere",
+              "Key Light",
+              "Cool Fill"
+            ],
+            "canvas": {
+              "width": 960,
+              "height": 288,
+              "clientWidth": 960,
+              "clientHeight": 288
+            },
+            "browser": {
+              "devicePixelRatio": 1,
+              "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.7632.6 Safari/537.36",
+              "gpuAdapterInfo": {}
+            }
+          }
+        },
+        {
+          "phase": "after_resize",
+          "elapsedMs": 6651,
+          "snapshot": {
+            "render": {
+              "mode": "quality",
+              "qualityRenderer": "path",
+              "qualityResolutionScale": 1,
+              "qualityMaxBounces": 1,
+              "qualitySamplesTarget": 4096,
+              "qualityCurrentSamples": 0,
+              "qualityRunning": true
+            },
+            "diagnostics": {
+              "webgpuReady": true,
+              "qualityActiveRenderer": "path",
+              "qualityRendererFallbackReason": null,
+              "qualityResolutionScale": 1,
+              "qualitySamplesPerSecond": 0,
+              "qualityLastResetReason": "resize",
+              "qualityPathExecutionMode": "worker",
+              "qualityPathAlignmentStatus": "ok",
+              "qualityPathAlignmentProbeCount": 7,
+              "qualityPathAlignmentHitMismatches": 0,
+              "qualityPathAlignmentMaxPointError": 0.000013807793404778442,
+              "qualityPathAlignmentMaxDistanceError": 0.000014282536918486244,
+              "qualityPathWorkerBatchCount": 228,
+              "qualityPathWorkerPixelCount": 927747,
+              "qualityPathWorkerPixelsPerSecond": 249470.87939795793,
+              "qualityPathMainThreadBatchCount": 20,
+              "qualityPathMainThreadPixelCount": 81920,
+              "qualityPathMainThreadPixelsPerSecond": 0
+            },
+            "objects": [
+              "Shadow Ribbon",
+              "Shadow Sphere",
+              "Key Light",
+              "Cool Fill"
+            ],
+            "canvas": {
+              "width": 407,
+              "height": 613,
+              "clientWidth": 407,
+              "clientHeight": 613
+            },
+            "browser": {
+              "devicePixelRatio": 1,
+              "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.7632.6 Safari/537.36",
+              "gpuAdapterInfo": {}
+            }
+          }
+        }
+      ],
+      "deltaAfterResize": {
+        "probes": 3,
+        "hitMismatches": 0
+      },
+      "perfSmoke": {
+        "resizePhaseMs": 2179,
+        "workerPixelsDelta": 440189,
+        "mainThreadPixelsDelta": 0,
+        "workerPixelsPerSecondDuringResize": 202014.22670949978,
+        "mainThreadPixelsPerSecondDuringResize": 0,
+        "warnings": []
+      },
+      "consoleWarnings": []
+    },
+    {
+      "scenario": {
+        "id": "shadow-dpr1-qrs0.75-1200x720",
+        "sceneId": "shadow-regression",
+        "expectedObjectName": {},
+        "viewport": {
+          "width": 1200,
+          "height": 720
+        },
+        "resizeViewport": {
+          "width": 1099,
+          "height": 777
+        },
+        "deviceScaleFactor": 1,
+        "qualityResolutionScale": 0.75
+      },
+      "ok": true,
+      "status": "pass",
+      "failureReason": null,
+      "phases": [
+        {
+          "phase": "baseline",
+          "elapsedMs": 2165,
+          "snapshot": {
+            "render": {
+              "mode": "quality",
+              "qualityRenderer": "path",
+              "qualityResolutionScale": 0.75,
+              "qualityMaxBounces": 1,
+              "qualitySamplesTarget": 4096,
+              "qualityCurrentSamples": 0,
+              "qualityRunning": true
+            },
+            "diagnostics": {
+              "webgpuReady": true,
+              "qualityActiveRenderer": "path",
+              "qualityRendererFallbackReason": null,
+              "qualityResolutionScale": 0.75,
+              "qualitySamplesPerSecond": 0.9,
+              "qualityLastResetReason": "scene_or_render_change",
+              "qualityPathExecutionMode": "worker",
+              "qualityPathAlignmentStatus": "ok",
+              "qualityPathAlignmentProbeCount": 2,
+              "qualityPathAlignmentHitMismatches": 0,
+              "qualityPathAlignmentMaxPointError": 0.000014245436601950457,
+              "qualityPathAlignmentMaxDistanceError": 0.000010470544630436507,
+              "qualityPathWorkerBatchCount": 26,
+              "qualityPathWorkerPixelCount": 70278,
+              "qualityPathWorkerPixelsPerSecond": 160956.72879972198,
+              "qualityPathMainThreadBatchCount": 3,
+              "qualityPathMainThreadPixelCount": 8109,
+              "qualityPathMainThreadPixelsPerSecond": 0
+            },
+            "objects": [
+              "Shadow Ribbon",
+              "Shadow Sphere",
+              "Key Light",
+              "Cool Fill"
+            ],
+            "canvas": {
+              "width": 372,
+              "height": 465,
+              "clientWidth": 496,
+              "clientHeight": 620
+            },
+            "browser": {
+              "devicePixelRatio": 1,
+              "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.7632.6 Safari/537.36",
+              "gpuAdapterInfo": {}
+            }
+          }
+        },
+        {
+          "phase": "after_resize",
+          "elapsedMs": 3110,
+          "snapshot": {
+            "render": {
+              "mode": "quality",
+              "qualityRenderer": "path",
+              "qualityResolutionScale": 0.75,
+              "qualityMaxBounces": 1,
+              "qualitySamplesTarget": 4096,
+              "qualityCurrentSamples": 0,
+              "qualityRunning": true
+            },
+            "diagnostics": {
+              "webgpuReady": true,
+              "qualityActiveRenderer": "path",
+              "qualityRendererFallbackReason": null,
+              "qualityResolutionScale": 0.75,
+              "qualitySamplesPerSecond": 0.098,
+              "qualityLastResetReason": "resize",
+              "qualityPathExecutionMode": "worker",
+              "qualityPathAlignmentStatus": "ok",
+              "qualityPathAlignmentProbeCount": 3,
+              "qualityPathAlignmentHitMismatches": 0,
+              "qualityPathAlignmentMaxPointError": 0.000026127657166012088,
+              "qualityPathAlignmentMaxDistanceError": 0.000024344622698180274,
+              "qualityPathWorkerBatchCount": 58,
+              "qualityPathWorkerPixelCount": 154626,
+              "qualityPathWorkerPixelsPerSecond": 23984.59383553278,
+              "qualityPathMainThreadBatchCount": 3,
+              "qualityPathMainThreadPixelCount": 8109,
+              "qualityPathMainThreadPixelsPerSecond": 0
+            },
+            "objects": [
+              "Shadow Ribbon",
+              "Shadow Sphere",
+              "Key Light",
+              "Cool Fill"
+            ],
+            "canvas": {
+              "width": 296,
+              "height": 507,
+              "clientWidth": 395,
+              "clientHeight": 677
+            },
+            "browser": {
+              "devicePixelRatio": 1,
+              "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.7632.6 Safari/537.36",
+              "gpuAdapterInfo": {}
+            }
+          }
+        }
+      ],
+      "deltaAfterResize": {
+        "probes": 1,
+        "hitMismatches": 0
+      },
+      "perfSmoke": {
+        "resizePhaseMs": 945,
+        "workerPixelsDelta": 84348,
+        "mainThreadPixelsDelta": 0,
+        "workerPixelsPerSecondDuringResize": 89257.14285714286,
+        "mainThreadPixelsPerSecondDuringResize": 0,
+        "warnings": []
+      },
+      "consoleWarnings": []
+    },
+    {
+      "scenario": {
+        "id": "shadow-dpr2-qrs0.5-1200x720",
+        "sceneId": "shadow-regression",
+        "expectedObjectName": {},
+        "viewport": {
+          "width": 1200,
+          "height": 720
+        },
+        "resizeViewport": {
+          "width": 1037,
+          "height": 761
+        },
+        "deviceScaleFactor": 2,
+        "qualityResolutionScale": 0.5
+      },
+      "ok": true,
+      "status": "pass",
+      "failureReason": null,
+      "phases": [
+        {
+          "phase": "baseline",
+          "elapsedMs": 2277,
+          "snapshot": {
+            "render": {
+              "mode": "quality",
+              "qualityRenderer": "path",
+              "qualityResolutionScale": 0.5,
+              "qualityMaxBounces": 1,
+              "qualitySamplesTarget": 4096,
+              "qualityCurrentSamples": 0,
+              "qualityRunning": true
+            },
+            "diagnostics": {
+              "webgpuReady": true,
+              "qualityActiveRenderer": "path",
+              "qualityRendererFallbackReason": null,
+              "qualityResolutionScale": 0.5,
+              "qualitySamplesPerSecond": 0.78,
+              "qualityLastResetReason": "scene_or_render_change",
+              "qualityPathExecutionMode": "worker",
+              "qualityPathAlignmentStatus": "ok",
+              "qualityPathAlignmentProbeCount": 2,
+              "qualityPathAlignmentHitMismatches": 0,
+              "qualityPathAlignmentMaxPointError": 0.000013213067866700699,
+              "qualityPathAlignmentMaxDistanceError": 0.000008778201760151205,
+              "qualityPathWorkerBatchCount": 34,
+              "qualityPathWorkerPixelCount": 139264,
+              "qualityPathWorkerPixelsPerSecond": 244100.11914326737,
+              "qualityPathMainThreadBatchCount": 2,
+              "qualityPathMainThreadPixelCount": 8192,
+              "qualityPathMainThreadPixelsPerSecond": 0
+            },
+            "objects": [
+              "Shadow Ribbon",
+              "Shadow Sphere",
+              "Key Light",
+              "Cool Fill"
+            ],
+            "canvas": {
+              "width": 496,
+              "height": 620,
+              "clientWidth": 496,
+              "clientHeight": 620
+            },
+            "browser": {
+              "devicePixelRatio": 2,
+              "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.7632.6 Safari/537.36",
+              "gpuAdapterInfo": {}
+            }
+          }
+        },
+        {
+          "phase": "after_resize",
+          "elapsedMs": 3767,
+          "snapshot": {
+            "render": {
+              "mode": "quality",
+              "qualityRenderer": "path",
+              "qualityResolutionScale": 0.5,
+              "qualityMaxBounces": 1,
+              "qualitySamplesTarget": 4096,
+              "qualityCurrentSamples": 0,
+              "qualityRunning": true
+            },
+            "diagnostics": {
+              "webgpuReady": true,
+              "qualityActiveRenderer": "path",
+              "qualityRendererFallbackReason": null,
+              "qualityResolutionScale": 0.5,
+              "qualitySamplesPerSecond": 0.4,
+              "qualityLastResetReason": "resize",
+              "qualityPathExecutionMode": "worker",
+              "qualityPathAlignmentStatus": "ok",
+              "qualityPathAlignmentProbeCount": 4,
+              "qualityPathAlignmentHitMismatches": 0,
+              "qualityPathAlignmentMaxPointError": 0.000013213067866700699,
+              "qualityPathAlignmentMaxDistanceError": 0.000008778201760151205,
+              "qualityPathWorkerBatchCount": 95,
+              "qualityPathWorkerPixelCount": 389120,
+              "qualityPathWorkerPixelsPerSecond": 245177.70288987475,
+              "qualityPathMainThreadBatchCount": 2,
+              "qualityPathMainThreadPixelCount": 8192,
+              "qualityPathMainThreadPixelsPerSecond": 0
+            },
+            "objects": [
+              "Shadow Ribbon",
+              "Shadow Sphere",
+              "Key Light",
+              "Cool Fill"
+            ],
+            "canvas": {
+              "width": 1037,
+              "height": 342,
+              "clientWidth": 1037,
+              "clientHeight": 342
+            },
+            "browser": {
+              "devicePixelRatio": 2,
+              "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.7632.6 Safari/537.36",
+              "gpuAdapterInfo": {}
+            }
+          }
+        }
+      ],
+      "deltaAfterResize": {
+        "probes": 2,
+        "hitMismatches": 0
+      },
+      "perfSmoke": {
+        "resizePhaseMs": 1490,
+        "workerPixelsDelta": 249856,
+        "mainThreadPixelsDelta": 0,
+        "workerPixelsPerSecondDuringResize": 167688.59060402686,
+        "mainThreadPixelsPerSecondDuringResize": 0,
+        "warnings": []
+      },
+      "consoleWarnings": []
+    },
+    {
+      "scenario": {
+        "id": "mixed-dpr1-qrs0.5-960x640",
+        "sceneId": "phase5b-path-mixed-geometry",
+        "expectedObjectName": {},
+        "viewport": {
+          "width": 960,
+          "height": 640
+        },
+        "resizeViewport": {
+          "width": 1097,
+          "height": 689
+        },
+        "deviceScaleFactor": 1,
+        "qualityResolutionScale": 0.5
+      },
+      "ok": true,
+      "status": "pass",
+      "failureReason": null,
+      "phases": [
+        {
+          "phase": "baseline",
+          "elapsedMs": 10955,
+          "snapshot": {
+            "render": {
+              "mode": "quality",
+              "qualityRenderer": "path",
+              "qualityResolutionScale": 0.5,
+              "qualityMaxBounces": 1,
+              "qualitySamplesTarget": 4096,
+              "qualityCurrentSamples": 1,
+              "qualityRunning": true
+            },
+            "diagnostics": {
+              "webgpuReady": true,
+              "qualityActiveRenderer": "path",
+              "qualityRendererFallbackReason": null,
+              "qualityResolutionScale": 0.5,
+              "qualitySamplesPerSecond": 0.94,
+              "qualityLastResetReason": "scene_or_render_change",
+              "qualityPathExecutionMode": "worker",
+              "qualityPathAlignmentStatus": "ok",
+              "qualityPathAlignmentProbeCount": 8,
+              "qualityPathAlignmentHitMismatches": 0,
+              "qualityPathAlignmentMaxPointError": 0.000005107157236392386,
+              "qualityPathAlignmentMaxDistanceError": 5.12649563688683e-7,
+              "qualityPathWorkerBatchCount": 136,
+              "qualityPathWorkerPixelCount": 145864,
+              "qualityPathWorkerPixelsPerSecond": 64619.06663191829,
+              "qualityPathMainThreadBatchCount": 20,
+              "qualityPathMainThreadPixelCount": 24616,
+              "qualityPathMainThreadPixelsPerSecond": 0
+            },
+            "objects": [
+              "Glass Sheet",
+              "Line Curve (No Tube)",
+              "Refraction Target",
+              "Warm Key",
+              "Cool Rim"
+            ],
+            "canvas": {
+              "width": 480,
+              "height": 144,
+              "clientWidth": 960,
+              "clientHeight": 288
+            },
+            "browser": {
+              "devicePixelRatio": 1,
+              "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.7632.6 Safari/537.36",
+              "gpuAdapterInfo": {}
+            }
+          }
+        },
+        {
+          "phase": "after_resize",
+          "elapsedMs": 31677,
+          "snapshot": {
+            "render": {
+              "mode": "quality",
+              "qualityRenderer": "path",
+              "qualityResolutionScale": 0.5,
+              "qualityMaxBounces": 1,
+              "qualitySamplesTarget": 4096,
+              "qualityCurrentSamples": 0,
+              "qualityRunning": true
+            },
+            "diagnostics": {
+              "webgpuReady": true,
+              "qualityActiveRenderer": "path",
+              "qualityRendererFallbackReason": null,
+              "qualityResolutionScale": 0.5,
+              "qualitySamplesPerSecond": 0,
+              "qualityLastResetReason": "resize",
+              "qualityPathExecutionMode": "worker",
+              "qualityPathAlignmentStatus": "ok",
+              "qualityPathAlignmentProbeCount": 17,
+              "qualityPathAlignmentHitMismatches": 0,
+              "qualityPathAlignmentMaxPointError": 0.00002842241268462158,
+              "qualityPathAlignmentMaxDistanceError": 0.000024976949521970937,
+              "qualityPathWorkerBatchCount": 479,
+              "qualityPathWorkerPixelCount": 509848,
+              "qualityPathWorkerPixelsPerSecond": 16159.02532986618,
+              "qualityPathMainThreadBatchCount": 20,
+              "qualityPathMainThreadPixelCount": 24616,
+              "qualityPathMainThreadPixelsPerSecond": 0
+            },
+            "objects": [
+              "Glass Sheet",
+              "Line Curve (No Tube)",
+              "Refraction Target",
+              "Warm Key",
+              "Cool Rim"
+            ],
+            "canvas": {
+              "width": 196,
+              "height": 294,
+              "clientWidth": 393,
+              "clientHeight": 589
+            },
+            "browser": {
+              "devicePixelRatio": 1,
+              "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.7632.6 Safari/537.36",
+              "gpuAdapterInfo": {}
+            }
+          }
+        }
+      ],
+      "deltaAfterResize": {
+        "probes": 9,
+        "hitMismatches": 0
+      },
+      "perfSmoke": {
+        "resizePhaseMs": 20722,
+        "workerPixelsDelta": 363984,
+        "mainThreadPixelsDelta": 0,
+        "workerPixelsPerSecondDuringResize": 17565.09989383264,
+        "mainThreadPixelsPerSecondDuringResize": 0,
+        "warnings": []
+      },
+      "consoleWarnings": []
+    },
+    {
+      "scenario": {
+        "id": "mixed-dpr1-qrs0.35-1000x640",
+        "sceneId": "phase5b-path-mixed-geometry",
+        "expectedObjectName": {},
+        "viewport": {
+          "width": 1000,
+          "height": 640
+        },
+        "resizeViewport": {
+          "width": 947,
+          "height": 701
+        },
+        "deviceScaleFactor": 1,
+        "qualityResolutionScale": 0.35
+      },
+      "ok": true,
+      "status": "pass",
+      "failureReason": null,
+      "phases": [
+        {
+          "phase": "baseline",
+          "elapsedMs": 5146,
+          "snapshot": {
+            "render": {
+              "mode": "quality",
+              "qualityRenderer": "path",
+              "qualityResolutionScale": 0.35,
+              "qualityMaxBounces": 1,
+              "qualitySamplesTarget": 4096,
+              "qualityCurrentSamples": 0,
+              "qualityRunning": true
+            },
+            "diagnostics": {
+              "webgpuReady": true,
+              "qualityActiveRenderer": "path",
+              "qualityRendererFallbackReason": null,
+              "qualityResolutionScale": 0.35,
+              "qualitySamplesPerSecond": 0.94,
+              "qualityLastResetReason": "scene_or_render_change",
+              "qualityPathExecutionMode": "worker",
+              "qualityPathAlignmentStatus": "ok",
+              "qualityPathAlignmentProbeCount": 6,
+              "qualityPathAlignmentHitMismatches": 0,
+              "qualityPathAlignmentMaxPointError": 0.000008450433005380067,
+              "qualityPathAlignmentMaxDistanceError": 0.000002458446857644958,
+              "qualityPathWorkerBatchCount": 46,
+              "qualityPathWorkerPixelCount": 30942,
+              "qualityPathWorkerPixelsPerSecond": 32964.218455743874,
+              "qualityPathMainThreadBatchCount": 19,
+              "qualityPathMainThreadPixelCount": 23768,
+              "qualityPathMainThreadPixelsPerSecond": 0
+            },
+            "objects": [
+              "Glass Sheet",
+              "Line Curve (No Tube)",
+              "Refraction Target",
+              "Warm Key",
+              "Cool Rim"
+            ],
+            "canvas": {
+              "width": 350,
+              "height": 100,
+              "clientWidth": 1000,
+              "clientHeight": 288
+            },
+            "browser": {
+              "devicePixelRatio": 1,
+              "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.7632.6 Safari/537.36",
+              "gpuAdapterInfo": {}
+            }
+          }
+        },
+        {
+          "phase": "after_resize",
+          "elapsedMs": 13713,
+          "snapshot": {
+            "render": {
+              "mode": "quality",
+              "qualityRenderer": "path",
+              "qualityResolutionScale": 0.35,
+              "qualityMaxBounces": 1,
+              "qualitySamplesTarget": 4096,
+              "qualityCurrentSamples": 0,
+              "qualityRunning": true
+            },
+            "diagnostics": {
+              "webgpuReady": true,
+              "qualityActiveRenderer": "path",
+              "qualityRendererFallbackReason": null,
+              "qualityResolutionScale": 0.35,
+              "qualitySamplesPerSecond": 0,
+              "qualityLastResetReason": "resize",
+              "qualityPathExecutionMode": "worker",
+              "qualityPathAlignmentStatus": "ok",
+              "qualityPathAlignmentProbeCount": 10,
+              "qualityPathAlignmentHitMismatches": 0,
+              "qualityPathAlignmentMaxPointError": 0.000014875555687614862,
+              "qualityPathAlignmentMaxDistanceError": 0.000003850105066760534,
+              "qualityPathWorkerBatchCount": 189,
+              "qualityPathWorkerPixelCount": 108225,
+              "qualityPathWorkerPixelsPerSecond": 32689.243027888446,
+              "qualityPathMainThreadBatchCount": 19,
+              "qualityPathMainThreadPixelCount": 23768,
+              "qualityPathMainThreadPixelsPerSecond": 0
+            },
+            "objects": [
+              "Glass Sheet",
+              "Line Curve (No Tube)",
+              "Refraction Target",
+              "Warm Key",
+              "Cool Rim"
+            ],
+            "canvas": {
+              "width": 331,
+              "height": 110,
+              "clientWidth": 947,
+              "clientHeight": 315
+            },
+            "browser": {
+              "devicePixelRatio": 1,
+              "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.7632.6 Safari/537.36",
+              "gpuAdapterInfo": {}
+            }
+          }
+        }
+      ],
+      "deltaAfterResize": {
+        "probes": 4,
+        "hitMismatches": 0
+      },
+      "perfSmoke": {
+        "resizePhaseMs": 8567,
+        "workerPixelsDelta": 77283,
+        "mainThreadPixelsDelta": 0,
+        "workerPixelsPerSecondDuringResize": 9021.01085560873,
+        "mainThreadPixelsPerSecondDuringResize": 0,
+        "warnings": []
+      },
+      "consoleWarnings": []
+    },
+    {
+      "scenario": {
+        "id": "mixed-dpr2-qrs0.5-900x600",
+        "sceneId": "phase5b-path-mixed-geometry",
+        "expectedObjectName": {},
+        "viewport": {
+          "width": 900,
+          "height": 600
+        },
+        "resizeViewport": {
+          "width": 977,
+          "height": 653
+        },
+        "deviceScaleFactor": 2,
+        "qualityResolutionScale": 0.5
+      },
+      "ok": true,
+      "status": "pass",
+      "failureReason": null,
+      "phases": [
+        {
+          "phase": "baseline",
+          "elapsedMs": 21643,
+          "snapshot": {
+            "render": {
+              "mode": "quality",
+              "qualityRenderer": "path",
+              "qualityResolutionScale": 0.5,
+              "qualityMaxBounces": 1,
+              "qualitySamplesTarget": 4096,
+              "qualityCurrentSamples": 3,
+              "qualityRunning": true
+            },
+            "diagnostics": {
+              "webgpuReady": true,
+              "qualityActiveRenderer": "path",
+              "qualityRendererFallbackReason": null,
+              "qualityResolutionScale": 0.5,
+              "qualitySamplesPerSecond": 0.94,
+              "qualityLastResetReason": "scene_or_render_change",
+              "qualityPathExecutionMode": "worker",
+              "qualityPathAlignmentStatus": "ok",
+              "qualityPathAlignmentProbeCount": 10,
+              "qualityPathAlignmentHitMismatches": 0,
+              "qualityPathAlignmentMaxPointError": 0.000005135885462185648,
+              "qualityPathAlignmentMaxDistanceError": 5.03256547546016e-7,
+              "qualityPathWorkerBatchCount": 277,
+              "qualityPathWorkerPixelCount": 1040546,
+              "qualityPathWorkerPixelsPerSecond": 227365.26946107784,
+              "qualityPathMainThreadBatchCount": 16,
+              "qualityPathMainThreadPixelCount": 61051,
+              "qualityPathMainThreadPixelsPerSecond": 0
+            },
+            "objects": [
+              "Glass Sheet",
+              "Line Curve (No Tube)",
+              "Refraction Target",
+              "Warm Key",
+              "Cool Rim"
+            ],
+            "canvas": {
+              "width": 900,
+              "height": 270,
+              "clientWidth": 900,
+              "clientHeight": 270
+            },
+            "browser": {
+              "devicePixelRatio": 2,
+              "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.7632.6 Safari/537.36",
+              "gpuAdapterInfo": {}
+            }
+          }
+        },
+        {
+          "phase": "after_resize",
+          "elapsedMs": 46199,
+          "snapshot": {
+            "render": {
+              "mode": "quality",
+              "qualityRenderer": "path",
+              "qualityResolutionScale": 0.5,
+              "qualityMaxBounces": 1,
+              "qualitySamplesTarget": 4096,
+              "qualityCurrentSamples": 0,
+              "qualityRunning": true
+            },
+            "diagnostics": {
+              "webgpuReady": true,
+              "qualityActiveRenderer": "path",
+              "qualityRendererFallbackReason": null,
+              "qualityResolutionScale": 0.5,
+              "qualitySamplesPerSecond": 0.001,
+              "qualityLastResetReason": "resize",
+              "qualityPathExecutionMode": "worker",
+              "qualityPathAlignmentStatus": "ok",
+              "qualityPathAlignmentProbeCount": 29,
+              "qualityPathAlignmentHitMismatches": 0,
+              "qualityPathAlignmentMaxPointError": 0.000005398406071498743,
+              "qualityPathAlignmentMaxDistanceError": 5.03256547546016e-7,
+              "qualityPathWorkerBatchCount": 629,
+              "qualityPathWorkerPixelCount": 2361973,
+              "qualityPathWorkerPixelsPerSecond": 522.7846108689024,
+              "qualityPathMainThreadBatchCount": 16,
+              "qualityPathMainThreadPixelCount": 61051,
+              "qualityPathMainThreadPixelsPerSecond": 0
+            },
+            "objects": [
+              "Glass Sheet",
+              "Line Curve (No Tube)",
+              "Refraction Target",
+              "Warm Key",
+              "Cool Rim"
+            ],
+            "canvas": {
+              "width": 977,
+              "height": 294,
+              "clientWidth": 977,
+              "clientHeight": 294
+            },
+            "browser": {
+              "devicePixelRatio": 2,
+              "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.7632.6 Safari/537.36",
+              "gpuAdapterInfo": {}
+            }
+          }
+        }
+      ],
+      "deltaAfterResize": {
+        "probes": 19,
+        "hitMismatches": 0
+      },
+      "perfSmoke": {
+        "resizePhaseMs": 24556,
+        "workerPixelsDelta": 1321427,
+        "mainThreadPixelsDelta": 0,
+        "workerPixelsPerSecondDuringResize": 53812.795243525004,
+        "mainThreadPixelsPerSecondDuringResize": 0,
+        "warnings": []
+      },
+      "consoleWarnings": []
+    }
+  ],
+  "summary": {
+    "total": 6,
+    "pass": 6,
+    "warning": 0,
+    "fail": 0,
+    "skipped": 0,
+    "perfWarnings": 0
+  }
+}
