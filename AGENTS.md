@@ -785,19 +785,40 @@ Abort criteria:
 
 ## Known Issues / Current Bugs (As of This File)
 
-1. **Interactive realism is still limited and is now the primary rendering focus**
+1. **Active blocker (unresolved): interactive reflection path can regress to missing reflections and, in some runs, missing visible geometry**
+- Date observed: February 27, 2026.
+- User-visible symptoms reported and reproduced in this session:
+- Objects sometimes flash briefly on startup/restart and then disappear from the viewport.
+- In other runs, objects stay visible but mirrored materials show little/no scene reflection (mostly light highlights only).
+- Renderer diagnostics has been seen to oscillate between `probe` and `environment_fallback` while the fallback reason stays at refresh/build messages.
+- Main file involved: `src/renderer/SceneController.ts`.
+- Repro pattern used:
+- Start app with default scene (Ribbon + Helix + Warm Fill), switch Ribbon material to `Mirror`, then interact with selection/toggles or add an implicit object.
+- Expected result is stable reflections and persistent object visibility; current behavior is inconsistent.
+- Current technical understanding:
+- Reflection probe and environment-fallback handoff in interactive mode is still unstable.
+- `RawCubeTexture` fallback readiness can fluctuate on some WebGPU runs; if fallback/probe state is rebound at the wrong moment, materials can end up with no usable reflection source.
+- Assigning a not-ready reflection texture to `PBRMaterial` can contribute to objects not rendering.
+- Immediate handoff guidance for a fresh agent:
+- Treat current reflection changes in `src/renderer/SceneController.ts` as in-progress and re-validate from first principles.
+- Build a strict reflection-source state machine (`probe_ready`, `fallback_ready`, `external_env`, `none`) and drive all material rebinding from explicit state transitions.
+- Add temporary diagnostics for: probe ready/not-ready transitions, fallback ready/not-ready transitions, current chosen reflection source, and per-plot reflection texture readiness.
+- Keep fallback binding conservative: do not bind fallback or per-material reflection texture unless `isReady()` is true.
+- Add a deterministic Playwright regression flow that verifies both visibility (objects remain rendered) and reflection presence after startup and after object/material changes.
+
+2. **Interactive realism is still limited and is now the primary rendering focus**
 - Opaque reflections are not yet where the user wants them.
 - Transparent materials still rely on approximate interactive transmission/refraction behavior and may produce artifacts in layered/transmissive scenes.
 - Material/light defaults need calibration for stronger out-of-box results.
 
-2. **Legacy quality-renderer code remains in the repo but is not an active product path**
+3. **Legacy quality-renderer code remains in the repo but is not an active product path**
 - `Quality (progressive)` still has legacy paths (`TAA`, `Hybrid GPU Preview`, experimental `Quality + Path`), but this stack is now parked for product work.
 - The Phase 5B `path` backend contains significant prototype work (worker offload, BVHs, diagnostics, transport experiments), but it remains slow and complex and should not be resumed unless priorities explicitly change.
 
-3. **WebGPU Playwright visual capture reliability**
+4. **WebGPU Playwright visual capture reliability**
 - Headless Chromium screenshots may not capture WebGPU canvas pixels consistently.
 
-4. **Vitest/Playwright test discovery overlap**
+5. **Vitest/Playwright test discovery overlap**
 - `npm run test:run` can include Playwright test files unless narrowed or Vitest config is tightened.
 
 ## Recommended Next Steps (Engineering Priority, Current Strategy)
@@ -841,5 +862,9 @@ The active strategy is to abandon further quality-renderer product development a
   - `/?testScene=shadow-regression`
   - `/?testScene=point-shadow-regression`
   - `/?testScene=phase5b-path-mixed-geometry` (now a useful mixed-material regression/demo scene, not just a path backend scene)
+- For the active reflection blocker (February 27, 2026 handoff), always include these manual checks before concluding a fix:
+  - Fresh restart with default autosave scene (Ribbon/Helix/Light): objects remain visible after first few seconds.
+  - Set Ribbon to `Mirror`: visible environment/probe reflections appear (not only direct light highlights).
+  - Add/toggle an implicit object while reflections are active: scene does not collapse to an empty-looking viewport.
 - Implement interactive renderer changes autonomously in larger batches; avoid routine clarification prompts unless blocked by a real product/platform tradeoff.
 - The implicit lighting hemisphere issue is considered resolved unless new evidence/regressions appear.

@@ -1,5 +1,6 @@
 import {
   ArcRotateCamera,
+  BaseTexture,
   Color3,
   Color4,
   CubeTexture,
@@ -16,6 +17,7 @@ import {
   PointLight,
   PointerEventTypes,
   ReflectionProbe,
+  RawCubeTexture,
   RenderTargetTexture,
   Scene,
   ShadowGenerator,
@@ -109,8 +111,12 @@ export class SceneController {
   private interactiveReflectionProbeRefreshCount = 0;
   private interactiveReflectionProbeWarmupFrames = 0;
   private interactiveReflectionProbeUsable = false;
+  private interactiveReflectionProbeBlocked = false;
+  private probeCaptureMaterialOverrides: Array<{
+    material: PBRMaterial;
+    reflectionTexture: Nullable<BaseTexture>;
+  }> = [];
   private lastInteractiveReflectionSignature = '';
-  private lastEnvironmentFallbackSignature = '';
   private plotVisuals = new Map<string, PlotVisual>();
   private pointLightVisuals = new Map<string, PointLightVisual>();
   private pointerObserver: Nullable<Observer<PointerInfo>> = null;
@@ -215,8 +221,11 @@ export class SceneController {
         this.maybeRebindAfterReflectionTextureReady();
         this.handleQualityFrameRendered();
       } catch (error) {
-        this.renderLoopFailed = true;
         const message = error instanceof Error ? error.message : 'Unknown Babylon render error';
+        if (this.tryRecoverFromRenderError(message, error)) {
+          return;
+        }
+        this.renderLoopFailed = true;
         useAppStore.getState().setStatusMessage(`Render loop error: ${message}`);
         this.engine?.stopRenderLoop();
         console.error('Scene render loop failed', error);
@@ -237,6 +246,7 @@ export class SceneController {
     this.qualityPreviewOverlayCanvas?.remove();
     this.qualityPreviewOverlayCanvas = null;
     this.qualityPreviewOverlayCtx = null;
+    this.restoreProbeCaptureMaterials();
     this.sceneReflectionProbe?.dispose();
     this.sceneReflectionProbe = null;
     this.sceneReflectionProbeSize = 0;
@@ -288,8 +298,8 @@ export class SceneController {
     this.interactiveReflectionProbeRefreshCount = 0;
     this.interactiveReflectionProbeWarmupFrames = 0;
     this.interactiveReflectionProbeUsable = false;
+    this.interactiveReflectionProbeBlocked = false;
     this.lastInteractiveReflectionSignature = '';
-    this.lastEnvironmentFallbackSignature = '';
     this.environmentFallbackTextureWasReady = false;
     this.lastCurveTubeCameraRadius = Number.NaN;
     useAppStore.getState().setRenderDiagnostics({ webgpuReady: false });
@@ -794,16 +804,24 @@ export class SceneController {
       state.render.mode === 'interactive'
       && state.render.interactiveQuality !== 'performance'
       && hasReflectiveOpaquePlot;
-    // Babylon ReflectionProbe + current WebGPU/PBR path is causing a read/write hazard on startup
-    // (probe texture sampled while being rendered) on this app path. Keep the code parked and use
-    // the environment fallback for reliability until a safe integration path is implemented.
-    const probeSupportedOnThisRenderer = false;
+    // Headless/WebDriver WebGPU contexts are prone to probe RTT validation hazards.
+    // Keep probe support enabled for normal interactive sessions, but force fallback
+    // in automated/headless runs for deterministic stability.
+    const probeSupportedOnThisRenderer = !isHeadlessOrAutomatedBrowser() && !this.interactiveReflectionProbeBlocked;
     const wantsProbe =
       probeWouldBeUseful
       && probeSupportedOnThisRenderer;
     const desiredProbeSize = state.render.interactiveQuality === 'quality' ? 256 : 160;
 
     if (!wantsProbe) {
+      this.restoreProbeCaptureMaterials();
+      const usingProbeTexture = Boolean(
+        this.sceneReflectionProbe
+        && this.scene.environmentTexture === this.sceneReflectionProbe.cubeTexture,
+      );
+      if (usingProbeTexture) {
+        this.scene.environmentTexture = null;
+      }
       if (this.sceneReflectionProbe) {
         this.sceneReflectionProbe.dispose();
         this.sceneReflectionProbe = null;
@@ -813,25 +831,28 @@ export class SceneController {
       this.interactiveReflectionLastRefreshReason = null;
       this.interactiveReflectionProbeWarmupFrames = 0;
       this.interactiveReflectionProbeUsable = false;
-      this.interactiveReflectionPath = this.scene.environmentTexture ? 'environment_fallback' : 'none';
-      if (!this.scene.environmentTexture) {
-        this.interactiveReflectionFallbackReason = 'Environment fallback unavailable';
-      } else if (probeWouldBeUseful && !probeSupportedOnThisRenderer) {
-        this.interactiveReflectionFallbackReason = 'Reflection probe path disabled on current WebGPU renderer; using environment fallback';
+      if (probeWouldBeUseful && !probeSupportedOnThisRenderer) {
+        const reason = this.interactiveReflectionProbeBlocked
+          ? 'Reflection probe disabled for stability on this WebGPU configuration'
+          : 'Reflection probe unavailable on this renderer; using environment fallback';
+        this.activateEnvironmentFallback(reason);
       } else {
-        this.interactiveReflectionFallbackReason = null;
+        this.activateEnvironmentFallback(null);
       }
       return;
     }
 
     if (!this.sceneReflectionProbe || this.sceneReflectionProbeSize !== desiredProbeSize) {
       try {
+        this.restoreProbeCaptureMaterials();
         this.sceneReflectionProbe?.dispose();
         this.sceneReflectionProbe = new ReflectionProbe(
           'interactive-scene-reflections',
           desiredProbeSize,
           this.scene,
-          true,
+          // WebGPU stability: generating probe mipmaps can trigger a texture
+          // read/write validation hazard on some drivers in this app path.
+          false,
           false,
           false,
         );
@@ -839,19 +860,23 @@ export class SceneController {
         this.sceneReflectionProbe.cubeTexture.gammaSpace = false;
         this.sceneReflectionProbe.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
         this.sceneReflectionProbe.cubeTexture.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
+        this.sceneReflectionProbe.cubeTexture.onBeforeBindObservable.add(() => {
+          this.prepareProbeCaptureMaterials();
+        });
+        this.sceneReflectionProbe.cubeTexture.onAfterUnbindObservable.add(() => {
+          this.restoreProbeCaptureMaterials();
+        });
         this.interactiveReflectionProbeUsable = false;
         this.lastInteractiveReflectionSignature = '';
       } catch (error) {
+        this.restoreProbeCaptureMaterials();
         this.sceneReflectionProbe?.dispose();
         this.sceneReflectionProbe = null;
         this.sceneReflectionProbeSize = 0;
         this.interactiveReflectionLastRefreshReason = null;
         this.interactiveReflectionProbeWarmupFrames = 0;
         this.interactiveReflectionProbeUsable = false;
-        this.interactiveReflectionPath = this.scene.environmentTexture ? 'environment_fallback' : 'none';
-        this.interactiveReflectionFallbackReason = this.scene.environmentTexture
-          ? 'Reflection probe unavailable; using environment fallback'
-          : 'Reflection probe unavailable and environment fallback unavailable';
+        this.activateEnvironmentFallback('Reflection probe unavailable; using environment fallback');
         console.warn('Interactive reflection probe creation failed', error);
         return;
       }
@@ -864,8 +889,10 @@ export class SceneController {
       (bounds.min.z + bounds.max.z) * 0.5,
     );
 
-    this.interactiveReflectionPath = 'probe';
-    this.interactiveReflectionFallbackReason = null;
+    if (this.interactiveReflectionProbeUsable && this.activateProbeEnvironment()) {
+      return;
+    }
+    this.activateEnvironmentFallback('Refreshing reflection probe');
   }
 
   private syncInteractiveReflectionProbe(state: Pick<AppState, 'scene' | 'render' | 'objects' | 'plotJobs'>): void {
@@ -958,13 +985,14 @@ export class SceneController {
     if (!this.sceneReflectionProbe) {
       return;
     }
+    this.activateEnvironmentFallback(reason === 'probe_init' ? 'Building reflection probe' : 'Refreshing reflection probe');
     this.sceneReflectionProbe.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
     this.sceneReflectionProbe.cubeTexture.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
     this.sceneReflectionProbe.cubeTexture.resetRefreshCounter();
     this.interactiveReflectionLastRefreshReason = reason;
     this.interactiveReflectionProbeRefreshCount += 1;
     // Avoid sampling the probe texture in the same frame it is refreshed (WebGPU read/write hazard).
-    this.interactiveReflectionProbeWarmupFrames = 2;
+    this.interactiveReflectionProbeWarmupFrames = 1;
     this.interactiveReflectionProbeUsable = false;
   }
 
@@ -973,72 +1001,127 @@ export class SceneController {
       return;
     }
 
-    if (this.scene.environmentTexture && this.scene.environmentTexture !== this.environmentFallbackTexture) {
-      // Respect externally-provided environment textures (legacy scenes / Babylon defaults).
-      return;
+    const probeTexture = this.sceneReflectionProbe?.cubeTexture ?? null;
+    const usingProbeTexture = Boolean(probeTexture && this.scene.environmentTexture === probeTexture);
+    const hasExternalEnvironmentTexture = Boolean(
+      this.scene.environmentTexture
+      && this.scene.environmentTexture !== this.environmentFallbackTexture
+      && !usingProbeTexture,
+    );
+
+    if (this.environmentFallbackTexture) {
+      const fallbackReady = this.environmentFallbackTexture.isReady();
+      if (!fallbackReady && this.environmentFallbackTextureWasReady) {
+        // Some WebGPU runs can invalidate the fallback texture after initial use.
+        // Recreate it on the next pass instead of keeping a stale texture bound.
+        if (this.scene.environmentTexture === this.environmentFallbackTexture) {
+          this.scene.environmentTexture = null;
+        }
+        this.environmentFallbackTexture.dispose();
+        this.environmentFallbackTexture = null;
+        this.environmentFallbackTextureWasReady = false;
+      } else {
+        this.environmentFallbackTextureWasReady = fallbackReady;
+        if (
+          !usingProbeTexture
+          && !hasExternalEnvironmentTexture
+          && this.scene.environmentTexture !== this.environmentFallbackTexture
+          && fallbackReady
+        ) {
+          this.scene.environmentTexture = this.environmentFallbackTexture;
+        }
+        return;
+      }
     }
 
-    const signature = JSON.stringify({
-      backgroundMode: sceneSettings.backgroundMode,
-      backgroundColor: sceneSettings.backgroundColor,
-      gradientTopColor: sceneSettings.gradientTopColor,
-      gradientBottomColor: sceneSettings.gradientBottomColor,
-      groundPlaneColor: sceneSettings.groundPlaneColor,
-      ambientColor: sceneSettings.ambient.color,
-      ambientIntensity: round3(sceneSettings.ambient.intensity),
-      directionalColor: sceneSettings.directional.color,
-      directionalIntensity: round3(sceneSettings.directional.intensity),
-    });
+    if (!this.environmentFallbackTexture) {
+      try {
+        const topBase = sceneSettings.backgroundMode === 'gradient'
+          ? color3(sceneSettings.gradientTopColor)
+          : color3(sceneSettings.backgroundColor);
+        const bottomBase = sceneSettings.backgroundMode === 'gradient'
+          ? color3(sceneSettings.gradientBottomColor)
+          : color3(sceneSettings.backgroundColor);
+        const groundBase = color3(sceneSettings.groundPlaneColor);
+        const ambientTint = color3(sceneSettings.ambient.color).scale(clamp(sceneSettings.ambient.intensity * 0.2, 0, 0.3));
+        const sunTint = color3(sceneSettings.directional.color).scale(clamp(sceneSettings.directional.intensity * 0.12, 0, 0.35));
+        const sideColor = mixColor(mixColor(topBase, bottomBase, 0.55), ambientTint, 0.45);
+        const upColor = mixColor(topBase, sunTint, 0.35);
+        const downColor = mixColor(bottomBase.scale(0.55), groundBase.scale(0.9), 0.6);
 
-    if (this.environmentFallbackTexture && signature === this.lastEnvironmentFallbackSignature) {
-      if (this.scene.environmentTexture !== this.environmentFallbackTexture) {
-        this.scene.environmentTexture = this.environmentFallbackTexture;
+        const faceSize = 32;
+        const faces = [
+          makeEnvironmentFaceBytes(sideColor, sideColor, faceSize),
+          makeEnvironmentFaceBytes(sideColor, sideColor, faceSize),
+          makeEnvironmentFaceBytes(mixColor(sideColor, upColor, 0.15), mixColor(sideColor, downColor, 0.2), faceSize),
+          makeEnvironmentFaceBytes(mixColor(sideColor, upColor, 0.15), mixColor(sideColor, downColor, 0.2), faceSize),
+          makeEnvironmentFaceBytes(upColor, mixColor(upColor, sideColor, 0.35), faceSize),
+          makeEnvironmentFaceBytes(mixColor(sideColor, downColor, 0.25), downColor, faceSize),
+        ];
+
+        this.environmentFallbackTexture = new RawCubeTexture(this.scene, faces, faceSize);
+        this.environmentFallbackTexture.name = 'interactive-env-fallback';
+        this.environmentFallbackTexture.gammaSpace = false;
+        const internal = (this.environmentFallbackTexture as unknown as { _texture?: {
+          _sphericalPolynomialComputed?: boolean;
+          _sphericalPolynomialPromise?: Promise<unknown> | null;
+          _sphericalPolynomial?: unknown;
+        } })._texture;
+        if (internal) {
+          // Prevent async spherical-polynomial writes from racing with texture disposal on restart.
+          internal._sphericalPolynomialComputed = true;
+          internal._sphericalPolynomialPromise = null;
+          internal._sphericalPolynomial = null;
+        }
+        this.environmentFallbackTextureWasReady = this.environmentFallbackTexture.isReady();
+        if (!usingProbeTexture && !hasExternalEnvironmentTexture && this.environmentFallbackTextureWasReady) {
+          this.scene.environmentTexture = this.environmentFallbackTexture;
+        }
+      } catch (error) {
+        if (this.scene.environmentTexture === this.environmentFallbackTexture) {
+          this.scene.environmentTexture = null;
+        }
+        this.environmentFallbackTexture?.dispose();
+        this.environmentFallbackTexture = null;
+        this.environmentFallbackTextureWasReady = false;
+        console.warn('Interactive environment fallback texture creation failed', error);
       }
       return;
     }
 
-    try {
-      const topBase = sceneSettings.backgroundMode === 'gradient'
-        ? color3(sceneSettings.gradientTopColor)
-        : color3(sceneSettings.backgroundColor);
-      const bottomBase = sceneSettings.backgroundMode === 'gradient'
-        ? color3(sceneSettings.gradientBottomColor)
-        : color3(sceneSettings.backgroundColor);
-      const groundBase = color3(sceneSettings.groundPlaneColor);
-      const ambientTint = color3(sceneSettings.ambient.color).scale(clamp(sceneSettings.ambient.intensity * 0.2, 0, 0.3));
-      const sunTint = color3(sceneSettings.directional.color).scale(clamp(sceneSettings.directional.intensity * 0.12, 0, 0.35));
-      const sideColor = mixColor(mixColor(topBase, bottomBase, 0.55), ambientTint, 0.45);
-      const upColor = mixColor(topBase, sunTint, 0.35);
-      const downColor = mixColor(bottomBase.scale(0.55), groundBase.scale(0.9), 0.6);
+  }
 
-      const faces = [
-        makeEnvironmentFaceDataUrl(sideColor, sideColor),
-        makeEnvironmentFaceDataUrl(sideColor, sideColor),
-        makeEnvironmentFaceDataUrl(mixColor(sideColor, upColor, 0.15), mixColor(sideColor, downColor, 0.2)),
-        makeEnvironmentFaceDataUrl(mixColor(sideColor, upColor, 0.15), mixColor(sideColor, downColor, 0.2)),
-        makeEnvironmentFaceDataUrl(upColor, mixColor(upColor, sideColor, 0.35)),
-        makeEnvironmentFaceDataUrl(mixColor(sideColor, downColor, 0.25), downColor),
-      ];
-
-      if (this.scene.environmentTexture === this.environmentFallbackTexture) {
-        this.scene.environmentTexture = null;
-      }
-      this.environmentFallbackTexture?.dispose();
-      this.environmentFallbackTexture = CubeTexture.CreateFromImages(faces, this.scene, false);
-      this.environmentFallbackTexture.name = 'interactive-env-fallback';
-      this.environmentFallbackTextureWasReady = this.environmentFallbackTexture.isReady();
-      this.scene.environmentTexture = this.environmentFallbackTexture;
-      this.lastEnvironmentFallbackSignature = signature;
-    } catch (error) {
-      if (this.scene.environmentTexture === this.environmentFallbackTexture) {
-        this.scene.environmentTexture = null;
-      }
-      this.environmentFallbackTexture?.dispose();
-      this.environmentFallbackTexture = null;
-      this.environmentFallbackTextureWasReady = false;
-      this.lastEnvironmentFallbackSignature = '';
-      console.warn('Interactive environment fallback texture creation failed', error);
+  private prepareProbeCaptureMaterials(): void {
+    if (!this.sceneReflectionProbe) {
+      return;
     }
+    this.probeCaptureMaterialOverrides.length = 0;
+    const probeTexture = this.sceneReflectionProbe.cubeTexture;
+    const fallbackTexture = this.environmentFallbackTexture ?? this.scene?.environmentTexture ?? null;
+    const seenMaterials = new Set<PBRMaterial>();
+    const renderList = this.sceneReflectionProbe.renderList ?? [];
+    for (const mesh of renderList) {
+      const material = mesh.material;
+      if (!(material instanceof PBRMaterial) || seenMaterials.has(material)) {
+        continue;
+      }
+      seenMaterials.add(material);
+      if (material.reflectionTexture !== probeTexture) {
+        continue;
+      }
+      this.probeCaptureMaterialOverrides.push({
+        material,
+        reflectionTexture: material.reflectionTexture,
+      });
+      material.reflectionTexture = fallbackTexture;
+    }
+  }
+
+  private restoreProbeCaptureMaterials(): void {
+    for (const entry of this.probeCaptureMaterialOverrides) {
+      entry.material.reflectionTexture = entry.reflectionTexture;
+    }
+    this.probeCaptureMaterialOverrides.length = 0;
   }
 
   private rebindPlotMaterialsFromStateObjects(objects: SceneObject[]): void {
@@ -1060,11 +1143,10 @@ export class SceneController {
     if (!this.sceneReflectionProbe || this.interactiveReflectionProbeUsable) {
       return;
     }
-    if (!this.sceneReflectionProbe.cubeTexture.isReady()) {
-      return;
-    }
     this.interactiveReflectionProbeUsable = true;
-    this.rebindPlotMaterialsFromStateObjects(useAppStore.getState().objects);
+    if (!this.activateProbeEnvironment()) {
+      this.activateEnvironmentFallback('Reflection probe ready, but environment binding failed');
+    }
   }
 
   private maybeRebindAfterReflectionTextureReady(): void {
@@ -1075,10 +1157,133 @@ export class SceneController {
     const ready = this.environmentFallbackTexture.isReady();
     if (ready && !this.environmentFallbackTextureWasReady) {
       this.environmentFallbackTextureWasReady = true;
-      this.rebindPlotMaterialsFromStateObjects(useAppStore.getState().objects);
+      if (this.interactiveReflectionPath === 'probe') {
+        this.rebindPlotMaterialsFromStateObjects(useAppStore.getState().objects);
+      } else {
+        this.activateEnvironmentFallback(this.interactiveReflectionFallbackReason);
+      }
       return;
     }
+    if (!ready && this.environmentFallbackTextureWasReady && this.scene?.environmentTexture === this.environmentFallbackTexture) {
+      this.scene.environmentTexture = null;
+    }
     this.environmentFallbackTextureWasReady = ready;
+  }
+
+  private tryRecoverFromRenderError(message: string, error: unknown): boolean {
+    if (!this.sceneReflectionProbe || this.interactiveReflectionProbeBlocked) {
+      return false;
+    }
+    const normalized = message.toLowerCase();
+    const looksLikeWebGPUProbeHazard =
+      normalized.includes('commandbuffer')
+      || normalized.includes('gpuvalidationerror')
+      || normalized.includes('renderattachment')
+      || normalized.includes('synchronization scope')
+      || normalized.includes('texturebinding');
+    if (!looksLikeWebGPUProbeHazard) {
+      return false;
+    }
+
+    this.restoreProbeCaptureMaterials();
+    if (this.scene?.environmentTexture === this.sceneReflectionProbe.cubeTexture) {
+      this.scene.environmentTexture = null;
+    }
+    this.sceneReflectionProbe.dispose();
+    this.sceneReflectionProbe = null;
+    this.sceneReflectionProbeSize = 0;
+    this.interactiveReflectionProbeUsable = false;
+    this.interactiveReflectionProbeWarmupFrames = 0;
+    this.lastInteractiveReflectionSignature = '';
+    this.interactiveReflectionProbeBlocked = true;
+    this.interactiveReflectionLastRefreshReason = 'probe_runtime_error';
+    this.activateEnvironmentFallback('Reflection probe disabled after WebGPU validation error');
+    this.rebindPlotMaterialsFromStateObjects(useAppStore.getState().objects);
+    useAppStore.getState().setStatusMessage(
+      'Disabled reflection probe on this WebGPU configuration to keep rendering stable.',
+    );
+    console.warn('Recovered from WebGPU probe error by disabling reflection probe', error);
+    return true;
+  }
+
+  private activateEnvironmentFallback(reason: string | null): boolean {
+    if (!this.scene) {
+      this.interactiveReflectionPath = 'none';
+      this.interactiveReflectionFallbackReason = reason ?? 'Environment fallback unavailable';
+      return false;
+    }
+    const wasUsingProbePath = this.interactiveReflectionPath === 'probe';
+    if (this.environmentFallbackTexture) {
+      if (this.isUsableReflectionTexture(this.environmentFallbackTexture)) {
+        const changedEnvironmentTexture = this.scene.environmentTexture !== this.environmentFallbackTexture;
+        if (changedEnvironmentTexture) {
+          this.scene.environmentTexture = this.environmentFallbackTexture;
+        }
+        if (wasUsingProbePath || changedEnvironmentTexture) {
+          this.rebindPlotMaterialsFromStateObjects(useAppStore.getState().objects);
+        }
+        this.interactiveReflectionPath = 'environment_fallback';
+        this.interactiveReflectionFallbackReason = reason;
+        return true;
+      }
+      if (this.scene.environmentTexture === this.environmentFallbackTexture) {
+        this.scene.environmentTexture = null;
+      }
+    }
+    if (this.scene.environmentTexture && this.isUsableReflectionTexture(this.scene.environmentTexture)) {
+      if (wasUsingProbePath) {
+        this.rebindPlotMaterialsFromStateObjects(useAppStore.getState().objects);
+      }
+      this.interactiveReflectionPath = 'environment_fallback';
+      this.interactiveReflectionFallbackReason = reason;
+      return true;
+    }
+    this.interactiveReflectionPath = 'none';
+    this.interactiveReflectionFallbackReason = reason ?? 'Environment fallback unavailable';
+    return false;
+  }
+
+  private activateProbeEnvironment(): boolean {
+    if (!this.scene || !this.sceneReflectionProbe) {
+      return false;
+    }
+    if (this.interactiveReflectionPath !== 'probe') {
+      this.rebindPlotMaterialsFromStateObjects(useAppStore.getState().objects);
+    }
+    this.interactiveReflectionPath = 'probe';
+    this.interactiveReflectionFallbackReason = null;
+    return true;
+  }
+
+  private isUsableReflectionTexture(texture: Nullable<BaseTexture>): boolean {
+    if (!texture) {
+      return false;
+    }
+    return texture.isReady();
+  }
+
+  private resolvePlotReflectionTexture(isTransparent: boolean): Nullable<BaseTexture> {
+    if (
+      !isTransparent
+      && this.interactiveReflectionPath === 'probe'
+      && this.sceneReflectionProbe
+      && this.isUsableReflectionTexture(this.sceneReflectionProbe.cubeTexture)
+    ) {
+      return this.sceneReflectionProbe.cubeTexture;
+    }
+    const sceneEnvironmentTexture = this.scene?.environmentTexture ?? null;
+    if (
+      sceneEnvironmentTexture
+      && sceneEnvironmentTexture !== this.sceneReflectionProbe?.cubeTexture
+      && this.isUsableReflectionTexture(sceneEnvironmentTexture)
+    ) {
+      return sceneEnvironmentTexture;
+    }
+    const fallback = this.environmentFallbackTexture ?? null;
+    if (this.isUsableReflectionTexture(fallback)) {
+      return fallback;
+    }
+    return null;
   }
 
   private buildPlotVisual(plot: PlotObject): PlotVisual {
@@ -1280,7 +1485,7 @@ export class SceneController {
     pbr.useRadianceOverAlpha = isTransparent;
     pbr.useAlphaFresnel = isTransparent;
     pbr.useLinearAlphaFresnel = false;
-    pbr.reflectionTexture = null;
+    pbr.reflectionTexture = this.resolvePlotReflectionTexture(isTransparent);
     pbr.realTimeFiltering = false;
     // Implicit meshes are generated with a winding convention that ends up
     // inverted relative to Babylon's default LH front-face expectation.
@@ -2172,6 +2377,14 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+function isHeadlessOrAutomatedBrowser(): boolean {
+  if (typeof navigator === 'undefined') {
+    return false;
+  }
+  const ua = navigator.userAgent ?? '';
+  return Boolean((navigator as Navigator & { webdriver?: boolean }).webdriver) || /HeadlessChrome/i.test(ua);
+}
+
 function clamp01(value: number): number {
   return clamp(value, 0, 1);
 }
@@ -2189,37 +2402,31 @@ function mixColor(a: Color3, b: Color3, t: number): Color3 {
   );
 }
 
-function makeEnvironmentFaceDataUrl(top: Color3, bottom: Color3): string {
-  if (typeof document === 'undefined') {
-    return '';
-  }
-  const size = 32;
-  const canvas = document.createElement('canvas');
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) {
-    return '';
-  }
-  const gradient = ctx.createLinearGradient(0, 0, 0, size);
-  gradient.addColorStop(0, color3ToCss(top));
-  gradient.addColorStop(1, color3ToCss(bottom));
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, size, size);
-  // Small soft highlight to keep fallback reflections from feeling flat.
-  const glow = ctx.createRadialGradient(size * 0.72, size * 0.28, 1, size * 0.72, size * 0.28, size * 0.45);
-  glow.addColorStop(0, 'rgba(255,255,255,0.16)');
-  glow.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = glow;
-  ctx.fillRect(0, 0, size, size);
-  return canvas.toDataURL('image/png');
-}
+function makeEnvironmentFaceBytes(top: Color3, bottom: Color3, size: number): Uint8Array {
+  const safeSize = Math.max(4, Math.floor(size));
+  const data = new Uint8Array(safeSize * safeSize * 4);
+  const glowX = safeSize * 0.72;
+  const glowY = safeSize * 0.28;
+  const glowRadius = safeSize * 0.45;
 
-function color3ToCss(c: Color3): string {
-  const r = Math.round(clamp01(c.r) * 255);
-  const g = Math.round(clamp01(c.g) * 255);
-  const b = Math.round(clamp01(c.b) * 255);
-  return `rgb(${r} ${g} ${b})`;
+  for (let y = 0; y < safeSize; y += 1) {
+    const t = safeSize <= 1 ? 0 : y / (safeSize - 1);
+    const baseR = top.r + (bottom.r - top.r) * t;
+    const baseG = top.g + (bottom.g - top.g) * t;
+    const baseB = top.b + (bottom.b - top.b) * t;
+    for (let x = 0; x < safeSize; x += 1) {
+      const dx = x - glowX;
+      const dy = y - glowY;
+      const glowDistance = Math.sqrt(dx * dx + dy * dy) / glowRadius;
+      const glow = glowDistance >= 1 ? 0 : (1 - glowDistance) ** 2 * 0.16;
+      const i = (y * safeSize + x) * 4;
+      data[i] = Math.round(clamp01(baseR + glow) * 255);
+      data[i + 1] = Math.round(clamp01(baseG + glow) * 255);
+      data[i + 2] = Math.round(clamp01(baseB + glow) * 255);
+      data[i + 3] = 255;
+    }
+  }
+  return data;
 }
 
 function delay(ms: number): Promise<void> {
