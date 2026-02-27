@@ -275,6 +275,11 @@ export interface RenderDiagnostics {
   shadowMapResolution: number;
   pointShadowMode: PointShadowMode;
   pointShadowCapability: 'unknown' | 'available' | 'unavailable';
+  interactiveReflectionPath: 'none' | 'environment_fallback' | 'probe';
+  interactiveReflectionFallbackReason: string | null;
+  interactiveReflectionProbeSize: number;
+  interactiveReflectionProbeRefreshCount: number;
+  interactiveReflectionLastRefreshReason: string | null;
   qualityActiveRenderer: 'none' | 'taa_preview' | 'hybrid_gpu_preview' | 'path';
   qualityRendererFallbackReason: string | null;
   qualityResolutionScale: number;

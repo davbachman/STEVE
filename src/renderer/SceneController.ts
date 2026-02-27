@@ -2,6 +2,7 @@ import {
   ArcRotateCamera,
   Color3,
   Color4,
+  CubeTexture,
   DirectionalLight,
   HemisphericLight,
   ImageProcessingConfiguration,
@@ -14,6 +15,8 @@ import {
   PBRMaterial,
   PointLight,
   PointerEventTypes,
+  ReflectionProbe,
+  RenderTargetTexture,
   Scene,
   ShadowGenerator,
   StandardMaterial,
@@ -29,7 +32,7 @@ import { GridMaterial } from '@babylonjs/materials/grid';
 import { CreateScreenshotUsingRenderTargetAsync } from '@babylonjs/core/Misc/screenshotTools';
 import type { AppState } from '../state/store';
 import { useAppStore } from '../state/store';
-import type { PlotJobStatus, PlotObject, PointLightObject, RenderDiagnostics, RenderSettings, SerializedMesh } from '../types/contracts';
+import type { PlotJobStatus, PlotObject, PointLightObject, RenderDiagnostics, RenderSettings, SceneObject, SerializedMesh } from '../types/contracts';
 import { compilePlotObject } from '../math/compile';
 import { buildImplicitMeshFromScalarField } from '../math/mesh/implicitMarchingTetra';
 import { buildSurfaceMesh, sampleCurve } from '../math/mesh/parametric';
@@ -44,6 +47,12 @@ interface PlotVisual {
   root: Mesh;
   wireframeLines: LinesMesh[];
   geometryKey: string;
+  curveTube?: {
+    path: Vector3[];
+    baseRadius: number;
+    referenceCameraRadius: number;
+    currentRadius: number;
+  };
 }
 
 interface PointLightVisual {
@@ -90,6 +99,18 @@ export class SceneController {
   private xyGridKey = '';
   private axesMeshes: LinesMesh[] = [];
   private groundMirror: MirrorTexture | null = null;
+  private sceneReflectionProbe: ReflectionProbe | null = null;
+  private sceneReflectionProbeSize = 0;
+  private environmentFallbackTexture: CubeTexture | null = null;
+  private environmentFallbackTextureWasReady = false;
+  private interactiveReflectionPath: RenderDiagnostics['interactiveReflectionPath'] = 'none';
+  private interactiveReflectionFallbackReason: string | null = null;
+  private interactiveReflectionLastRefreshReason: string | null = null;
+  private interactiveReflectionProbeRefreshCount = 0;
+  private interactiveReflectionProbeWarmupFrames = 0;
+  private interactiveReflectionProbeUsable = false;
+  private lastInteractiveReflectionSignature = '';
+  private lastEnvironmentFallbackSignature = '';
   private plotVisuals = new Map<string, PlotVisual>();
   private pointLightVisuals = new Map<string, PointLightVisual>();
   private pointerObserver: Nullable<Observer<PointerInfo>> = null;
@@ -114,6 +135,7 @@ export class SceneController {
   private renderLoopFailed = false;
   private engineInitialized = false;
   private pointShadowCapability: 'unknown' | 'available' | 'unavailable' = 'unknown';
+  private lastCurveTubeCameraRadius = Number.NaN;
 
   constructor(private readonly canvas: HTMLCanvasElement) {}
 
@@ -187,7 +209,10 @@ export class SceneController {
         if (!shouldRender) {
           return;
         }
+        this.syncCurveTubePixelWidth();
         this.scene?.render();
+        this.advanceInteractiveReflectionProbeWarmup();
+        this.maybeRebindAfterReflectionTextureReady();
         this.handleQualityFrameRendered();
       } catch (error) {
         this.renderLoopFailed = true;
@@ -212,6 +237,15 @@ export class SceneController {
     this.qualityPreviewOverlayCanvas?.remove();
     this.qualityPreviewOverlayCanvas = null;
     this.qualityPreviewOverlayCtx = null;
+    this.sceneReflectionProbe?.dispose();
+    this.sceneReflectionProbe = null;
+    this.sceneReflectionProbeSize = 0;
+    if (this.scene?.environmentTexture && this.scene.environmentTexture === this.environmentFallbackTexture) {
+      this.scene.environmentTexture = null;
+    }
+    this.environmentFallbackTexture?.dispose();
+    this.environmentFallbackTexture = null;
+    this.environmentFallbackTextureWasReady = false;
     this.groundMirror?.dispose();
     this.groundMirror = null;
     for (const visual of this.plotVisuals.values()) {
@@ -248,6 +282,16 @@ export class SceneController {
     this.engine = null;
     this.engineInitialized = false;
     this.lastAppliedHardwareScalingLevel = Number.NaN;
+    this.interactiveReflectionPath = 'none';
+    this.interactiveReflectionFallbackReason = null;
+    this.interactiveReflectionLastRefreshReason = null;
+    this.interactiveReflectionProbeRefreshCount = 0;
+    this.interactiveReflectionProbeWarmupFrames = 0;
+    this.interactiveReflectionProbeUsable = false;
+    this.lastInteractiveReflectionSignature = '';
+    this.lastEnvironmentFallbackSignature = '';
+    this.environmentFallbackTextureWasReady = false;
+    this.lastCurveTubeCameraRadius = Number.NaN;
     useAppStore.getState().setRenderDiagnostics({ webgpuReady: false });
   }
 
@@ -290,6 +334,10 @@ export class SceneController {
     };
   }
 
+  resizeViewport(): void {
+    this.handleResize();
+  }
+
   sync(state: Pick<AppState, 'scene' | 'render' | 'objects' | 'selectedId' | 'plotJobs'>): void {
     if (!this.scene || !this.camera || !this.directionalLight) {
       return;
@@ -297,7 +345,9 @@ export class SceneController {
 
     this.syncSceneSettings(state);
     this.syncLights(state);
+    this.syncInteractiveReflectionSetup(state);
     this.syncPlots(state);
+    this.syncInteractiveReflectionProbe(state);
     this.syncSelection(state.selectedId);
 
     this.syncQualityRenderer(state);
@@ -416,8 +466,12 @@ export class SceneController {
       groundMaterial.albedoColor = color3(state.scene.groundPlaneColor);
       groundMaterial.roughness = clamp01(state.scene.groundPlaneRoughness);
       groundMaterial.metallic = state.scene.groundPlaneReflective ? 0.05 : 0;
-      groundMaterial.reflectionTexture = state.scene.groundPlaneReflective ? this.groundMirror : null;
-      groundMaterial.reflectionTexture && (groundMaterial.reflectionTexture.level = state.scene.groundPlaneReflective ? 0.6 : 0);
+      groundMaterial.reflectionTexture = state.scene.groundPlaneReflective
+        ? (this.groundMirror ?? this.scene.environmentTexture ?? null)
+        : null;
+      if (groundMaterial.reflectionTexture) {
+        groundMaterial.reflectionTexture.level = state.scene.groundPlaneReflective ? 0.6 : 0;
+      }
     }
 
     const gridMaterial = this.gridMesh.material;
@@ -457,7 +511,7 @@ export class SceneController {
       || (shadowSettings.pointShadowMode === 'auto' && interactiveQuality !== 'performance');
     const pointShadowLimit = allowPointShadows ? clamp(Math.round(shadowSettings.pointShadowMaxLights), 0, 4) : 0;
     const pointShadowCandidates = pointLights
-      .filter((light) => light.visible && light.castShadows && light.intensity > 0)
+      .filter((light) => light.castShadows && light.intensity > 0)
       .sort((a, b) => {
         if (a.id === selectedId) return -1;
         if (b.id === selectedId) return 1;
@@ -525,7 +579,8 @@ export class SceneController {
         this.pointLightVisuals.set(lightObj.id, visual);
       }
 
-      visual.light.setEnabled(lightObj.visible && lightObj.intensity > 0);
+      // Light visibility only controls viewport gizmos. Emission remains active.
+      visual.light.setEnabled(lightObj.intensity > 0);
       visual.gizmo.isVisible = lightObj.visible;
       visual.pickShell.isVisible = lightObj.visible;
       visual.halo.isVisible = lightObj.visible;
@@ -721,6 +776,311 @@ export class SceneController {
     }
   }
 
+  private syncInteractiveReflectionSetup(state: Pick<AppState, 'scene' | 'render' | 'objects'>): void {
+    if (!this.scene) {
+      return;
+    }
+
+    this.ensureEnvironmentFallbackTexture(state.scene);
+
+    const hasReflectiveOpaquePlot = state.objects.some((obj) => {
+      if (obj.type !== 'plot' || !obj.visible) return false;
+      const opacity = clamp01(obj.material.opacity);
+      const transmission = clamp01(obj.material.transmission);
+      const isOpaque = opacity >= 0.98 && transmission <= 0.05;
+      return isOpaque && (obj.material.reflectiveness > 0.08 || obj.material.roughness < 0.25);
+    });
+    const probeWouldBeUseful =
+      state.render.mode === 'interactive'
+      && state.render.interactiveQuality !== 'performance'
+      && hasReflectiveOpaquePlot;
+    // Babylon ReflectionProbe + current WebGPU/PBR path is causing a read/write hazard on startup
+    // (probe texture sampled while being rendered) on this app path. Keep the code parked and use
+    // the environment fallback for reliability until a safe integration path is implemented.
+    const probeSupportedOnThisRenderer = false;
+    const wantsProbe =
+      probeWouldBeUseful
+      && probeSupportedOnThisRenderer;
+    const desiredProbeSize = state.render.interactiveQuality === 'quality' ? 256 : 160;
+
+    if (!wantsProbe) {
+      if (this.sceneReflectionProbe) {
+        this.sceneReflectionProbe.dispose();
+        this.sceneReflectionProbe = null;
+        this.sceneReflectionProbeSize = 0;
+        this.lastInteractiveReflectionSignature = '';
+      }
+      this.interactiveReflectionLastRefreshReason = null;
+      this.interactiveReflectionProbeWarmupFrames = 0;
+      this.interactiveReflectionProbeUsable = false;
+      this.interactiveReflectionPath = this.scene.environmentTexture ? 'environment_fallback' : 'none';
+      if (!this.scene.environmentTexture) {
+        this.interactiveReflectionFallbackReason = 'Environment fallback unavailable';
+      } else if (probeWouldBeUseful && !probeSupportedOnThisRenderer) {
+        this.interactiveReflectionFallbackReason = 'Reflection probe path disabled on current WebGPU renderer; using environment fallback';
+      } else {
+        this.interactiveReflectionFallbackReason = null;
+      }
+      return;
+    }
+
+    if (!this.sceneReflectionProbe || this.sceneReflectionProbeSize !== desiredProbeSize) {
+      try {
+        this.sceneReflectionProbe?.dispose();
+        this.sceneReflectionProbe = new ReflectionProbe(
+          'interactive-scene-reflections',
+          desiredProbeSize,
+          this.scene,
+          true,
+          false,
+          false,
+        );
+        this.sceneReflectionProbeSize = desiredProbeSize;
+        this.sceneReflectionProbe.cubeTexture.gammaSpace = false;
+        this.sceneReflectionProbe.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
+        this.sceneReflectionProbe.cubeTexture.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
+        this.interactiveReflectionProbeUsable = false;
+        this.lastInteractiveReflectionSignature = '';
+      } catch (error) {
+        this.sceneReflectionProbe?.dispose();
+        this.sceneReflectionProbe = null;
+        this.sceneReflectionProbeSize = 0;
+        this.interactiveReflectionLastRefreshReason = null;
+        this.interactiveReflectionProbeWarmupFrames = 0;
+        this.interactiveReflectionProbeUsable = false;
+        this.interactiveReflectionPath = this.scene.environmentTexture ? 'environment_fallback' : 'none';
+        this.interactiveReflectionFallbackReason = this.scene.environmentTexture
+          ? 'Reflection probe unavailable; using environment fallback'
+          : 'Reflection probe unavailable and environment fallback unavailable';
+        console.warn('Interactive reflection probe creation failed', error);
+        return;
+      }
+    }
+
+    const bounds = state.scene.defaultGraphBounds;
+    this.sceneReflectionProbe.position.set(
+      (bounds.min.x + bounds.max.x) * 0.5,
+      (bounds.min.y + bounds.max.y) * 0.5,
+      (bounds.min.z + bounds.max.z) * 0.5,
+    );
+
+    this.interactiveReflectionPath = 'probe';
+    this.interactiveReflectionFallbackReason = null;
+  }
+
+  private syncInteractiveReflectionProbe(state: Pick<AppState, 'scene' | 'render' | 'objects' | 'plotJobs'>): void {
+    if (!this.sceneReflectionProbe || !this.scene) {
+      return;
+    }
+
+    const renderList: Mesh[] = [];
+    if (state.scene.groundPlaneVisible && this.groundMesh) {
+      renderList.push(this.groundMesh);
+    }
+    for (const obj of state.objects) {
+      if (obj.type !== 'plot' || !obj.visible) {
+        continue;
+      }
+      const visual = this.plotVisuals.get(obj.id);
+      if (visual?.root) {
+        renderList.push(visual.root);
+      }
+    }
+    this.sceneReflectionProbe.renderList = renderList;
+
+    const reflectionSignature = JSON.stringify({
+      interactiveQuality: state.render.interactiveQuality,
+      probeSize: this.sceneReflectionProbeSize,
+      probePosition: {
+        x: round3(this.sceneReflectionProbe.position.x),
+        y: round3(this.sceneReflectionProbe.position.y),
+        z: round3(this.sceneReflectionProbe.position.z),
+      },
+      scene: {
+        backgroundMode: state.scene.backgroundMode,
+        backgroundColor: state.scene.backgroundColor,
+        gradientTopColor: state.scene.gradientTopColor,
+        gradientBottomColor: state.scene.gradientBottomColor,
+        groundPlaneVisible: state.scene.groundPlaneVisible,
+        groundPlaneColor: state.scene.groundPlaneColor,
+        groundPlaneRoughness: round3(state.scene.groundPlaneRoughness),
+        ambientColor: state.scene.ambient.color,
+        ambientIntensity: round3(state.scene.ambient.intensity),
+        directionalColor: state.scene.directional.color,
+        directionalIntensity: round3(state.scene.directional.intensity),
+        directionalDirection: {
+          x: round3(state.scene.directional.direction.x),
+          y: round3(state.scene.directional.direction.y),
+          z: round3(state.scene.directional.direction.z),
+        },
+      },
+      plots: state.objects
+        .filter((o): o is PlotObject => o.type === 'plot' && o.visible)
+        .map((plot) => ({
+          id: plot.id,
+          meshVersion: state.plotJobs[plot.id]?.meshVersion ?? 0,
+          pos: {
+            x: round3(plot.transform.position.x),
+            y: round3(plot.transform.position.y),
+            z: round3(plot.transform.position.z),
+          },
+          material: {
+            baseColor: plot.material.baseColor,
+            opacity: round3(plot.material.opacity),
+            transmission: round3(plot.material.transmission),
+            reflectiveness: round3(plot.material.reflectiveness),
+            roughness: round3(plot.material.roughness),
+          },
+        })),
+      lights: state.objects
+        .filter((o): o is PointLightObject => o.type === 'point_light')
+        .map((light) => ({
+          id: light.id,
+          pos: {
+            x: round3(light.position.x),
+            y: round3(light.position.y),
+            z: round3(light.position.z),
+          },
+          color: light.color,
+          intensity: round3(light.intensity),
+          range: round3(light.range),
+        })),
+    });
+
+    if (reflectionSignature !== this.lastInteractiveReflectionSignature) {
+      this.requestInteractiveReflectionProbeRefresh(this.lastInteractiveReflectionSignature ? 'scene_update' : 'probe_init');
+      this.lastInteractiveReflectionSignature = reflectionSignature;
+      this.rebindPlotMaterialsFromStateObjects(state.objects);
+    }
+  }
+
+  private requestInteractiveReflectionProbeRefresh(reason: string): void {
+    if (!this.sceneReflectionProbe) {
+      return;
+    }
+    this.sceneReflectionProbe.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
+    this.sceneReflectionProbe.cubeTexture.refreshRate = RenderTargetTexture.REFRESHRATE_RENDER_ONCE;
+    this.sceneReflectionProbe.cubeTexture.resetRefreshCounter();
+    this.interactiveReflectionLastRefreshReason = reason;
+    this.interactiveReflectionProbeRefreshCount += 1;
+    // Avoid sampling the probe texture in the same frame it is refreshed (WebGPU read/write hazard).
+    this.interactiveReflectionProbeWarmupFrames = 2;
+    this.interactiveReflectionProbeUsable = false;
+  }
+
+  private ensureEnvironmentFallbackTexture(sceneSettings: AppState['scene']): void {
+    if (!this.scene || typeof document === 'undefined') {
+      return;
+    }
+
+    if (this.scene.environmentTexture && this.scene.environmentTexture !== this.environmentFallbackTexture) {
+      // Respect externally-provided environment textures (legacy scenes / Babylon defaults).
+      return;
+    }
+
+    const signature = JSON.stringify({
+      backgroundMode: sceneSettings.backgroundMode,
+      backgroundColor: sceneSettings.backgroundColor,
+      gradientTopColor: sceneSettings.gradientTopColor,
+      gradientBottomColor: sceneSettings.gradientBottomColor,
+      groundPlaneColor: sceneSettings.groundPlaneColor,
+      ambientColor: sceneSettings.ambient.color,
+      ambientIntensity: round3(sceneSettings.ambient.intensity),
+      directionalColor: sceneSettings.directional.color,
+      directionalIntensity: round3(sceneSettings.directional.intensity),
+    });
+
+    if (this.environmentFallbackTexture && signature === this.lastEnvironmentFallbackSignature) {
+      if (this.scene.environmentTexture !== this.environmentFallbackTexture) {
+        this.scene.environmentTexture = this.environmentFallbackTexture;
+      }
+      return;
+    }
+
+    try {
+      const topBase = sceneSettings.backgroundMode === 'gradient'
+        ? color3(sceneSettings.gradientTopColor)
+        : color3(sceneSettings.backgroundColor);
+      const bottomBase = sceneSettings.backgroundMode === 'gradient'
+        ? color3(sceneSettings.gradientBottomColor)
+        : color3(sceneSettings.backgroundColor);
+      const groundBase = color3(sceneSettings.groundPlaneColor);
+      const ambientTint = color3(sceneSettings.ambient.color).scale(clamp(sceneSettings.ambient.intensity * 0.2, 0, 0.3));
+      const sunTint = color3(sceneSettings.directional.color).scale(clamp(sceneSettings.directional.intensity * 0.12, 0, 0.35));
+      const sideColor = mixColor(mixColor(topBase, bottomBase, 0.55), ambientTint, 0.45);
+      const upColor = mixColor(topBase, sunTint, 0.35);
+      const downColor = mixColor(bottomBase.scale(0.55), groundBase.scale(0.9), 0.6);
+
+      const faces = [
+        makeEnvironmentFaceDataUrl(sideColor, sideColor),
+        makeEnvironmentFaceDataUrl(sideColor, sideColor),
+        makeEnvironmentFaceDataUrl(mixColor(sideColor, upColor, 0.15), mixColor(sideColor, downColor, 0.2)),
+        makeEnvironmentFaceDataUrl(mixColor(sideColor, upColor, 0.15), mixColor(sideColor, downColor, 0.2)),
+        makeEnvironmentFaceDataUrl(upColor, mixColor(upColor, sideColor, 0.35)),
+        makeEnvironmentFaceDataUrl(mixColor(sideColor, downColor, 0.25), downColor),
+      ];
+
+      if (this.scene.environmentTexture === this.environmentFallbackTexture) {
+        this.scene.environmentTexture = null;
+      }
+      this.environmentFallbackTexture?.dispose();
+      this.environmentFallbackTexture = CubeTexture.CreateFromImages(faces, this.scene, false);
+      this.environmentFallbackTexture.name = 'interactive-env-fallback';
+      this.environmentFallbackTextureWasReady = this.environmentFallbackTexture.isReady();
+      this.scene.environmentTexture = this.environmentFallbackTexture;
+      this.lastEnvironmentFallbackSignature = signature;
+    } catch (error) {
+      if (this.scene.environmentTexture === this.environmentFallbackTexture) {
+        this.scene.environmentTexture = null;
+      }
+      this.environmentFallbackTexture?.dispose();
+      this.environmentFallbackTexture = null;
+      this.environmentFallbackTextureWasReady = false;
+      this.lastEnvironmentFallbackSignature = '';
+      console.warn('Interactive environment fallback texture creation failed', error);
+    }
+  }
+
+  private rebindPlotMaterialsFromStateObjects(objects: SceneObject[]): void {
+    for (const obj of objects) {
+      if (obj.type !== 'plot') continue;
+      const visual = this.plotVisuals.get(obj.id);
+      if (!visual) continue;
+      this.applyPlotMaterial(obj, visual.root);
+    }
+  }
+
+  private advanceInteractiveReflectionProbeWarmup(): void {
+    if (this.interactiveReflectionProbeWarmupFrames > 0) {
+      this.interactiveReflectionProbeWarmupFrames -= 1;
+      if (this.interactiveReflectionProbeWarmupFrames > 0) {
+        return;
+      }
+    }
+    if (!this.sceneReflectionProbe || this.interactiveReflectionProbeUsable) {
+      return;
+    }
+    if (!this.sceneReflectionProbe.cubeTexture.isReady()) {
+      return;
+    }
+    this.interactiveReflectionProbeUsable = true;
+    this.rebindPlotMaterialsFromStateObjects(useAppStore.getState().objects);
+  }
+
+  private maybeRebindAfterReflectionTextureReady(): void {
+    if (!this.environmentFallbackTexture) {
+      this.environmentFallbackTextureWasReady = false;
+      return;
+    }
+    const ready = this.environmentFallbackTexture.isReady();
+    if (ready && !this.environmentFallbackTextureWasReady) {
+      this.environmentFallbackTextureWasReady = true;
+      this.rebindPlotMaterialsFromStateObjects(useAppStore.getState().objects);
+      return;
+    }
+    this.environmentFallbackTextureWasReady = ready;
+  }
+
   private buildPlotVisual(plot: PlotObject): PlotVisual {
     if (!this.scene) {
       throw new Error('Scene not initialized');
@@ -735,6 +1095,7 @@ export class SceneController {
 
     let root: Mesh;
     const wireframeLines: LinesMesh[] = [];
+    let curveTube: PlotVisual['curveTube'];
 
     if (compiled.kind === 'curve') {
       const sample = sampleCurve(
@@ -745,12 +1106,20 @@ export class SceneController {
       );
       const path = sample.points.map((p) => new Vector3(p.x, p.y, p.z));
       if (compiled.spec.renderAsTube) {
+        const referenceCameraRadius = Math.max(0.1, this.camera?.radius ?? 20);
         root = MeshBuilder.CreateTube(`plot-${plot.id}`, {
           path,
           radius: compiled.spec.tubeRadius,
           tessellation: 12,
           cap: Mesh.CAP_ALL,
+          updatable: true,
         }, this.scene);
+        curveTube = {
+          path,
+          baseRadius: compiled.spec.tubeRadius,
+          referenceCameraRadius,
+          currentRadius: compiled.spec.tubeRadius,
+        };
       } else {
         root = MeshBuilder.CreateLines(`plot-${plot.id}`, { points: path, updatable: false }, this.scene) as unknown as Mesh;
       }
@@ -815,7 +1184,7 @@ export class SceneController {
     root.receiveShadows = true;
     root.renderOverlay = false;
 
-    return { root, wireframeLines, geometryKey: buildGeometryKey(plot) };
+    return { root, wireframeLines, geometryKey: buildGeometryKey(plot), curveTube };
   }
 
   private buildPlotVisualFromSerialized(plot: PlotObject, meshData: SerializedMesh): PlotVisual {
@@ -825,10 +1194,12 @@ export class SceneController {
 
     let root: Mesh;
     const wireframeLines: LinesMesh[] = [];
+    let curveTube: PlotVisual['curveTube'];
 
     if (meshData.curvePath && meshData.curvePath.length >= 6) {
       const path = floatArrayToVector3Path(meshData.curvePath);
       if (plot.equation.kind === 'parametric_curve' && plot.equation.renderAsTube) {
+        const referenceCameraRadius = Math.max(0.1, this.camera?.radius ?? 20);
         root = MeshBuilder.CreateTube(
           `plot-${plot.id}`,
           {
@@ -836,9 +1207,16 @@ export class SceneController {
             radius: plot.equation.tubeRadius,
             tessellation: 12,
             cap: Mesh.CAP_ALL,
+            updatable: true,
           },
           this.scene,
         );
+        curveTube = {
+          path,
+          baseRadius: plot.equation.tubeRadius,
+          referenceCameraRadius,
+          currentRadius: plot.equation.tubeRadius,
+        };
       } else {
         root = MeshBuilder.CreateLines(`plot-${plot.id}`, { points: path, updatable: false }, this.scene) as unknown as Mesh;
       }
@@ -866,7 +1244,7 @@ export class SceneController {
     root.receiveShadows = true;
     root.renderOverlay = false;
 
-    return { root, wireframeLines, geometryKey: buildGeometryKey(plot) };
+    return { root, wireframeLines, geometryKey: buildGeometryKey(plot), curveTube };
   }
 
   private applyPlotMaterial(plot: PlotObject, mesh: Mesh): void {
@@ -877,21 +1255,38 @@ export class SceneController {
       mesh.material = material;
     }
     const pbr = material as PBRMaterial;
+    const reflectiveness = clamp01(plot.material.reflectiveness);
+    const roughness = clamp(plot.material.roughness, 0.02, 1);
+    const opacity = clamp01(plot.material.opacity);
+    const transmission = clamp01(plot.material.transmission);
+    const isTransparent = opacity < 0.98 || transmission > 0.05;
+    const metallicForOpaque = reflectiveness > 0.65 ? clamp((reflectiveness - 0.55) / 0.45, 0, 1) : reflectiveness * 0.16;
     pbr.albedoColor = color3(plot.material.baseColor);
-    pbr.metallic = clamp01(plot.material.reflectiveness);
-    pbr.roughness = clamp01(plot.material.roughness);
-    pbr.alpha = clamp01(plot.material.opacity);
-    pbr.transparencyMode = plot.material.opacity < 1 ? PBRMaterial.PBRMATERIAL_ALPHABLEND : PBRMaterial.PBRMATERIAL_OPAQUE;
+    pbr.metallic = isTransparent ? 0 : clamp01(metallicForOpaque);
+    pbr.roughness = roughness;
+    pbr.alpha = opacity;
+    pbr.transparencyMode = isTransparent ? PBRMaterial.PBRMATERIAL_ALPHABLEND : PBRMaterial.PBRMATERIAL_OPAQUE;
     pbr.indexOfRefraction = Math.max(1, plot.material.ior);
-    pbr.subSurface.isRefractionEnabled = plot.material.transmission > 0.05;
-    pbr.subSurface.refractionIntensity = clamp01(plot.material.transmission);
+    // Interactive renderer simplification: keep transmission as an alpha/highlight cue,
+    // but disable true refraction to avoid unstable transparent stacking behavior.
+    pbr.subSurface.isRefractionEnabled = false;
+    pbr.subSurface.isTranslucencyEnabled = false;
+    pbr.subSurface.refractionIntensity = 0;
     pbr.subSurface.indexOfRefraction = Math.max(1, plot.material.ior);
+    pbr.metallicF0Factor = clamp(0.65 + reflectiveness * 1.35 + transmission * 0.4, 0.65, 2);
+    pbr.specularIntensity = isTransparent ? 1.15 : 1;
+    pbr.directIntensity = 1;
+    pbr.environmentIntensity = clamp(0.75 + reflectiveness * 0.9 + (isTransparent ? 0.2 : 0), 0.7, 1.8);
+    pbr.useRadianceOverAlpha = isTransparent;
+    pbr.useAlphaFresnel = isTransparent;
+    pbr.useLinearAlphaFresnel = false;
+    pbr.reflectionTexture = null;
+    pbr.realTimeFiltering = false;
     // Implicit meshes are generated with a winding convention that ends up
     // inverted relative to Babylon's default LH front-face expectation.
     // Pinning sideOrientation fixes front/back classification so two-sided
     // lighting doesn't flip the visible shell normals.
     pbr.sideOrientation = plot.equation.kind === 'implicit_surface' ? Material.ClockWiseSideOrientation : null;
-    const isTransparent = plot.material.opacity < 0.98 || plot.material.transmission > 0.05;
     // Keep culling disabled so Babylon can run the extra front/back pass when
     // `separateCullingPass` is enabled for transparent surfaces. Enabling
     // back-face culling here disables that path and can make implicit surfaces
@@ -901,11 +1296,67 @@ export class SceneController {
     // Generated parametric/implicit meshes may have arbitrary winding (and users may
     // view the back side). Two-sided lighting prevents the \"lit side is dark\" issue.
     pbr.twoSidedLighting = true;
-    pbr.environmentIntensity = 0.9;
+    pbr.enableSpecularAntiAliasing = true;
     pbr.forceDepthWrite = !isTransparent;
     pbr.needDepthPrePass = isTransparent;
     mesh.renderingGroupId = isTransparent ? 1 : 0;
     mesh.alphaIndex = isTransparent ? stableAlphaIndex(plot.id) : 0;
+  }
+
+  private syncCurveTubePixelWidth(): void {
+    if (!this.scene || !this.camera) {
+      return;
+    }
+    const cameraRadius = this.camera.radius;
+    if (!Number.isFinite(cameraRadius)) {
+      return;
+    }
+    if (Math.abs(cameraRadius - this.lastCurveTubeCameraRadius) <= 1e-4) {
+      return;
+    }
+    this.lastCurveTubeCameraRadius = cameraRadius;
+
+    const state = useAppStore.getState();
+    for (const obj of state.objects) {
+      if (obj.type !== 'plot' || obj.equation.kind !== 'parametric_curve' || !obj.equation.renderAsTube) {
+        continue;
+      }
+      const visual = this.plotVisuals.get(obj.id);
+      if (!visual?.curveTube) {
+        continue;
+      }
+      const tube = visual.curveTube;
+      const referenceRadius = Math.max(0.1, tube.referenceCameraRadius);
+      const desiredRadius = Math.max(0.0002, obj.equation.tubeRadius * (cameraRadius / referenceRadius));
+      const delta = Math.abs(desiredRadius - tube.currentRadius);
+      if (delta <= Math.max(0.00005, tube.currentRadius * 0.03)) {
+        continue;
+      }
+
+      const updated = MeshBuilder.CreateTube(
+        `plot-${obj.id}`,
+        {
+          path: tube.path,
+          radius: desiredRadius,
+          tessellation: 12,
+          cap: Mesh.CAP_ALL,
+          instance: visual.root,
+        },
+        this.scene,
+      );
+
+      if (updated !== visual.root) {
+        updated.metadata = visual.root.metadata;
+        updated.isPickable = visual.root.isPickable;
+        updated.parent = visual.root.parent;
+        updated.receiveShadows = visual.root.receiveShadows;
+        updated.renderOverlay = visual.root.renderOverlay;
+        updated.material = visual.root.material;
+        visual.root.dispose(false, true);
+        visual.root = updated;
+      }
+      tube.currentRadius = desiredRadius;
+    }
   }
 
   private syncSelection(selectedId: string | null): void {
@@ -1132,6 +1583,7 @@ export class SceneController {
         fallbackScale: this.camera.radius * 0.005,
         startClientY: event.clientY,
       };
+      useAppStore.getState().beginObjectDragHistory(selectableId);
       this.canvas.setPointerCapture(event.pointerId);
       return;
     }
@@ -1148,6 +1600,7 @@ export class SceneController {
       planeZ: startPosition.z,
       startPoint: hit,
     };
+    useAppStore.getState().beginObjectDragHistory(selectableId);
     this.canvas.setPointerCapture(event.pointerId);
   }
 
@@ -1157,7 +1610,9 @@ export class SceneController {
       this.canvas.releasePointerCapture(event.pointerId);
     }
     if (this.dragState) {
+      const dragObjectId = this.dragState.objectId;
       this.dragState = null;
+      useAppStore.getState().commitObjectDragHistory(dragObjectId);
       this.canvas.releasePointerCapture(event.pointerId);
     }
   }
@@ -1440,6 +1895,11 @@ export class SceneController {
       shadowMapResolution: state.scene.shadow.shadowMapResolution,
       pointShadowMode: state.scene.shadow.pointShadowMode,
       pointShadowCapability: this.pointShadowCapability,
+      interactiveReflectionPath: this.interactiveReflectionPath,
+      interactiveReflectionFallbackReason: this.interactiveReflectionFallbackReason,
+      interactiveReflectionProbeSize: this.sceneReflectionProbeSize,
+      interactiveReflectionProbeRefreshCount: this.interactiveReflectionProbeRefreshCount,
+      interactiveReflectionLastRefreshReason: this.interactiveReflectionLastRefreshReason,
       qualityActiveRenderer: state.render.mode === 'quality' ? this.qualityActiveRenderer : 'none',
       qualityRendererFallbackReason: state.render.mode === 'quality' ? this.qualityFallbackReason : null,
       qualityResolutionScale: state.render.mode === 'quality' ? clamp(state.render.qualityResolutionScale, 0.25, 4) : 1,
@@ -1714,6 +2174,52 @@ function clamp(value: number, min: number, max: number): number {
 
 function clamp01(value: number): number {
   return clamp(value, 0, 1);
+}
+
+function round3(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+function mixColor(a: Color3, b: Color3, t: number): Color3 {
+  const tt = clamp01(t);
+  return new Color3(
+    a.r + (b.r - a.r) * tt,
+    a.g + (b.g - a.g) * tt,
+    a.b + (b.b - a.b) * tt,
+  );
+}
+
+function makeEnvironmentFaceDataUrl(top: Color3, bottom: Color3): string {
+  if (typeof document === 'undefined') {
+    return '';
+  }
+  const size = 32;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    return '';
+  }
+  const gradient = ctx.createLinearGradient(0, 0, 0, size);
+  gradient.addColorStop(0, color3ToCss(top));
+  gradient.addColorStop(1, color3ToCss(bottom));
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, size, size);
+  // Small soft highlight to keep fallback reflections from feeling flat.
+  const glow = ctx.createRadialGradient(size * 0.72, size * 0.28, 1, size * 0.72, size * 0.28, size * 0.45);
+  glow.addColorStop(0, 'rgba(255,255,255,0.16)');
+  glow.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, size, size);
+  return canvas.toDataURL('image/png');
+}
+
+function color3ToCss(c: Color3): string {
+  const r = Math.round(clamp01(c.r) * 255);
+  const g = Math.round(clamp01(c.g) * 255);
+  const b = Math.round(clamp01(c.b) * 255);
+  return `rgb(${r} ${g} ${b})`;
 }
 
 function delay(ms: number): Promise<void> {

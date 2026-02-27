@@ -97,6 +97,7 @@ interface WorkerBounceSample {
   throughput: Vector3;
   nextMediumIor: number;
   wasTransmission: boolean;
+  wasGlossySpecular: boolean;
 }
 
 interface WorkerEnvironmentSample {
@@ -122,16 +123,26 @@ const RAY_SEGMENT_INTERSECTION_SMALL_NUM = 1e-8;
 const shadowRayScratchOrigin = new Vector3(0, 0, 0);
 const shadowRayScratchDirection = new Vector3(0, 0, 1);
 const shadowRayScratch = new Ray(shadowRayScratchOrigin, shadowRayScratchDirection, 1e6);
+const shadowTransmittanceScratch = new Vector3(1, 1, 1);
+const shadowOccluderTransmittanceScratch = new Vector3(1, 1, 1);
 const environmentSampleScratch: WorkerEnvironmentSample = {
   radiance: new Vector3(0, 0, 0),
   alpha: 1,
 };
 const directLightingScratchOut = new Vector3(0, 0, 0);
+const traceHybridRayThroughputScratch = new Vector3(1, 1, 1);
+const traceHybridRayRadianceScratch = new Vector3(0, 0, 0);
+const traceHybridRayOutwardNormalScratch = new Vector3(0, 0, 1);
+const traceHybridRayShadingNormalScratch = new Vector3(0, 0, 1);
+const traceHybridRayViewDirScratch = new Vector3(0, 0, 1);
+const traceMeshBvhStackScratch: WorkerMeshBvhNode[] = [];
+const traceTriangleBvhStackScratch: PathTraceWorkerTriangleBvhNode[] = [];
 const continuationBounceSampleScratch: WorkerBounceSample = {
   direction: new Vector3(0, 0, 1),
   throughput: new Vector3(1, 1, 1),
   nextMediumIor: 1,
   wasTransmission: false,
+  wasGlossySpecular: false,
 };
 const continuationIncidentScratch = new Vector3(0, 0, 1);
 const continuationInterfaceNormalScratch = new Vector3(0, 0, 1);
@@ -287,14 +298,30 @@ function traceHybridRay(
   outBase: number,
 ): void {
   let ray = initialRay;
-  let throughput = new Vector3(1, 1, 1);
-  const radiance = new Vector3(0, 0, 0);
-  const outwardNormal = new Vector3(0, 0, 1);
-  const shadingNormal = new Vector3(0, 0, 1);
-  const viewDir = new Vector3(0, 0, 1);
+  const throughput = traceHybridRayThroughputScratch;
+  throughput.x = 1;
+  throughput.y = 1;
+  throughput.z = 1;
+  const radiance = traceHybridRayRadianceScratch;
+  radiance.x = 0;
+  radiance.y = 0;
+  radiance.z = 0;
+  const outwardNormal = traceHybridRayOutwardNormalScratch;
+  outwardNormal.x = 0;
+  outwardNormal.y = 0;
+  outwardNormal.z = 1;
+  const shadingNormal = traceHybridRayShadingNormalScratch;
+  shadingNormal.x = 0;
+  shadingNormal.y = 0;
+  shadingNormal.z = 1;
+  const viewDir = traceHybridRayViewDirScratch;
+  viewDir.x = 0;
+  viewDir.y = 0;
+  viewDir.z = 1;
   let alpha = 0;
   let currentMediumIor = 1;
   let previousBounceWasTransmission = false;
+  let previousBounceWasGlossySpecular = false;
 
   for (let bounce = 0; bounce < maxBounces; bounce += 1) {
     const hit = pickTraceRayClosest(scene, ray, -1);
@@ -342,6 +369,7 @@ function traceHybridRay(
       pixelIndex,
       bounce,
       previousBounceWasTransmission,
+      previousBounceWasGlossySpecular,
     );
     radiance.x += throughput.x * direct.x;
     radiance.y += throughput.y * direct.y;
@@ -369,6 +397,7 @@ function traceHybridRay(
     multiplyVec3InPlace(throughput, bounceSample.throughput);
     currentMediumIor = bounceSample.nextMediumIor;
     previousBounceWasTransmission = bounceSample.wasTransmission;
+    previousBounceWasGlossySpecular = bounceSample.wasGlossySpecular;
     const rrStartBounce = 1;
     if (bounce >= rrStartBounce) {
       const continueProb = clamp(Math.max(throughput.x, throughput.y, throughput.z), 0.05, 0.95);
@@ -455,6 +484,7 @@ function sampleHybridDirectLighting(
   pixelIndex: number,
   bounce: number,
   previousBounceWasTransmission: boolean,
+  previousBounceWasGlossySpecular: boolean,
 ): Vector3 {
   const out = directLightingScratchOut;
   out.x = 0;
@@ -468,29 +498,40 @@ function sampleHybridDirectLighting(
   const specColorZ = 1 + (baseColor.z - 1) * material.metallic;
   const roughness = clamp(material.roughness, 0.03, 1);
   const shininess = clamp(Math.round((1 - roughness) * 180 + 8), 8, 256);
+  const ndv = Math.max(0, normal.x * viewDir.x + normal.y * viewDir.y + normal.z * viewDir.z);
+  const dielectricDirectF0 = clamp(material.reflectance, 0.02, 0.25);
+  const diffuseViewFresnelScale = 1 - schlickFresnel(ndv, dielectricDirectF0);
+  const specBaseF0 = clamp(Math.max(material.reflectance, material.metallic), 0.02, 1);
 
-  const sampleFiniteDirectThisBounce = bounce === 0 || (bounce === 1 && previousBounceWasTransmission);
+  const sampleFiniteDirectThisBounce = bounce === 0
+    || (bounce === 1 && (previousBounceWasTransmission || previousBounceWasGlossySpecular));
   const useSingleFiniteLightSample = sampleFiniteDirectThisBounce;
   let finiteLightCount = 0;
+  let finiteLightSampleWeightSum = 0;
   if (useSingleFiniteLightSample) {
     for (const light of scene.lights) {
       if (light.intensity <= 0) continue;
       if (light.kind === 'directional' || light.kind === 'point') {
         finiteLightCount += 1;
+        finiteLightSampleWeightSum += finiteDirectLightSamplingWeight(light);
       }
     }
   }
+  const useWeightedFiniteLightSampling = useSingleFiniteLightSample && finiteLightCount > 1 && finiteLightSampleWeightSum > 1e-5;
   const selectedFiniteLightIndex = useSingleFiniteLightSample && finiteLightCount > 0
     ? Math.min(
       finiteLightCount - 1,
       Math.floor(sampleHash01(pixelIndex, sampleIndex + bounce * 71, 151) * finiteLightCount),
     )
     : -1;
-  const finiteLightWeight = useSingleFiniteLightSample && finiteLightCount > 0 ? finiteLightCount : 1;
+  const selectedFiniteLightWeightTarget = useWeightedFiniteLightSampling
+    ? sampleHash01(pixelIndex, sampleIndex + bounce * 71, 152) * finiteLightSampleWeightSum
+    : -1;
 
   let dirIndex = 0;
   let pointIndex = 0;
   let finiteLightIndex = 0;
+  let finiteLightSampleWeightAccum = 0;
 
   for (const light of scene.lights) {
     if (light.intensity <= 0) continue;
@@ -512,9 +553,10 @@ function sampleHybridDirectLighting(
       const hemiX = (light.ground.x + (light.diffuse.x - light.ground.x) * t) * li;
       const hemiY = (light.ground.y + (light.diffuse.y - light.ground.y) * t) * li;
       const hemiZ = (light.ground.z + (light.diffuse.z - light.ground.z) * t) * li;
-      out.x += hemiX * baseColor.x * diffuseWeight;
-      out.y += hemiY * baseColor.y * diffuseWeight;
-      out.z += hemiZ * baseColor.z * diffuseWeight;
+      const hemiDiffuse = diffuseWeight * diffuseViewFresnelScale;
+      out.x += hemiX * baseColor.x * hemiDiffuse;
+      out.y += hemiY * baseColor.y * hemiDiffuse;
+      out.z += hemiZ * baseColor.z * hemiDiffuse;
       continue;
     }
 
@@ -524,8 +566,24 @@ function sampleHybridDirectLighting(
       dirIndex += 1;
       const currentFiniteLightIndex = finiteLightIndex;
       finiteLightIndex += 1;
-      if (useSingleFiniteLightSample && finiteLightCount > 1 && currentFiniteLightIndex !== selectedFiniteLightIndex) {
-        continue;
+      let finiteLightCompensation = 1;
+      if (useSingleFiniteLightSample && finiteLightCount > 1) {
+        if (useWeightedFiniteLightSampling) {
+          const sampleWeight = finiteDirectLightSamplingWeight(light);
+          const intervalMin = finiteLightSampleWeightAccum;
+          finiteLightSampleWeightAccum += sampleWeight;
+          const isLastFiniteLight = currentFiniteLightIndex >= finiteLightCount - 1;
+          const isSelected = selectedFiniteLightWeightTarget >= intervalMin
+            && (selectedFiniteLightWeightTarget < finiteLightSampleWeightAccum || isLastFiniteLight);
+          if (!isSelected) {
+            continue;
+          }
+          finiteLightCompensation = finiteLightSampleWeightSum / Math.max(sampleWeight, 1e-5);
+        } else if (currentFiniteLightIndex !== selectedFiniteLightIndex) {
+          continue;
+        } else {
+          finiteLightCompensation = finiteLightCount;
+        }
       }
       const jitteredDir =
         computeJitteredDirectionalLightDirection(light.direction, sampleIndex + bounce * 31 + pixelIndex, currentDirIndex)
@@ -538,7 +596,20 @@ function sampleHybridDirectLighting(
       const lightDirZ = -jitteredDir.z * invJitteredLen;
       const ndl = Math.max(0, normal.x * lightDirX + normal.y * lightDirY + normal.z * lightDirZ);
       if (ndl <= 0) continue;
-      if (isShadowedDirectional(scene, hitPoint, normal, lightDirX, lightDirY, lightDirZ, hitMeshIndex)) {
+      const shadowTransmittance = computeShadowTransmittanceDirectional(
+        scene,
+        hitPoint,
+        normal,
+        lightDirX,
+        lightDirY,
+        lightDirZ,
+        hitMeshIndex,
+      );
+      if (
+        shadowTransmittance.x <= 1e-4
+        && shadowTransmittance.y <= 1e-4
+        && shadowTransmittance.z <= 1e-4
+      ) {
         continue;
       }
       const halfX = lightDirX + viewDir.x;
@@ -549,14 +620,17 @@ function sampleHybridDirectLighting(
       if (specWeight > 0 && halfLenSq > 1e-12) {
         const invHalfLen = 1 / Math.sqrt(halfLenSq);
         const ndh = Math.max(0, normal.x * halfX * invHalfLen + normal.y * halfY * invHalfLen + normal.z * halfZ * invHalfLen);
-        specTerm = Math.pow(ndh, shininess) * ndl;
+        const vdh = Math.max(0, viewDir.x * halfX * invHalfLen + viewDir.y * halfY * invHalfLen + viewDir.z * halfZ * invHalfLen);
+        const specFresnel = schlickFresnel(vdh, specBaseF0);
+        const specFresnelGain = clamp(specFresnel / Math.max(specBaseF0, 1e-3), 0.75, 4);
+        specTerm = Math.pow(ndh, shininess) * ndl * specFresnelGain;
       }
-      const li = light.intensity * finiteLightWeight;
-      const diffuseTerm = diffuseWeight * ndl;
+      const li = light.intensity * finiteLightCompensation;
+      const diffuseTerm = diffuseWeight * diffuseViewFresnelScale * ndl;
       const specScale = specTerm * specWeight;
-      out.x += light.diffuse.x * li * (baseColor.x * diffuseTerm + specColorX * specScale);
-      out.y += light.diffuse.y * li * (baseColor.y * diffuseTerm + specColorY * specScale);
-      out.z += light.diffuse.z * li * (baseColor.z * diffuseTerm + specColorZ * specScale);
+      out.x += light.diffuse.x * shadowTransmittance.x * li * (baseColor.x * diffuseTerm + specColorX * specScale);
+      out.y += light.diffuse.y * shadowTransmittance.y * li * (baseColor.y * diffuseTerm + specColorY * specScale);
+      out.z += light.diffuse.z * shadowTransmittance.z * li * (baseColor.z * diffuseTerm + specColorZ * specScale);
       continue;
     }
 
@@ -566,8 +640,24 @@ function sampleHybridDirectLighting(
       pointIndex += 1;
       const currentFiniteLightIndex = finiteLightIndex;
       finiteLightIndex += 1;
-      if (useSingleFiniteLightSample && finiteLightCount > 1 && currentFiniteLightIndex !== selectedFiniteLightIndex) {
-        continue;
+      let finiteLightCompensation = 1;
+      if (useSingleFiniteLightSample && finiteLightCount > 1) {
+        if (useWeightedFiniteLightSampling) {
+          const sampleWeight = finiteDirectLightSamplingWeight(light);
+          const intervalMin = finiteLightSampleWeightAccum;
+          finiteLightSampleWeightAccum += sampleWeight;
+          const isLastFiniteLight = currentFiniteLightIndex >= finiteLightCount - 1;
+          const isSelected = selectedFiniteLightWeightTarget >= intervalMin
+            && (selectedFiniteLightWeightTarget < finiteLightSampleWeightAccum || isLastFiniteLight);
+          if (!isSelected) {
+            continue;
+          }
+          finiteLightCompensation = finiteLightSampleWeightSum / Math.max(sampleWeight, 1e-5);
+        } else if (currentFiniteLightIndex !== selectedFiniteLightIndex) {
+          continue;
+        } else {
+          finiteLightCompensation = finiteLightCount;
+        }
       }
       const samplePos = computeJitteredPointLightPosition(light, sampleIndex + bounce * 47 + pixelIndex, currentPointIndex) ?? light.position;
       const toLightX = samplePos.x - hitPoint.x;
@@ -582,7 +672,21 @@ function sampleHybridDirectLighting(
       const lightDirZ = toLightZ * invDist;
       const ndl = Math.max(0, normal.x * lightDirX + normal.y * lightDirY + normal.z * lightDirZ);
       if (ndl <= 0) continue;
-      if (isShadowedPoint(scene, hitPoint, normal, lightDirX, lightDirY, lightDirZ, dist, hitMeshIndex)) {
+      const shadowTransmittance = computeShadowTransmittancePoint(
+        scene,
+        hitPoint,
+        normal,
+        lightDirX,
+        lightDirY,
+        lightDirZ,
+        dist,
+        hitMeshIndex,
+      );
+      if (
+        shadowTransmittance.x <= 1e-4
+        && shadowTransmittance.y <= 1e-4
+        && shadowTransmittance.z <= 1e-4
+      ) {
         continue;
       }
       const range = Number.isFinite(light.range) && light.range > 0 ? light.range : dist * 2;
@@ -597,14 +701,17 @@ function sampleHybridDirectLighting(
       if (specWeight > 0 && halfLenSq > 1e-12) {
         const invHalfLen = 1 / Math.sqrt(halfLenSq);
         const ndh = Math.max(0, normal.x * halfX * invHalfLen + normal.y * halfY * invHalfLen + normal.z * halfZ * invHalfLen);
-        specTerm = Math.pow(ndh, shininess) * ndl;
+        const vdh = Math.max(0, viewDir.x * halfX * invHalfLen + viewDir.y * halfY * invHalfLen + viewDir.z * halfZ * invHalfLen);
+        const specFresnel = schlickFresnel(vdh, specBaseF0);
+        const specFresnelGain = clamp(specFresnel / Math.max(specBaseF0, 1e-3), 0.75, 4);
+        specTerm = Math.pow(ndh, shininess) * ndl * specFresnelGain;
       }
-      const li = light.intensity * attenuation * finiteLightWeight;
-      const diffuseTerm = diffuseWeight * ndl;
+      const li = light.intensity * attenuation * finiteLightCompensation;
+      const diffuseTerm = diffuseWeight * diffuseViewFresnelScale * ndl;
       const specScale = specTerm * specWeight;
-      out.x += light.diffuse.x * li * (baseColor.x * diffuseTerm + specColorX * specScale);
-      out.y += light.diffuse.y * li * (baseColor.y * diffuseTerm + specColorY * specScale);
-      out.z += light.diffuse.z * li * (baseColor.z * diffuseTerm + specColorZ * specScale);
+      out.x += light.diffuse.x * shadowTransmittance.x * li * (baseColor.x * diffuseTerm + specColorX * specScale);
+      out.y += light.diffuse.y * shadowTransmittance.y * li * (baseColor.y * diffuseTerm + specColorY * specScale);
+      out.z += light.diffuse.z * shadowTransmittance.z * li * (baseColor.z * diffuseTerm + specColorZ * specScale);
     }
   }
 
@@ -684,6 +791,7 @@ function sampleHybridContinuation(
     out.throughput.z = (1 + (material.baseColor.z - 1) * 0.2) * tintScale;
     out.nextMediumIor = refracted ? nextMediumIorForTransmission : mediumIor;
     out.wasTransmission = Boolean(refracted);
+    out.wasGlossySpecular = !refracted || roughness <= 0.35;
     return out;
   }
 
@@ -710,6 +818,7 @@ function sampleHybridContinuation(
     out.throughput.z = (1 + (material.baseColor.z - 1) * material.metallic) * specScale;
     out.nextMediumIor = mediumIor;
     out.wasTransmission = false;
+    out.wasGlossySpecular = roughness <= 0.35;
     return out;
   }
 
@@ -731,10 +840,11 @@ function sampleHybridContinuation(
   out.throughput.z = material.baseColor.z * diffuseScale;
   out.nextMediumIor = mediumIor;
   out.wasTransmission = false;
+  out.wasGlossySpecular = false;
   return out;
 }
 
-function isShadowedDirectional(
+function computeShadowTransmittanceDirectional(
   scene: WorkerSceneState,
   hitPoint: Vector3,
   normal: Vector3,
@@ -742,7 +852,7 @@ function isShadowedDirectional(
   lightDirY: number,
   lightDirZ: number,
   hitMeshIndex: number,
-): boolean {
+): Vector3 {
   shadowRayScratchOrigin.x = hitPoint.x + normal.x * 0.0035;
   shadowRayScratchOrigin.y = hitPoint.y + normal.y * 0.0035;
   shadowRayScratchOrigin.z = hitPoint.z + normal.z * 0.0035;
@@ -750,10 +860,10 @@ function isShadowedDirectional(
   shadowRayScratchDirection.y = lightDirY;
   shadowRayScratchDirection.z = lightDirZ;
   shadowRayScratch.length = 1e6;
-  return hasAnyTraceHit(scene, shadowRayScratch, hitMeshIndex);
+  return traceShadowTransmittance(scene, shadowRayScratch, hitMeshIndex, undefined);
 }
 
-function isShadowedPoint(
+function computeShadowTransmittancePoint(
   scene: WorkerSceneState,
   hitPoint: Vector3,
   normal: Vector3,
@@ -762,7 +872,7 @@ function isShadowedPoint(
   lightDirZ: number,
   lightDistance: number,
   hitMeshIndex: number,
-): boolean {
+): Vector3 {
   shadowRayScratchOrigin.x = hitPoint.x + normal.x * 0.0035;
   shadowRayScratchOrigin.y = hitPoint.y + normal.y * 0.0035;
   shadowRayScratchOrigin.z = hitPoint.z + normal.z * 0.0035;
@@ -771,7 +881,90 @@ function isShadowedPoint(
   shadowRayScratchDirection.z = lightDirZ;
   const shadowMaxDistance = lightDistance - 0.005;
   shadowRayScratch.length = Math.max(0, shadowMaxDistance);
-  return hasAnyTraceHit(scene, shadowRayScratch, hitMeshIndex, shadowMaxDistance);
+  return traceShadowTransmittance(scene, shadowRayScratch, hitMeshIndex, shadowMaxDistance);
+}
+
+function traceShadowTransmittance(
+  scene: WorkerSceneState,
+  ray: Ray,
+  ignoreMeshIndex: number,
+  maxDistance?: number,
+): Vector3 {
+  shadowTransmittanceScratch.x = 1;
+  shadowTransmittanceScratch.y = 1;
+  shadowTransmittanceScratch.z = 1;
+  let remaining = Number.isFinite(maxDistance) ? Math.max(0, maxDistance ?? 0) : 1e6;
+  let currentIgnoreMeshIndex = ignoreMeshIndex;
+  const advanceEpsilon = 0.0045;
+  const minTransmittance = 0.02;
+  const maxOccluderHits = 4;
+
+  if (remaining <= 1e-6) {
+    return shadowTransmittanceScratch;
+  }
+
+  for (let step = 0; step < maxOccluderHits; step += 1) {
+    ray.length = remaining;
+    const hit = pickTraceRayClosest(scene, ray, currentIgnoreMeshIndex);
+    if (!hit) {
+      break;
+    }
+    if (!(hit.distance >= 0) || hit.distance > remaining) {
+      break;
+    }
+
+    const occluderTransmittance = shadowOccluderTransmittanceToRef(hit.material, shadowOccluderTransmittanceScratch);
+    if (
+      occluderTransmittance.x <= 1e-4
+      && occluderTransmittance.y <= 1e-4
+      && occluderTransmittance.z <= 1e-4
+    ) {
+      shadowTransmittanceScratch.x = 0;
+      shadowTransmittanceScratch.y = 0;
+      shadowTransmittanceScratch.z = 0;
+      return shadowTransmittanceScratch;
+    }
+    shadowTransmittanceScratch.x *= occluderTransmittance.x;
+    shadowTransmittanceScratch.y *= occluderTransmittance.y;
+    shadowTransmittanceScratch.z *= occluderTransmittance.z;
+    if (
+      shadowTransmittanceScratch.x <= minTransmittance
+      && shadowTransmittanceScratch.y <= minTransmittance
+      && shadowTransmittanceScratch.z <= minTransmittance
+    ) {
+      shadowTransmittanceScratch.x = 0;
+      shadowTransmittanceScratch.y = 0;
+      shadowTransmittanceScratch.z = 0;
+      return shadowTransmittanceScratch;
+    }
+
+    ray.origin.x = hit.point.x + ray.direction.x * advanceEpsilon;
+    ray.origin.y = hit.point.y + ray.direction.y * advanceEpsilon;
+    ray.origin.z = hit.point.z + ray.direction.z * advanceEpsilon;
+    remaining -= Math.max(0, hit.distance) + advanceEpsilon;
+    if (remaining <= 1e-5) {
+      break;
+    }
+    currentIgnoreMeshIndex = hit.meshIndex;
+  }
+
+  return shadowTransmittanceScratch;
+}
+
+function shadowOccluderTransmittanceToRef(material: WorkerMaterial, out: Vector3): Vector3 {
+  const transmission = clamp01Safe(material.transmission);
+  if (transmission <= 0.02) {
+    out.x = 0;
+    out.y = 0;
+    out.z = 0;
+    return out;
+  }
+  const roughnessPenalty = 1 - clamp(material.roughness, 0, 1) * 0.2;
+  const baseScale = transmission * roughnessPenalty;
+  out.x = clamp(baseScale * Math.sqrt(Math.max(0, material.baseColor.x)), 0, 1);
+  out.y = clamp(baseScale * Math.sqrt(Math.max(0, material.baseColor.y)), 0, 1);
+  out.z = clamp(baseScale * Math.sqrt(Math.max(0, material.baseColor.z)), 0, 1);
+  return out;
 }
 
 function pickTraceRayClosest(scene: WorkerSceneState, ray: Ray, ignoreMeshIndex: number): WorkerHit | null {
@@ -782,7 +975,9 @@ function pickTraceRayClosest(scene: WorkerSceneState, ray: Ray, ignoreMeshIndex:
     return null;
   }
 
-  const stack: WorkerMeshBvhNode[] = [root];
+  const stack = traceMeshBvhStackScratch;
+  stack.length = 0;
+  stack.push(root);
   while (stack.length > 0) {
     const node = stack.pop()!;
     const nodeHitDist = rayIntersectsTraceAabb(ray, node.minX, node.minY, node.minZ, node.maxX, node.maxY, node.maxZ, bestDistance);
@@ -850,80 +1045,6 @@ function pickTraceRayClosest(scene: WorkerSceneState, ray: Ray, ignoreMeshIndex:
   }
 
   return bestHit;
-}
-
-function hasAnyTraceHit(
-  scene: WorkerSceneState,
-  ray: Ray,
-  ignoreMeshIndex: number,
-  maxDistance?: number,
-): boolean {
-  const limit = Number.isFinite(maxDistance) ? Math.max(0, maxDistance ?? 0) : null;
-  const root = scene.meshBvhRoot;
-  if (!root) {
-    return false;
-  }
-  const maxT = limit ?? Number.POSITIVE_INFINITY;
-  const stack: WorkerMeshBvhNode[] = [root];
-  while (stack.length > 0) {
-    const node = stack.pop()!;
-    const nodeHitDist = rayIntersectsTraceAabb(ray, node.minX, node.minY, node.minZ, node.maxX, node.maxY, node.maxZ, maxT);
-    if (nodeHitDist === null) {
-      continue;
-    }
-    if (node.items) {
-      for (const entry of node.items) {
-        if (entry.meshIndex === ignoreMeshIndex) {
-          continue;
-        }
-        const entryHitDist = rayIntersectsTraceAabb(
-          ray,
-          entry.minX,
-          entry.minY,
-          entry.minZ,
-          entry.maxX,
-          entry.maxY,
-          entry.maxZ,
-          maxT,
-        );
-        if (entryHitDist === null) {
-          continue;
-        }
-        const hasHit = entry.triangleAccel
-          ? intersectTraceTriangleAccelAny(ray, entry.triangleAccel, limit)
-          : intersectTraceLineAccelAny(ray, entry.lineAccel, limit);
-        if (hasHit) {
-          return true;
-        }
-      }
-      continue;
-    }
-
-    const left = node.left;
-    const right = node.right;
-    if (!left && !right) {
-      continue;
-    }
-    if (left && right) {
-      const leftHit = rayIntersectsTraceAabb(ray, left.minX, left.minY, left.minZ, left.maxX, left.maxY, left.maxZ, maxT);
-      const rightHit = rayIntersectsTraceAabb(ray, right.minX, right.minY, right.minZ, right.maxX, right.maxY, right.maxZ, maxT);
-      if (leftHit !== null && rightHit !== null) {
-        if (leftHit < rightHit) {
-          stack.push(right, left);
-        } else {
-          stack.push(left, right);
-        }
-        continue;
-      }
-      if (leftHit !== null) stack.push(left);
-      if (rightHit !== null) stack.push(right);
-      continue;
-    }
-    if (left) stack.push(left);
-    if (right) stack.push(right);
-  }
-
-  return false;
 }
 
 function buildWorkerMeshBvh(entries: WorkerMeshEntry[]): WorkerMeshBvhNode | null {
@@ -1076,46 +1197,6 @@ function intersectTraceLineAccelClosest(
     // CPU path fallback behavior by using the inverse ray direction as a shading fallback.
     normal: new Vector3(-dx, -dy, -dz),
   };
-}
-
-function intersectTraceLineAccelAny(
-  ray: Ray,
-  accel: PathTraceWorkerLineAccel | null,
-  maxDistance: number | null,
-): boolean {
-  if (!accel || accel.segmentCount <= 0) {
-    return false;
-  }
-  const positions = accel.positionsWorld;
-  const limit = maxDistance === null ? Number.POSITIVE_INFINITY : Math.max(0, maxDistance);
-  for (let base = 0; base + 5 < positions.length; base += 6) {
-    const distance = rayIntersectsTraceLineSegmentDistance(
-      ray,
-      positions[base],
-      positions[base + 1],
-      positions[base + 2],
-      positions[base + 3],
-      positions[base + 4],
-      positions[base + 5],
-      accel.intersectionThreshold,
-      limit,
-    );
-    if (distance >= 0) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function intersectTraceTriangleAccelAny(
-  ray: Ray,
-  accel: PathTraceWorkerTriangleAccel,
-  maxDistance: number | null,
-): boolean {
-  if (accel.triangleBvhRoot) {
-    return intersectTraceTriangleLocalBvhAny(ray, accel, maxDistance);
-  }
-  return intersectTraceTriangleSoupAny(ray, accel, maxDistance);
 }
 
 function rayIntersectsTraceLineSegmentDistance(
@@ -1308,76 +1389,6 @@ function intersectTraceTriangleSoupClosest(
   };
 }
 
-function intersectTraceTriangleSoupAny(
-  ray: Ray,
-  accel: PathTraceWorkerTriangleAccel,
-  maxDistance: number | null,
-): boolean {
-  const positions = accel.positionsWorld;
-  const ox = ray.origin.x;
-  const oy = ray.origin.y;
-  const oz = ray.origin.z;
-  const dx = ray.direction.x;
-  const dy = ray.direction.y;
-  const dz = ray.direction.z;
-  const epsilon = 1e-8;
-  const minT = 1e-5;
-  const limit = maxDistance !== null && Number.isFinite(maxDistance)
-    ? Math.max(minT, maxDistance)
-    : Number.POSITIVE_INFINITY;
-
-  for (let base = 0; base < positions.length; base += 9) {
-    const ax = positions[base];
-    const ay = positions[base + 1];
-    const az = positions[base + 2];
-    const bx = positions[base + 3];
-    const by = positions[base + 4];
-    const bz = positions[base + 5];
-    const cx = positions[base + 6];
-    const cy = positions[base + 7];
-    const cz = positions[base + 8];
-
-    const e1x = bx - ax;
-    const e1y = by - ay;
-    const e1z = bz - az;
-    const e2x = cx - ax;
-    const e2y = cy - ay;
-    const e2z = cz - az;
-
-    const px = dy * e2z - dz * e2y;
-    const py = dz * e2x - dx * e2z;
-    const pz = dx * e2y - dy * e2x;
-    const det = e1x * px + e1y * py + e1z * pz;
-    if (Math.abs(det) <= epsilon) {
-      continue;
-    }
-    const invDet = 1 / det;
-
-    const tx = ox - ax;
-    const ty = oy - ay;
-    const tz = oz - az;
-    const u = (tx * px + ty * py + tz * pz) * invDet;
-    if (u < -1e-6 || u > 1 + 1e-6) {
-      continue;
-    }
-
-    const qx = ty * e1z - tz * e1y;
-    const qy = tz * e1x - tx * e1z;
-    const qz = tx * e1y - ty * e1x;
-    const v = (dx * qx + dy * qy + dz * qz) * invDet;
-    if (v < -1e-6 || u + v > 1 + 1e-6) {
-      continue;
-    }
-
-    const t = (e2x * qx + e2y * qy + e2z * qz) * invDet;
-    if (t > minT && t < limit) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 function intersectTraceTriangleLocalBvhClosest(
   ray: Ray,
   accel: PathTraceWorkerTriangleAccel,
@@ -1400,7 +1411,9 @@ function intersectTraceTriangleLocalBvhClosest(
   let hitBase = -1;
   let hitU = 0;
   let hitV = 0;
-  const stack: PathTraceWorkerTriangleBvhNode[] = [root];
+  const stack = traceTriangleBvhStackScratch;
+  stack.length = 0;
+  stack.push(root);
 
   while (stack.length > 0) {
     const node = stack.pop()!;
@@ -1484,103 +1497,6 @@ function intersectTraceTriangleLocalBvhClosest(
     point: new Vector3(ox + dx * bestT, oy + dy * bestT, oz + dz * bestT),
     normal: sampleTraceTriangleNormal(positions, normals, hitBase, hitU, hitV),
   };
-}
-
-function intersectTraceTriangleLocalBvhAny(
-  ray: Ray,
-  accel: PathTraceWorkerTriangleAccel,
-  maxDistance: number | null,
-): boolean {
-  const root = accel.triangleBvhRoot;
-  if (!root) return false;
-
-  const positions = accel.positionsWorld;
-  const ox = ray.origin.x;
-  const oy = ray.origin.y;
-  const oz = ray.origin.z;
-  const dx = ray.direction.x;
-  const dy = ray.direction.y;
-  const dz = ray.direction.z;
-  const epsilon = 1e-8;
-  const minT = 1e-5;
-  const maxT = maxDistance !== null && Number.isFinite(maxDistance)
-    ? Math.max(minT, maxDistance)
-    : Number.POSITIVE_INFINITY;
-  const stack: PathTraceWorkerTriangleBvhNode[] = [root];
-
-  while (stack.length > 0) {
-    const node = stack.pop()!;
-    const nodeHitDist = rayIntersectsTraceAabb(ray, node.minX, node.minY, node.minZ, node.maxX, node.maxY, node.maxZ, maxT);
-    if (nodeHitDist === null) continue;
-
-    if (node.triangleIndices) {
-      for (let i = 0; i < node.triangleIndices.length; i += 1) {
-        const triIndex = node.triangleIndices[i];
-        const base = triIndex * 9;
-        const ax = positions[base];
-        const ay = positions[base + 1];
-        const az = positions[base + 2];
-        const bx = positions[base + 3];
-        const by = positions[base + 4];
-        const bz = positions[base + 5];
-        const cx = positions[base + 6];
-        const cy = positions[base + 7];
-        const cz = positions[base + 8];
-
-        const e1x = bx - ax;
-        const e1y = by - ay;
-        const e1z = bz - az;
-        const e2x = cx - ax;
-        const e2y = cy - ay;
-        const e2z = cz - az;
-
-        const px = dy * e2z - dz * e2y;
-        const py = dz * e2x - dx * e2z;
-        const pz = dx * e2y - dy * e2x;
-        const det = e1x * px + e1y * py + e1z * pz;
-        if (Math.abs(det) <= epsilon) continue;
-        const invDet = 1 / det;
-
-        const tx = ox - ax;
-        const ty = oy - ay;
-        const tz = oz - az;
-        const u = (tx * px + ty * py + tz * pz) * invDet;
-        if (u < -1e-6 || u > 1 + 1e-6) continue;
-
-        const qx = ty * e1z - tz * e1y;
-        const qy = tz * e1x - tx * e1z;
-        const qz = tx * e1y - ty * e1x;
-        const v = (dx * qx + dy * qy + dz * qz) * invDet;
-        if (v < -1e-6 || u + v > 1 + 1e-6) continue;
-
-        const t = (e2x * qx + e2y * qy + e2z * qz) * invDet;
-        if (t > minT && t < maxT) {
-          return true;
-        }
-      }
-      continue;
-    }
-
-    const left = node.left;
-    const right = node.right;
-    if (!left && !right) continue;
-    if (left && right) {
-      const leftHit = rayIntersectsTraceAabb(ray, left.minX, left.minY, left.minZ, left.maxX, left.maxY, left.maxZ, maxT);
-      const rightHit = rayIntersectsTraceAabb(ray, right.minX, right.minY, right.minZ, right.maxX, right.maxY, right.maxZ, maxT);
-      if (leftHit !== null && rightHit !== null) {
-        if (leftHit < rightHit) stack.push(right, left);
-        else stack.push(left, right);
-        continue;
-      }
-      if (leftHit !== null) stack.push(left);
-      if (rightHit !== null) stack.push(right);
-      continue;
-    }
-    if (left) stack.push(left);
-    if (right) stack.push(right);
-  }
-
-  return false;
 }
 
 function sampleTraceTriangleNormal(
@@ -2055,6 +1971,19 @@ function clamp01Safe(value: number): number {
 
 function clampFinite(value: number): number {
   return Number.isFinite(value) ? clamp(value, 0, 64) : 0;
+}
+
+function luminance(r: number, g: number, b: number): number {
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function finiteDirectLightSamplingWeight(light: WorkerDirectionalLight | WorkerPointLight): number {
+  const intensity = Number.isFinite(light.intensity) ? Math.max(0, light.intensity) : 0;
+  const r = Number.isFinite(light.diffuse.x) ? light.diffuse.x : 1;
+  const g = Number.isFinite(light.diffuse.y) ? light.diffuse.y : 1;
+  const b = Number.isFinite(light.diffuse.z) ? light.diffuse.z : 1;
+  const colorLum = Math.max(0.05, luminance(r, g, b));
+  return Math.max(0.05, intensity * colorLum);
 }
 
 function multiplyVec3InPlace(a: Vector3, b: Vector3): Vector3 {

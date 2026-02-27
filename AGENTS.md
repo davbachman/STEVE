@@ -11,7 +11,7 @@ The app supports:
 - Implicit surfaces `F(x,y,z)=0`
 - Explicit single-axis surfaces (`z=f(x,y)`, `x=g(y,z)`, `y=h(x,z)`) recognized and compiled as surface plots
 
-The intended product target is a high-control interactive renderer with realistic shading/shadows plus a future higher-quality still-render mode.
+The intended product target is a high-control interactive renderer with realistic shading/shadows. A separate higher-quality still-render path was prototyped, but is currently **not** the active product direction (see the strategy reset below).
 
 ## Current Repo Status (Important)
 
@@ -25,8 +25,9 @@ Highlights already working:
 - Object list + inspector panels + scene/material/light controls
 - Selection and drag interactions (camera/object/light)
 - Directional and point lights, with shadows (capability gated)
-- Quality mode baseline with progressive temporal accumulation (TAA), restart-on-change, and quality-aware PNG export wait behavior
-- Phase 5 quality-renderer routing/diagnostics/export plumbing is in place, with `hybrid_gpu_preview` (Phase 5A fast GPU-backed accumulation) and an experimental `path` backend (Phase 5B CPU hybrid/path tracer prototype with CPU BVH/triangle acceleration and worker offload; still not production-ready)
+- Interactive Babylon PBR material pipeline with transmission/refraction approximations and ground-reflection plumbing hooks (some features capability/compatibility gated)
+- Legacy/experimental Quality mode baseline with progressive temporal accumulation (TAA), restart-on-change, and quality-aware PNG export wait behavior (code remains, but quality-renderer development is now parked)
+- Phase 5 quality-renderer routing/diagnostics/export plumbing is implemented (`hybrid_gpu_preview` + experimental `path` backend), but this is now treated as **parked legacy/experimental work**, not the primary roadmap
 - Local save/load/autosave and PNG export
 - Worker-based parse/meshing pipeline (preview/refine workflow + cancellation)
 - Playwright harness + shadow regression scenes (with WebGPU screenshot caveats)
@@ -44,7 +45,7 @@ Known prototype limitations remain (see "Phase Status" and "Known Issues").
 - Scene controls (ground plane, XY grid, axes, background)
 - Lighting controls (ambient, directional, point lights)
 - Local persistence and PNG export
-- Progressive high-quality still render mode (current TAA accumulation baseline; advanced quality still renderer is a future phase)
+- Interactive realism improvements (reflections/material/lighting polish) within a modest complexity budget
 
 ### Scope (Out of v1)
 
@@ -53,6 +54,7 @@ Known prototype limitations remain (see "Phase Status" and "Known Issues").
 - Cloud sync/collaboration
 - Mobile-first UX
 - Guaranteed photoreal caustics
+- Productized quality/path-traced still renderer (explicitly deferred / currently abandoned as active roadmap)
 
 ### Supported Equation Types
 
@@ -86,7 +88,7 @@ Interactive mode target:
 
 Quality mode target:
 
-- Advanced progressive still renderer beyond the current TAA accumulation baseline (future phase)
+- Legacy/experimental only for now; no active product development plan in the current roadmap reset
 
 ## Current Architecture and Tech Stack
 
@@ -224,16 +226,69 @@ Playwright scenarios for shadow smoke and visual regression workflows. Note: vis
 
 ### Partial / Placeholder / Unfinished
 
-- Quality render mode now provides progressive temporal accumulation (TAA-based) with restart-on-change and quality-aware PNG export (waits for accumulation with timeout behavior), plus backend selection/fallback/diagnostics plumbing for Phase 5
-- `Quality + Hybrid GPU Preview` (Phase 5A) now provides a fast GPU-backed backend-owned accumulation/export path using render-target captures + progressive accumulation (usable preview/export speed; realism limited vs true path tracing)
-- Experimental `Quality + Path` backend (Phase 5B prototype) exists with dedicated quality accumulation/export buffer and a CPU hybrid/path tracer prototype (direct lighting, shadows, bounded bounces, transmission/IOR approximation, CPU BVH/triangle acceleration, worker offload fallback path), but it is still very slow and not yet reliable enough for normal use
+- Legacy quality-renderer stack still exists in code (`taa_preview`, `hybrid_gpu_preview`, experimental `path`) with export/diagnostics plumbing, but quality-renderer development is now **parked** and not the active product path
+- `Quality + Hybrid GPU Preview` (Phase 5A) remains the most practical legacy quality backend if a future agent needs to compare or recover old work
+- Experimental `Quality + Path` backend (Phase 5B prototype) includes substantial CPU/worker/BVH work and diagnostics, but it is explicitly parked due to complexity/performance tradeoffs and should only receive build-fix/compat maintenance unless priorities change
 - Implicit surface shading hemisphere issue is resolved in current renderer, but implicit meshing quality/topology remains in progress (marching-tetra artifacts/isotropy limits; marching cubes not yet implemented)
-- Advanced realism is still incomplete (true path-traced quality renderer and robust interactive reflections/transmission stacking are future work)
+- Interactive realism is still incomplete (better opaque reflections/material calibration are now the active realism focus; robust transparent refraction stacking remains out of scope for now)
 - Playwright visual baselines are not fully trustworthy for WebGPU pixels in headless mode
 
-## Phase Status (Plan Progress)
+## Status and Direction Reset (Supersedes Legacy Phase 5+ Roadmap Below)
 
-This roadmap was revised after the Phase 4 baseline landed. Phases 1–4 are complete enough for current prototype goals; post-Phase-4 development now follows a priority-aligned roadmap (Phases 5–9) described below.
+This section is the current source of truth for a fresh agent handoff. The detailed Phase 5–9 roadmap below is retained as historical context and implementation background, but the active direction has changed.
+
+### Current Codebase Snapshot (As of This File)
+
+- The app is a working WebGPU Babylon.js interactive 3D plotting prototype with solid core UX (plot editing, workers, lights/shadows, persistence, PNG export).
+- Interactive rendering already uses Babylon `PBRMaterial` for plot meshes (`src/renderer/SceneController.ts`) with opacity/transmission/IOR controls mapped from the app material model.
+- Quality-renderer infrastructure and backends still exist in `src/renderer/qualityBackends.ts` and remain buildable, but they are now **parked** as legacy/experimental work.
+- The Phase 5B `path` backend prototype currently includes:
+  - CPU hybrid/path tracing with worker offload fallback (`src/workers/pathTraceQualityWorker.ts`)
+  - Top-level trace-mesh BVH + per-mesh triangle BVHs and line intersections
+  - Alignment probes / diagnostics and path throughput telemetry
+  - Multiple recent transport/throughput experiments (fresnel-shaped direct lighting, weighted finite-light sampling, bounce-1 extra finite direct after glossy/transmission paths, transmissive shadow traversal, RGB shadow transmittance through transmissive occluders, allocation/scratch reuse)
+- A built-in regression/demo scene for this work exists at `/?testScene=phase5b-path-mixed-geometry`, but it is now primarily a regression/reference scene, not an active Phase 5B development target.
+- `npm run build` passed after the most recent Phase 5B worker/main-thread path backend changes (including RGB direct-light shadow transmittance through transmissive occluders).
+
+### Active Strategy (Finishability-First, Interactive-Only Realism)
+
+- The quality renderer is abandoned as an active product feature for now.
+- Realism work moves to the **interactive renderer** only, with a strict simplicity budget.
+- Transparent interactive refraction is intentionally de-scoped (approximate transparency is acceptable).
+- The primary visual target is noticeably better **opaque reflections** and better material/light calibration in interactive mode.
+
+### Active Implementation Plan (Current)
+
+1. **Soft-disable / de-emphasize quality mode in the product UI**
+   - Keep compatibility with old project files and avoid risky deletion.
+   - Coerce legacy `render.mode = 'quality'` usage to interactive behavior where needed.
+2. **Interactive reflection upgrade (bounded scope)**
+   - Prefer a single scene-level reflection probe path for opaque materials.
+   - Add robust environment-reflection fallback.
+   - Use event-driven refresh (not continuous per-frame updates).
+3. **Transparent rendering simplification**
+   - Disable true interactive refraction.
+   - Keep stable alpha/transmission + highlights + existing transparency ordering aids.
+4. **Material and lighting calibration**
+   - Tune defaults and PBR mapping for metal/ceramic/matte/simple glass looks.
+   - Improve out-of-box scene appearance without adding renderer complexity.
+5. **Diagnostics / compatibility hardening**
+   - Add lightweight interactive reflection path/fallback diagnostics.
+   - Keep legacy quality fields tolerated in saved projects.
+6. **Then continue the non-rendering roadmap**
+   - Undo/redo hardening (pragmatic coalescing first)
+   - Save/import hardening
+   - QA/performance/release hardening
+
+### Execution Style for Future Agents (Important)
+
+- Work autonomously in larger batches; do not pause to ask routine preference questions.
+- Ask only for real blockers (product-breaking tradeoffs, compatibility risks, or unresolved platform behavior).
+- Prefer simple, deterministic renderer improvements over ambitious new rendering subsystems.
+
+## Phase Status (Legacy Plan Progress / Historical Context)
+
+This roadmap section reflects the prior quality-renderer-first plan and is retained for historical context. Use the "Status and Direction Reset" section above as the current source of truth.
 
 ### Phase 1 — Rendering Correctness and Lighting Completion
 
@@ -398,7 +453,7 @@ Constraints:
 - Capability-gated, low-risk improvements only
 - Time-boxed pass with explicit abort criteria if ROI/performance is poor
 
-## Priority-Aligned Post-Phase-4 Roadmap (Supersedes Prior Ordering)
+## Priority-Aligned Post-Phase-4 Roadmap (Legacy / Historical; Superseded by Status and Direction Reset)
 
 ### Summary
 
@@ -730,13 +785,14 @@ Abort criteria:
 
 ## Known Issues / Current Bugs (As of This File)
 
-1. **Phase 5 path renderer is experimental and currently unreliable**
-- `Quality (progressive)` now has three relevant paths: stable `TAA` baseline, fast `Hybrid GPU Preview` (Phase 5A), and experimental `Quality + Path` (Phase 5B CPU hybrid/path tracer prototype).
-- Current known blockers for `Quality + Path`: very slow convergence (minutes/sample at `1.0x` on some scenes), remaining cross-hardware alignment/validation work (local instrumentation + campaign harness are now in place and passing locally), convergence/firefly tuning and visual hardening for reflective/transmissive scenes, worker-offload/runtime tuning, and no GPU traversal/path tracing yet (CPU BVH/triangle acceleration + worker offload are implemented).
+1. **Interactive realism is still limited and is now the primary rendering focus**
+- Opaque reflections are not yet where the user wants them.
+- Transparent materials still rely on approximate interactive transmission/refraction behavior and may produce artifacts in layered/transmissive scenes.
+- Material/light defaults need calibration for stronger out-of-box results.
 
-2. **Interactive realism is intentionally limited (for now)**
-- Advanced reflections/transmission realism in interactive mode is deferred to a later modest, time-boxed phase.
-- The primary realism investment is the quality renderer path.
+2. **Legacy quality-renderer code remains in the repo but is not an active product path**
+- `Quality (progressive)` still has legacy paths (`TAA`, `Hybrid GPU Preview`, experimental `Quality + Path`), but this stack is now parked for product work.
+- The Phase 5B `path` backend contains significant prototype work (worker offload, BVHs, diagnostics, transport experiments), but it remains slow and complex and should not be resumed unless priorities explicitly change.
 
 3. **WebGPU Playwright visual capture reliability**
 - Headless Chromium screenshots may not capture WebGPU canvas pixels consistently.
@@ -744,26 +800,27 @@ Abort criteria:
 4. **Vitest/Playwright test discovery overlap**
 - `npm run test:run` can include Playwright test files unless narrowed or Vitest config is tightened.
 
-## Recommended Next Steps (Engineering Priority)
+## Recommended Next Steps (Engineering Priority, Current Strategy)
 
-Interactive realism was evaluated as lower-confidence / lower-priority for current goals. Quality realism is the primary realism investment, so the next phases should follow the revised ordering below.
+The active strategy is to abandon further quality-renderer product development and improve the interactive renderer autonomously with a modest complexity budget.
 
-1. **Phase 5B/5C — Advance the true quality renderer path after Phase 5A**
-- Phase 5A (`Hybrid GPU Preview`) is complete for the current prototype goal and should be used for practical quality previews/exports.
-- Next priority: continue Phase 5B/5C convergence/realism tuning (especially firefly-clamp/highlight preservation and reflective/transmissive scene behavior) using the new path diagnostics + alignment campaign telemetry, while continuing non-visual CPU path throughput hardening and cross-hardware reruns of the alignment campaign as hardware becomes available.
-- Handoff note (current manual-check boundary): a small path-only firefly-clamp startup delay (`qualityClampFireflies` path accumulation now skips clamping until prior sample count `> 2`) landed most recently and passed build + local alignment campaign, but it still needs manual visual checks on glass/highlight scenes before further convergence tuning.
+1. **Interactive renderer finishability pass (primary priority)**
+- Soft-disable/de-emphasize quality mode in UI while preserving project-file compatibility.
+- Improve opaque reflections in interactive mode using a bounded reflection path (single scene-level probe if stable, environment fallback otherwise).
+- Simplify transparent interactive rendering (no true refraction; stable approximate transparency + highlights).
+- Tune material mapping/defaults and light calibration for better visual results without adding renderer complexity.
 
-2. **Phase 6 — Command-based undo/redo**
-- Replace snapshot-style history with broad command-history coverage, drag coalescing, and transaction boundaries.
+2. **Undo/redo pragmatic hardening (before full command-history rewrite)**
+- Keep snapshot history for now, but add drag/slider coalescing and transaction boundaries to reduce history spam and improve reliability.
 
-3. **Phase 7 — Save/import current state hardening**
-- Add schema migration/validation, autosave restore/clear UX, and stronger local save/open/import reliability.
+3. **Save/import current state hardening**
+- Add schema validation/migration scaffolding, safer import failure handling, and autosave restore/clear UX polish.
 
-4. **Phase 8 — QA / performance hardening**
-- Add regression coverage and performance diagnostics for the quality renderer, undo/redo, and persistence flows.
+4. **QA / performance hardening**
+- Add focused visual/perf checks for the interactive renderer improvements, plus regression coverage for undo/redo and persistence workflows.
 
-5. **Phase 9 — Modest interactive realism upgrade (optional, time-boxed)**
-- Apply low-risk, capability-gated interactive realism improvements only after the higher-priority phases are stable.
+5. **Optional cleanup / archival of legacy quality code (only after interactive pass)**
+- Defer broad deletion until the interactive-only path is stable and compatibility concerns are understood.
 
 ## Notes for Future Agents
 
@@ -775,13 +832,14 @@ Interactive realism was evaluated as lower-confidence / lower-priority for curre
   - `/?testScene=shadow-regression`
   - `/?testScene=point-shadow-regression`
 - Hard refresh after worker/mesher changes because worker bundles are cached separately by the dev server/browser.
-- Quality realism (advanced still renderer) is prioritized over interactive realism in the current roadmap.
-- Experimental Phase 5 quality work currently lives in `src/renderer/qualityBackends.ts` (router + `TaaPreviewQualityBackend` + `PathQualityBackendV1` modes for `hybrid_gpu_preview` and `path`).
-- Phase 5A (`Quality + Hybrid GPU Preview`) is the fast GPU-backed accumulation/export backend and is currently the practical way to preview quality output while Phase 5B path tracing matures.
-- `Quality + Path` remains a CPU hybrid/path tracer prototype with severe throughput limitations; alignment is improved after the capture-camera `upVector` setter fix, but still validate side-by-side at `Samples >= 1` across resize/quality scale/hardware scaling combinations.
-- Phase 5B CPU path tracing now includes top-level trace-mesh BVH, per-mesh triangle caches, per-mesh triangle BVHs, and worker batch offload (with fallback to main-thread CPU tracing when offload is unavailable/unsupported).
-- Worker offload implementation lives in `src/workers/pathTraceQualityWorker.ts` with protocol types in `src/workers/pathTraceQualityWorkerContracts.ts`.
-- `vite.config.ts` includes `worker.format = 'es'` for the Phase 5B path worker bundle; keep this in mind if changing worker build config.
-- Interactive realism is intentionally deferred and should be scoped as a modest, time-boxed pass unless priorities change.
-- Do not re-promote a broad interactive realism overhaul ahead of undo/redo or save/import hardening unless the user explicitly changes priorities.
+- Interactive realism is now the primary rendering focus; quality-renderer product development is parked.
+- Quality/Phase 5 code still exists in `src/renderer/qualityBackends.ts` (router + `TaaPreviewQualityBackend` + `PathQualityBackendV1` modes for `hybrid_gpu_preview` and `path`) and should be treated as legacy/experimental unless the user explicitly re-prioritizes it.
+- Recent parked Phase 5B path work includes worker offload, top-level/per-mesh BVHs, alignment diagnostics, throughput instrumentation, fresnel-shaped direct-light tweaks, weighted finite-light sampling, bounce-1 extra direct after glossy/transmission paths, and transmissive shadow traversal including RGB shadow transmittance through transmissive occluders.
+- Worker offload implementation for the parked path backend lives in `src/workers/pathTraceQualityWorker.ts` with protocol types in `src/workers/pathTraceQualityWorkerContracts.ts`.
+- `vite.config.ts` includes `worker.format = 'es'` for the path worker bundle; keep this in mind if touching worker build config even if the feature is parked.
+- Use built-in test scenes for interactive renderer regression checks, including:
+  - `/?testScene=shadow-regression`
+  - `/?testScene=point-shadow-regression`
+  - `/?testScene=phase5b-path-mixed-geometry` (now a useful mixed-material regression/demo scene, not just a path backend scene)
+- Implement interactive renderer changes autonomously in larger batches; avoid routine clarification prompts unless blocked by a real product/platform tradeoff.
 - The implicit lighting hemisphere issue is considered resolved unless new evidence/regressions appear.

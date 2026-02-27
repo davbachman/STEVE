@@ -1,4 +1,5 @@
 import type { Bounds3D, ImplicitSurfaceSpec, SerializedMesh } from '../../types/contracts';
+import { MC_EDGE_TABLE, MC_TRI_TABLE } from './marchingCubesTables';
 
 const tetrahedra: Array<[number, number, number, number]> = [
   [0, 5, 1, 6],
@@ -18,6 +19,30 @@ const cubeCorners: Array<[number, number, number]> = [
   [1, 0, 1],
   [1, 1, 1],
   [0, 1, 1],
+];
+
+const cubeEdges: Array<[number, number]> = [
+  [0, 1],
+  [1, 2],
+  [2, 3],
+  [3, 0],
+  [4, 5],
+  [5, 6],
+  [6, 7],
+  [7, 4],
+  [0, 4],
+  [1, 5],
+  [2, 6],
+  [3, 7],
+];
+
+const cubeFaces: Array<[number, number, number, number]> = [
+  [0, 1, 2, 3], // bottom z-
+  [4, 5, 6, 7], // top z+
+  [0, 1, 5, 4], // y-
+  [3, 2, 6, 7], // y+
+  [0, 4, 7, 3], // x-
+  [1, 2, 6, 5], // x+
 ];
 
 interface ScalarFieldFn {
@@ -117,7 +142,7 @@ function polygonizeUniformLeafGrid(ctx: MeshBuildContext): void {
         if (!cellMightContainSurface(ctx, cell)) {
           continue;
         }
-        polygonizeCubeAsTetra(ctx.rawTriangles, cell.corners, cell.values);
+        polygonizeCube(ctx.rawTriangles, cell.corners, cell.values);
       }
     }
   }
@@ -203,6 +228,84 @@ function resolveNearZeroSample(ctx: MeshBuildContext): number {
   // This avoids sign-biased asymmetry on surfaces like xyz=1.
   void ctx;
   return 0;
+}
+
+function polygonizeCube(target: number[], cubePos: V3[], cubeVal: number[]): void {
+  if (cubeHasAmbiguousFace(cubeVal)) {
+    // Face-ambiguous cubes can choose different diagonals across neighboring cells
+    // in classic marching cubes. Reuse the existing tetra path for deterministic
+    // shared-face triangulation on these cases.
+    polygonizeCubeAsTetra(target, cubePos, cubeVal);
+    return;
+  }
+
+  let cubeIndex = 0;
+  for (let i = 0; i < 8; i += 1) {
+    const v = cubeVal[i];
+    if (!Number.isFinite(v)) {
+      return;
+    }
+    if (v <= 0) {
+      cubeIndex |= 1 << i;
+    }
+  }
+
+  const edgeMask = MC_EDGE_TABLE[cubeIndex];
+  if (!edgeMask) {
+    return;
+  }
+
+  const edgePoints: Array<V3 | null> = new Array(12).fill(null);
+  for (let edge = 0; edge < 12; edge += 1) {
+    if ((edgeMask & (1 << edge)) === 0) continue;
+    const [a, b] = cubeEdges[edge];
+    edgePoints[edge] = interpolateIsoPoint(cubePos[a], cubePos[b], cubeVal[a], cubeVal[b]);
+  }
+
+  const triBase = cubeIndex * 16;
+  for (let i = 0; i < 16; i += 3) {
+    const ea = MC_TRI_TABLE[triBase + i];
+    if (ea < 0) break;
+    const eb = MC_TRI_TABLE[triBase + i + 1];
+    const ec = MC_TRI_TABLE[triBase + i + 2];
+    if (eb < 0 || ec < 0) break;
+    const a = edgePoints[ea];
+    const b = edgePoints[eb];
+    const c = edgePoints[ec];
+    if (!a || !b || !c) continue;
+    addTriangle(a, b, c, target);
+  }
+}
+
+function cubeHasAmbiguousFace(values: number[]): boolean {
+  for (const face of cubeFaces) {
+    const faceValues = face.map((idx) => values[idx]);
+    if (faceValues.some((v) => !Number.isFinite(v))) {
+      return true;
+    }
+    const signs = faceValues.map((v) => (v <= 0 ? 1 : 0));
+    const insideCount = signs[0] + signs[1] + signs[2] + signs[3];
+    if (insideCount !== 2) {
+      continue;
+    }
+    // Marching-squares face ambiguity: checkerboard occupancy (0101 / 1010).
+    if (signs[0] === signs[2] && signs[1] === signs[3] && signs[0] !== signs[1]) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function interpolateIsoPoint(pa: V3, pb: V3, va: number, vb: number): V3 | null {
+  if (!(Number.isFinite(va) && Number.isFinite(vb))) {
+    return null;
+  }
+  const denom = va - vb;
+  if (!Number.isFinite(denom) || Math.abs(denom) < 1e-20) {
+    return null;
+  }
+  const t = clamp01(va / denom);
+  return lerp(pa, pb, t);
 }
 
 function polygonizeCubeAsTetra(target: number[], cubePos: V3[], cubeVal: number[]): void {

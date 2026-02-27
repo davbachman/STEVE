@@ -14,5 +14,16 @@ export function downloadProjectFile(project: ProjectFileV1, filename = 'scene.3d
 
 export async function readProjectFile(file: File): Promise<ProjectFileV1> {
   const text = await file.text();
-  return JSON.parse(text) as ProjectFileV1;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!parsed || typeof parsed !== 'object') {
+      throw new Error('Project file must contain a JSON object');
+    }
+    return parsed as ProjectFileV1;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error('Invalid project JSON');
+    }
+    throw error instanceof Error ? error : new Error('Failed to parse project file');
+  }
 }

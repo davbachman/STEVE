@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "appVersion": "playwright-import-check",
+  "scene": {},
+  "render": {},
+  "objects": [
+    {
+      "id": "valid-import-plot",
+      "name": "Imported Demo Surface",
+      "type": "plot",
+      "visible": true,
+      "transform": { "position": { "x": 0.6, "y": -0.4, "z": 0 } },
+      "equation": {
+        "kind": "explicit_surface",
+        "source": { "rawText": "z = 0.5*sin(x)*cos(y)" },
+        "domain": { "uMin": -4, "uMax": 4, "vMin": -4, "vMax": 4, "uSamples": 70, "vSamples": 70 }
+      },
+      "material": {
+        "baseColor": "#ff7a45",
+        "opacity": 0.95,
+        "transmission": 0.05,
+        "ior": 1.4,
+        "reflectiveness": 0.3,
+        "roughness": 0.45
+      }
+    },
+    {
+      "id": "bad-light",
+      "type": "point_light",
+      "position": "not-a-vec3"
+    },
+    {
+      "id": "unknown-thing",
+      "type": "alien_widget"
+    }
+  ]
+}

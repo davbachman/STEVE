@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react';
 import { materialPresets } from '../../state/defaults';
+import { LEGACY_QUALITY_MODE_PARKED_MESSAGE } from '../../state/renderCompat';
 import { useAppStore } from '../../state/store';
 import type { PlotObject, PointLightObject } from '../../types/contracts';
 
@@ -39,15 +41,50 @@ export function InspectorPanel() {
 
 function ObjectTab({ selected }: { selected: PlotObject | PointLightObject | null }) {
   const updatePlotSpec = useAppStore((s) => s.updatePlotSpec);
+  const setObjectName = useAppStore((s) => s.setObjectName);
   const setObjectPosition = useAppStore((s) => s.setObjectPosition);
+  const [nameDraft, setNameDraft] = useState('');
+
+  useEffect(() => {
+    setNameDraft(selected?.name ?? '');
+  }, [selected?.id, selected?.name]);
 
   if (!selected) return <EmptyState text="Select a plot or light" />;
 
   const position = selected.type === 'plot' ? selected.transform.position : selected.position;
+  const commitName = () => {
+    const next = nameDraft.trim();
+    if (!next) {
+      setNameDraft(selected.name);
+      return;
+    }
+    if (next !== selected.name) {
+      setObjectName(selected.id, next);
+    }
+  };
 
   return (
     <div className="inspector-section">
-      <h3>{selected.name}</h3>
+      <label>
+        Name
+        <input
+          type="text"
+          value={nameDraft}
+          onChange={(e) => setNameDraft(e.target.value)}
+          onBlur={commitName}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              commitName();
+              (e.currentTarget as HTMLInputElement).blur();
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              setNameDraft(selected.name);
+              (e.currentTarget as HTMLInputElement).blur();
+            }
+          }}
+        />
+      </label>
       <NumberTriplet
         label="Position"
         value={position}
@@ -79,6 +116,20 @@ function ObjectTab({ selected }: { selected: PlotObject | PointLightObject | nul
               )
             }
           />
+          {selected.equation.renderAsTube ? (
+            <RangeField
+              label="Width"
+              min={0.005}
+              max={0.2}
+              step={0.001}
+              value={selected.equation.tubeRadius}
+              onChange={(value) =>
+                updatePlotSpec(selected.id, (spec) =>
+                  spec.kind === 'parametric_curve' ? { ...spec, tubeRadius: value } : spec,
+                )
+              }
+            />
+          ) : null}
           <RangeField
             label="Samples"
             min={16}
@@ -297,16 +348,18 @@ function RenderTab() {
   const render = useAppStore((s) => s.render);
   const updateRender = useAppStore((s) => s.updateRender);
   const diagnostics = useAppStore((s) => s.renderDiagnostics);
+  const qualityModeImplemented = useAppStore((s) => s.ui.qualityModeImplemented);
   return (
     <div className="inspector-section">
       <h3>Render</h3>
       <label>
         Mode
-        <select value={render.mode} onChange={(e) => updateRender({ mode: e.target.value as 'interactive' | 'quality' })}>
+        <select value={render.mode} disabled={!qualityModeImplemented} onChange={(e) => updateRender({ mode: e.target.value as 'interactive' | 'quality' })}>
           <option value="interactive">Interactive</option>
-          <option value="quality">Quality (progressive)</option>
+          {qualityModeImplemented ? <option value="quality">Quality (progressive)</option> : null}
         </select>
       </label>
+      {!qualityModeImplemented ? <div className="inspector-note">{LEGACY_QUALITY_MODE_PARKED_MESSAGE}</div> : null}
       <label>
         Tone Mapping
         <select value={render.toneMapping} onChange={(e) => updateRender({ toneMapping: e.target.value as typeof render.toneMapping })}>
@@ -324,35 +377,41 @@ function RenderTab() {
           <option value="quality">Quality</option>
         </select>
       </label>
-      <RangeField label="Quality Samples" min={16} max={2048} step={1} value={render.qualitySamplesTarget} onChange={(v) => updateRender({ qualitySamplesTarget: Math.round(v) })} />
-      <RangeField label="Resolution Scale" min={0.5} max={2} step={0.1} value={render.qualityResolutionScale} onChange={(v) => updateRender({ qualityResolutionScale: v })} />
-      <label>
-        Quality Renderer
-        <select value={render.qualityRenderer} onChange={(e) => updateRender({ qualityRenderer: e.target.value as typeof render.qualityRenderer })}>
-          <option value="taa_preview">TAA Preview (current)</option>
-          <option value="hybrid_gpu_preview">Hybrid GPU Preview (Phase 5A)</option>
-          <option value="path">Path (Phase 5B experimental)</option>
-        </select>
-      </label>
-      <RangeField label="Max Bounces" min={1} max={12} step={1} value={render.qualityMaxBounces} onChange={(v) => updateRender({ qualityMaxBounces: Math.round(v) })} />
-      <label className="checkbox-row">
-        <input type="checkbox" checked={render.qualityClampFireflies} onChange={(e) => updateRender({ qualityClampFireflies: e.target.checked })} />
-        Clamp fireflies (hybrid/path)
-      </label>
-      <label>
-        Quality Export
-        <select
-          value={render.qualityEarlyExportBehavior}
-          onChange={(e) => updateRender({ qualityEarlyExportBehavior: e.target.value as typeof render.qualityEarlyExportBehavior })}
-        >
-          <option value="wait">Wait for target samples</option>
-          <option value="immediate">Export immediately</option>
-        </select>
-      </label>
-      <label className="checkbox-row">
-        <input type="checkbox" checked={render.denoise} onChange={(e) => updateRender({ denoise: e.target.checked })} />
-        Denoise (future)
-      </label>
+      <details>
+        <summary>Legacy quality settings (parked / compatibility)</summary>
+        <div className="inspector-note">
+          These settings are preserved for older project files and regression scenes, but the app runs in Interactive mode.
+        </div>
+        <RangeField label="Quality Samples" min={16} max={2048} step={1} value={render.qualitySamplesTarget} onChange={(v) => updateRender({ qualitySamplesTarget: Math.round(v) })} />
+        <RangeField label="Resolution Scale" min={0.5} max={2} step={0.1} value={render.qualityResolutionScale} onChange={(v) => updateRender({ qualityResolutionScale: v })} />
+        <label>
+          Quality Renderer
+          <select value={render.qualityRenderer} onChange={(e) => updateRender({ qualityRenderer: e.target.value as typeof render.qualityRenderer })}>
+            <option value="taa_preview">TAA Preview (legacy)</option>
+            <option value="hybrid_gpu_preview">Hybrid GPU Preview (legacy Phase 5A)</option>
+            <option value="path">Path (legacy Phase 5B experimental)</option>
+          </select>
+        </label>
+        <RangeField label="Max Bounces" min={1} max={12} step={1} value={render.qualityMaxBounces} onChange={(v) => updateRender({ qualityMaxBounces: Math.round(v) })} />
+        <label className="checkbox-row">
+          <input type="checkbox" checked={render.qualityClampFireflies} onChange={(e) => updateRender({ qualityClampFireflies: e.target.checked })} />
+          Clamp fireflies (hybrid/path)
+        </label>
+        <label>
+          Quality Export
+          <select
+            value={render.qualityEarlyExportBehavior}
+            onChange={(e) => updateRender({ qualityEarlyExportBehavior: e.target.value as typeof render.qualityEarlyExportBehavior })}
+          >
+            <option value="wait">Wait for target samples</option>
+            <option value="immediate">Export immediately</option>
+          </select>
+        </label>
+        <label className="checkbox-row">
+          <input type="checkbox" checked={render.denoise} onChange={(e) => updateRender({ denoise: e.target.checked })} />
+          Denoise (future)
+        </label>
+      </details>
       <label className="checkbox-row">
         <input type="checkbox" checked={render.showDiagnostics} onChange={(e) => updateRender({ showDiagnostics: e.target.checked })} />
         Render diagnostics overlay
@@ -364,6 +423,10 @@ function RenderTab() {
           <div>Point shadows: {diagnostics.pointShadowsEnabled}/{diagnostics.pointShadowLimit} ({diagnostics.pointShadowMode})</div>
           <div>Shadow receiver: {diagnostics.shadowReceiver}</div>
           <div>Point shadow capability: {diagnostics.pointShadowCapability}</div>
+          <div>Interactive reflections: {diagnostics.interactiveReflectionPath}</div>
+          <div>Reflection probe: {diagnostics.interactiveReflectionProbeSize}px | refreshes {diagnostics.interactiveReflectionProbeRefreshCount}</div>
+          <div>Reflection refresh: {diagnostics.interactiveReflectionLastRefreshReason ?? 'none'}</div>
+          {diagnostics.interactiveReflectionFallbackReason ? <div>Reflection fallback: {diagnostics.interactiveReflectionFallbackReason}</div> : null}
           <div>Quality backend: {diagnostics.qualityActiveRenderer}</div>
           <div>Quality res scale: {diagnostics.qualityResolutionScale.toFixed(2)}</div>
           <div>Quality samples/sec: {diagnostics.qualitySamplesPerSecond}</div>
@@ -392,7 +455,7 @@ function RenderTab() {
         </div>
       ) : null}
       <div className="inspector-note">
-        Phase 5 is split: `Hybrid GPU Preview` (Phase 5A) is the fast GPU-backed accumulation path, while `Path` remains the slower experimental CPU tracer prototype for Phase 5B+.
+        Interactive rendering is the active roadmap. Legacy quality backends remain in code for compatibility and regression reference only.
       </div>
     </div>
   );
@@ -445,7 +508,7 @@ function ImplicitEditor({ plot }: { plot: PlotObject }) {
         </div>
       ) : null}
       <div className="inspector-note">
-        Implicit meshing now uses adaptive sparse octree sampling with cleanup and numeric-gradient normals. Full marching-cubes replacement is still pending.
+        Implicit meshing uses a uniform-grid marching-cubes path with topology cleanup and numeric-gradient normals. Face-ambiguous cells fall back to a deterministic tetra path for crack resistance.
       </div>
     </div>
   );

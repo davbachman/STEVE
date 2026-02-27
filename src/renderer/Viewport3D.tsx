@@ -8,9 +8,11 @@ interface Viewport3DProps {
 }
 
 export function Viewport3D({ onApiReady }: Viewport3DProps) {
+  const shellRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const controllerRef = useRef<SceneController | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [controllerReady, setControllerReady] = useState(false);
 
   const scene = useAppStore((s) => s.scene);
   const render = useAppStore((s) => s.render);
@@ -44,11 +46,13 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
       .init()
       .then(() => {
         if (disposed) return;
+        setControllerReady(true);
         controller.sync({ scene, render, objects, selectedId, plotJobs } as Pick<AppState, 'scene' | 'render' | 'objects' | 'selectedId' | 'plotJobs'>);
         onApiReady?.(controller.getApi());
       })
       .catch((err) => {
         if (disposed) return;
+        setControllerReady(false);
         setError(err instanceof Error ? err.message : 'Failed to initialize WebGPU');
         onApiReady?.(null);
       });
@@ -62,6 +66,7 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
         console.error('Viewport cleanup failed', err);
       }
       controllerRef.current = null;
+      setControllerReady(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -70,8 +75,32 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
     controllerRef.current?.sync({ scene, render, objects, selectedId, plotJobs } as Pick<AppState, 'scene' | 'render' | 'objects' | 'selectedId' | 'plotJobs'>);
   }, [scene, render, objects, selectedId, plotJobs]);
 
+  useEffect(() => {
+    if (!controllerReady) return;
+    const shell = shellRef.current;
+    if (!shell || typeof ResizeObserver === 'undefined') return;
+
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      if (frame) {
+        cancelAnimationFrame(frame);
+      }
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        controllerRef.current?.resizeViewport();
+      });
+    });
+    observer.observe(shell);
+    return () => {
+      observer.disconnect();
+      if (frame) {
+        cancelAnimationFrame(frame);
+      }
+    };
+  }, [controllerReady]);
+
   return (
-    <div className="viewport-shell">
+    <div ref={shellRef} className="viewport-shell">
       <canvas ref={canvasRef} className="viewport-canvas" />
       {error ? (
         <div className="viewport-overlay viewport-overlay--error">
@@ -82,7 +111,7 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
       ) : null}
       {render.mode === 'quality' ? (
         <div className="viewport-overlay viewport-overlay--quality">
-          <div>Quality Render Mode (progressive accumulation)</div>
+          <div>Legacy Quality Render Mode (parked / experimental)</div>
           <div>
             Requested: {render.qualityRenderer} | Active: {diagnostics.qualityActiveRenderer}
           </div>
@@ -93,6 +122,7 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
           <div>
             Resolution: {diagnostics.qualityResolutionScale.toFixed(2)}x | {diagnostics.qualitySamplesPerSecond} samples/sec
           </div>
+          <div>Interactive mode is the active roadmap; this legacy path is retained for compatibility/reference.</div>
           <div>Last reset: {diagnostics.qualityLastResetReason ?? 'none'}</div>
           {showQualityFallback ? <div>Fallback: {diagnostics.qualityRendererFallbackReason}</div> : null}
         </div>
@@ -118,6 +148,9 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
           <div>Transparent plots: {diagnostics.transparentPlotCount}</div>
           <div>Shadow map: {diagnostics.shadowMapResolution}px</div>
           <div>Point shadow support: {diagnostics.pointShadowCapability}</div>
+          <div>Interactive reflections: {diagnostics.interactiveReflectionPath}</div>
+          <div>Reflection probe: {diagnostics.interactiveReflectionProbeSize}px | refreshes {diagnostics.interactiveReflectionProbeRefreshCount}</div>
+          {diagnostics.interactiveReflectionFallbackReason ? <div>Reflection fallback: {diagnostics.interactiveReflectionFallbackReason}</div> : null}
           <div>Quality backend: {diagnostics.qualityActiveRenderer}</div>
           <div>Quality samples/sec: {diagnostics.qualitySamplesPerSecond}</div>
           <div>Quality reset: {diagnostics.qualityLastResetReason ?? 'none'}</div>

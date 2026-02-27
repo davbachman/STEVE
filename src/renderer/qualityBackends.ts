@@ -76,6 +76,7 @@ interface HybridBounceSample {
   throughput: Vector3;
   nextMediumIor: number;
   wasTransmission: boolean;
+  wasGlossySpecular: boolean;
 }
 
 interface HybridEnvironmentSample {
@@ -105,6 +106,7 @@ interface HybridTracePixelContext {
 
 interface TraceMeshAccelEntry {
   mesh: AbstractMesh;
+  hybridMaterial: HybridSurfaceMaterial;
   worldMatrixUpdateFlag: number;
   worldMatrixElements: Float32Array;
   triangleAccel: TraceTriangleAccel | null;
@@ -162,6 +164,7 @@ interface TracePickResult {
   distance: number;
   pickedPoint: Vector3;
   pickedMesh: AbstractMesh;
+  hybridMaterial: HybridSurfaceMaterial;
   getNormal(useWorldCoordinates?: boolean, useVerticesNormals?: boolean): Vector3 | null;
 }
 
@@ -357,8 +360,15 @@ class PathQualityBackendV1 implements QualityBackend {
   private cpuPathWorkerBatchRayScratch: Float32Array | null = null;
   private cpuPathPrimaryRayScratch: Ray | null = null;
   private cpuPathShadowRayScratch: Ray | null = null;
+  private cpuPathShadowTransmittanceScratch: Vector3 | null = null;
+  private cpuPathShadowOccluderTransmittanceScratch: Vector3 | null = null;
   private cpuPathEnvironmentSampleScratch: HybridEnvironmentSample | null = null;
   private cpuPathDirectLightingScratch: Vector3 | null = null;
+  private cpuPathTraceThroughputScratch: Vector3 | null = null;
+  private cpuPathTraceRadianceScratch: Vector3 | null = null;
+  private cpuPathTraceOutwardNormalScratch: Vector3 | null = null;
+  private cpuPathTraceShadingNormalScratch: Vector3 | null = null;
+  private cpuPathTraceViewDirScratch: Vector3 | null = null;
   private cpuPathContinuationBounceSampleScratch: HybridBounceSample | null = null;
   private cpuPathContinuationIncidentScratch: Vector3 | null = null;
   private cpuPathContinuationInterfaceNormalScratch: Vector3 | null = null;
@@ -482,8 +492,15 @@ class PathQualityBackendV1 implements QualityBackend {
     this.cpuPathWorkerBatchRayScratch = null;
     this.cpuPathPrimaryRayScratch = null;
     this.cpuPathShadowRayScratch = null;
+    this.cpuPathShadowTransmittanceScratch = null;
+    this.cpuPathShadowOccluderTransmittanceScratch = null;
     this.cpuPathEnvironmentSampleScratch = null;
     this.cpuPathDirectLightingScratch = null;
+    this.cpuPathTraceThroughputScratch = null;
+    this.cpuPathTraceRadianceScratch = null;
+    this.cpuPathTraceOutwardNormalScratch = null;
+    this.cpuPathTraceShadingNormalScratch = null;
+    this.cpuPathTraceViewDirScratch = null;
     this.cpuPathContinuationBounceSampleScratch = null;
     this.cpuPathContinuationIncidentScratch = null;
     this.cpuPathContinuationInterfaceNormalScratch = null;
@@ -670,8 +687,15 @@ class PathQualityBackendV1 implements QualityBackend {
     this.cpuPathWorkerBatchRayScratch = null;
     this.cpuPathPrimaryRayScratch = null;
     this.cpuPathShadowRayScratch = null;
+    this.cpuPathShadowTransmittanceScratch = null;
+    this.cpuPathShadowOccluderTransmittanceScratch = null;
     this.cpuPathEnvironmentSampleScratch = null;
     this.cpuPathDirectLightingScratch = null;
+    this.cpuPathTraceThroughputScratch = null;
+    this.cpuPathTraceRadianceScratch = null;
+    this.cpuPathTraceOutwardNormalScratch = null;
+    this.cpuPathTraceShadingNormalScratch = null;
+    this.cpuPathTraceViewDirScratch = null;
     this.cpuPathContinuationBounceSampleScratch = null;
     this.cpuPathContinuationIncidentScratch = null;
     this.cpuPathContinuationInterfaceNormalScratch = null;
@@ -930,7 +954,7 @@ class PathQualityBackendV1 implements QualityBackend {
         sigNum(entry.maxZ),
       ].join(','));
 
-      const material = extractHybridSurfaceMaterial(mesh.material);
+      const material = entry.hybridMaterial;
       materialParts.push([
         mesh.uniqueId,
         sigNum(material.baseColor.x),
@@ -1267,7 +1291,7 @@ class PathQualityBackendV1 implements QualityBackend {
       ) {
         return null;
       }
-      const material = extractHybridSurfaceMaterial(entry.mesh.material);
+      const material = entry.hybridMaterial;
       const workerMaterial: PathTraceWorkerMaterial = {
         baseColor: vector3ToWorkerVec3(material.baseColor),
         metallic: material.metallic,
@@ -1731,14 +1755,35 @@ class PathQualityBackendV1 implements QualityBackend {
   ): HybridPixelSample {
     const maxBounces = clamp(Math.round(render.qualityMaxBounces), 1, 6);
     let ray = initialRay;
-    let throughput = new Vector3(1, 1, 1);
-    const radiance = new Vector3(0, 0, 0);
-    const outwardNormal = new Vector3(0, 0, 1);
-    const shadingNormal = new Vector3(0, 0, 1);
-    const viewDir = new Vector3(0, 0, 1);
+    const throughput = this.cpuPathTraceThroughputScratch
+      ?? (this.cpuPathTraceThroughputScratch = new Vector3(1, 1, 1));
+    throughput.x = 1;
+    throughput.y = 1;
+    throughput.z = 1;
+    const radiance = this.cpuPathTraceRadianceScratch
+      ?? (this.cpuPathTraceRadianceScratch = new Vector3(0, 0, 0));
+    radiance.x = 0;
+    radiance.y = 0;
+    radiance.z = 0;
+    const outwardNormal = this.cpuPathTraceOutwardNormalScratch
+      ?? (this.cpuPathTraceOutwardNormalScratch = new Vector3(0, 0, 1));
+    outwardNormal.x = 0;
+    outwardNormal.y = 0;
+    outwardNormal.z = 1;
+    const shadingNormal = this.cpuPathTraceShadingNormalScratch
+      ?? (this.cpuPathTraceShadingNormalScratch = new Vector3(0, 0, 1));
+    shadingNormal.x = 0;
+    shadingNormal.y = 0;
+    shadingNormal.z = 1;
+    const viewDir = this.cpuPathTraceViewDirScratch
+      ?? (this.cpuPathTraceViewDirScratch = new Vector3(0, 0, 1));
+    viewDir.x = 0;
+    viewDir.y = 0;
+    viewDir.z = 1;
     let alpha = 0;
     let currentMediumIor = 1;
     let previousBounceWasTransmission = false;
+    let previousBounceWasGlossySpecular = false;
 
     for (let bounce = 0; bounce < maxBounces; bounce += 1) {
       const pick = this.pickTraceRayClosest(ray, null);
@@ -1776,7 +1821,7 @@ class PathQualityBackendV1 implements QualityBackend {
       shadingNormal.y = frontFace ? outwardNormal.y : -outwardNormal.y;
       shadingNormal.z = frontFace ? outwardNormal.z : -outwardNormal.z;
 
-      const material = extractHybridSurfaceMaterial(pick.pickedMesh.material);
+      const material = pick.hybridMaterial;
       viewDir.x = -ray.direction.x;
       viewDir.y = -ray.direction.y;
       viewDir.z = -ray.direction.z;
@@ -1793,6 +1838,7 @@ class PathQualityBackendV1 implements QualityBackend {
         pixelIndex,
         bounce,
         previousBounceWasTransmission,
+        previousBounceWasGlossySpecular,
       );
       radiance.x += throughput.x * direct.x;
       radiance.y += throughput.y * direct.y;
@@ -1820,6 +1866,7 @@ class PathQualityBackendV1 implements QualityBackend {
       multiplyVec3InPlace(throughput, bounceSample.throughput);
       currentMediumIor = bounceSample.nextMediumIor;
       previousBounceWasTransmission = bounceSample.wasTransmission;
+      previousBounceWasGlossySpecular = bounceSample.wasGlossySpecular;
       const rrStartBounce = this.mode === 'cpu_path' ? 1 : 2;
       if (bounce >= rrStartBounce) {
         const rrMin = this.mode === 'cpu_path' ? 0.05 : 0.1;
@@ -1923,6 +1970,7 @@ class PathQualityBackendV1 implements QualityBackend {
     pixelIndex: number,
     bounce: number,
     previousBounceWasTransmission: boolean,
+    previousBounceWasGlossySpecular: boolean,
   ): Vector3 {
     const out = this.cpuPathDirectLightingScratch ?? (this.cpuPathDirectLightingScratch = new Vector3(0, 0, 0));
     out.x = 0;
@@ -1935,12 +1983,19 @@ class PathQualityBackendV1 implements QualityBackend {
     const specColorZ = 1 + (material.baseColor.z - 1) * material.metallic;
     const roughness = clamp(material.roughness, 0.03, 1);
     const shininess = clamp(Math.round((1 - roughness) * 180 + 8), 8, 256);
+    const ndv = Math.max(0, normal.x * viewDir.x + normal.y * viewDir.y + normal.z * viewDir.z);
+    const dielectricDirectF0 = clamp(material.reflectance, 0.02, 0.25);
+    const diffuseViewFresnelScale = 1 - schlickFresnel(ndv, dielectricDirectF0);
+    const specBaseF0 = clamp(Math.max(material.reflectance, material.metallic), 0.02, 1);
     // CPU path backend is throughput-constrained; sample finite direct lights only on the first hit.
     // This is a preview-biased tradeoff (fewer shadow rays / less secondary-light accuracy).
-    const allowExtraFiniteDirectAfterTransmission = this.mode === 'cpu_path' && bounce === 1 && previousBounceWasTransmission;
-    const sampleFiniteDirectThisBounce = !(this.mode === 'cpu_path' && bounce > 0 && !allowExtraFiniteDirectAfterTransmission);
+    const allowExtraFiniteDirectAfterSpecular = this.mode === 'cpu_path'
+      && bounce === 1
+      && (previousBounceWasTransmission || previousBounceWasGlossySpecular);
+    const sampleFiniteDirectThisBounce = !(this.mode === 'cpu_path' && bounce > 0 && !allowExtraFiniteDirectAfterSpecular);
     const useSingleFiniteLightSample = this.mode === 'cpu_path' && sampleFiniteDirectThisBounce;
     let finiteLightCount = 0;
+    let finiteLightSampleWeightSum = 0;
     if (useSingleFiniteLightSample) {
       for (const light of this.scene.lights) {
         if (!light.isEnabled() || light.intensity <= 0) {
@@ -1948,20 +2003,26 @@ class PathQualityBackendV1 implements QualityBackend {
         }
         if (light instanceof DirectionalLight || light instanceof PointLight) {
           finiteLightCount += 1;
+          finiteLightSampleWeightSum += finiteDirectLightSamplingWeight(light);
         }
       }
     }
+    const useWeightedFiniteLightSampling =
+      useSingleFiniteLightSample && finiteLightCount > 1 && finiteLightSampleWeightSum > 1e-5;
     const selectedFiniteLightIndex = useSingleFiniteLightSample && finiteLightCount > 0
       ? Math.min(
         finiteLightCount - 1,
         Math.floor(sampleHash01(pixelIndex, sampleIndex + bounce * 71, 151) * finiteLightCount),
       )
       : -1;
-    const finiteLightWeight = useSingleFiniteLightSample && finiteLightCount > 0 ? finiteLightCount : 1;
+    const selectedFiniteLightWeightTarget = useWeightedFiniteLightSampling
+      ? sampleHash01(pixelIndex, sampleIndex + bounce * 71, 152) * finiteLightSampleWeightSum
+      : -1;
 
     let dirIndex = 0;
     let pointIndex = 0;
     let finiteLightIndex = 0;
+    let finiteLightSampleWeightAccum = 0;
     for (const light of this.scene.lights) {
       if (!light.isEnabled() || light.intensity <= 0) {
         continue;
@@ -1985,9 +2046,10 @@ class PathQualityBackendV1 implements QualityBackend {
         const groundR = (groundColor?.r ?? 0) * li;
         const groundG = (groundColor?.g ?? 0) * li;
         const groundB = (groundColor?.b ?? 0) * li;
-        out.x += (groundR + (skyR - groundR) * t) * material.baseColor.x * diffuseWeight;
-        out.y += (groundG + (skyG - groundG) * t) * material.baseColor.y * diffuseWeight;
-        out.z += (groundB + (skyB - groundB) * t) * material.baseColor.z * diffuseWeight;
+        const hemiDiffuse = diffuseWeight * diffuseViewFresnelScale;
+        out.x += (groundR + (skyR - groundR) * t) * material.baseColor.x * hemiDiffuse;
+        out.y += (groundG + (skyG - groundG) * t) * material.baseColor.y * hemiDiffuse;
+        out.z += (groundB + (skyB - groundB) * t) * material.baseColor.z * hemiDiffuse;
         continue;
       }
 
@@ -1999,12 +2061,24 @@ class PathQualityBackendV1 implements QualityBackend {
         dirIndex += 1;
         const currentFiniteLightIndex = finiteLightIndex;
         finiteLightIndex += 1;
-        if (
-          useSingleFiniteLightSample
-          && finiteLightCount > 1
-          && currentFiniteLightIndex !== selectedFiniteLightIndex
-        ) {
-          continue;
+        let finiteLightCompensation = 1;
+        if (useSingleFiniteLightSample && finiteLightCount > 1) {
+          if (useWeightedFiniteLightSampling) {
+            const sampleWeight = finiteDirectLightSamplingWeight(light);
+            const intervalMin = finiteLightSampleWeightAccum;
+            finiteLightSampleWeightAccum += sampleWeight;
+            const isLastFiniteLight = currentFiniteLightIndex >= finiteLightCount - 1;
+            const isSelected = selectedFiniteLightWeightTarget >= intervalMin
+              && (selectedFiniteLightWeightTarget < finiteLightSampleWeightAccum || isLastFiniteLight);
+            if (!isSelected) {
+              continue;
+            }
+            finiteLightCompensation = finiteLightSampleWeightSum / Math.max(sampleWeight, 1e-5);
+          } else if (currentFiniteLightIndex !== selectedFiniteLightIndex) {
+            continue;
+          } else {
+            finiteLightCompensation = finiteLightCount;
+          }
         }
         const jitteredDir =
           this.computeJitteredDirectionalLightDirection(
@@ -2022,14 +2096,26 @@ class PathQualityBackendV1 implements QualityBackend {
         const lightDirZ = -jitteredDir.z * invJitteredLen;
         const ndl = Math.max(0, normal.x * lightDirX + normal.y * lightDirY + normal.z * lightDirZ);
         if (ndl <= 0) continue;
-        if (this.isShadowedDirectional(hitPoint, normal, lightDirX, lightDirY, lightDirZ, hitMesh)) {
+        const shadowTransmittance = this.computeShadowTransmittanceDirectional(
+          hitPoint,
+          normal,
+          lightDirX,
+          lightDirY,
+          lightDirZ,
+          hitMesh,
+        );
+        if (
+          shadowTransmittance.x <= 1e-4
+          && shadowTransmittance.y <= 1e-4
+          && shadowTransmittance.z <= 1e-4
+        ) {
           continue;
         }
-        const li = light.intensity * finiteLightWeight;
+        const li = light.intensity * finiteLightCompensation;
         const diffuseColor = light.diffuse;
-        const lightColorX = (diffuseColor?.r ?? 1) * li;
-        const lightColorY = (diffuseColor?.g ?? 1) * li;
-        const lightColorZ = (diffuseColor?.b ?? 1) * li;
+        const lightColorX = (diffuseColor?.r ?? 1) * shadowTransmittance.x * li;
+        const lightColorY = (diffuseColor?.g ?? 1) * shadowTransmittance.y * li;
+        const lightColorZ = (diffuseColor?.b ?? 1) * shadowTransmittance.z * li;
         const halfX = lightDirX + viewDir.x;
         const halfY = lightDirY + viewDir.y;
         const halfZ = lightDirZ + viewDir.z;
@@ -2038,11 +2124,15 @@ class PathQualityBackendV1 implements QualityBackend {
         if (specWeight > 0 && halfLenSq > 1e-10) {
           const invHalfLen = 1 / Math.sqrt(halfLenSq);
           const ndh = Math.max(0, normal.x * halfX * invHalfLen + normal.y * halfY * invHalfLen + normal.z * halfZ * invHalfLen);
-          specTerm = Math.pow(ndh, shininess) * ndl;
+          const vdh = Math.max(0, viewDir.x * halfX * invHalfLen + viewDir.y * halfY * invHalfLen + viewDir.z * halfZ * invHalfLen);
+          const specFresnel = schlickFresnel(vdh, specBaseF0);
+          const specFresnelGain = clamp(specFresnel / Math.max(specBaseF0, 1e-3), 0.75, 4);
+          specTerm = Math.pow(ndh, shininess) * ndl * specFresnelGain;
         }
-        out.x += lightColorX * (material.baseColor.x * diffuseWeight * ndl + specColorX * specTerm * specWeight);
-        out.y += lightColorY * (material.baseColor.y * diffuseWeight * ndl + specColorY * specTerm * specWeight);
-        out.z += lightColorZ * (material.baseColor.z * diffuseWeight * ndl + specColorZ * specTerm * specWeight);
+        const diffuseTerm = diffuseWeight * diffuseViewFresnelScale * ndl;
+        out.x += lightColorX * (material.baseColor.x * diffuseTerm + specColorX * specTerm * specWeight);
+        out.y += lightColorY * (material.baseColor.y * diffuseTerm + specColorY * specTerm * specWeight);
+        out.z += lightColorZ * (material.baseColor.z * diffuseTerm + specColorZ * specTerm * specWeight);
         continue;
       }
 
@@ -2054,12 +2144,24 @@ class PathQualityBackendV1 implements QualityBackend {
         pointIndex += 1;
         const currentFiniteLightIndex = finiteLightIndex;
         finiteLightIndex += 1;
-        if (
-          useSingleFiniteLightSample
-          && finiteLightCount > 1
-          && currentFiniteLightIndex !== selectedFiniteLightIndex
-        ) {
-          continue;
+        let finiteLightCompensation = 1;
+        if (useSingleFiniteLightSample && finiteLightCount > 1) {
+          if (useWeightedFiniteLightSampling) {
+            const sampleWeight = finiteDirectLightSamplingWeight(light);
+            const intervalMin = finiteLightSampleWeightAccum;
+            finiteLightSampleWeightAccum += sampleWeight;
+            const isLastFiniteLight = currentFiniteLightIndex >= finiteLightCount - 1;
+            const isSelected = selectedFiniteLightWeightTarget >= intervalMin
+              && (selectedFiniteLightWeightTarget < finiteLightSampleWeightAccum || isLastFiniteLight);
+            if (!isSelected) {
+              continue;
+            }
+            finiteLightCompensation = finiteLightSampleWeightSum / Math.max(sampleWeight, 1e-5);
+          } else if (currentFiniteLightIndex !== selectedFiniteLightIndex) {
+            continue;
+          } else {
+            finiteLightCompensation = finiteLightCount;
+          }
         }
         const samplePos =
           this.computeJitteredPointLightPosition(light, sampleIndex + bounce * 47 + pixelIndex, currentPointIndex) ?? light.position;
@@ -2075,18 +2177,31 @@ class PathQualityBackendV1 implements QualityBackend {
         const lightDirZ = toLightZ * invDist;
         const ndl = Math.max(0, normal.x * lightDirX + normal.y * lightDirY + normal.z * lightDirZ);
         if (ndl <= 0) continue;
-        if (this.isShadowedPoint(hitPoint, normal, lightDirX, lightDirY, lightDirZ, dist, hitMesh)) {
+        const shadowTransmittance = this.computeShadowTransmittancePoint(
+          hitPoint,
+          normal,
+          lightDirX,
+          lightDirY,
+          lightDirZ,
+          dist,
+          hitMesh,
+        );
+        if (
+          shadowTransmittance.x <= 1e-4
+          && shadowTransmittance.y <= 1e-4
+          && shadowTransmittance.z <= 1e-4
+        ) {
           continue;
         }
         const range = Number.isFinite(light.range) && light.range > 0 ? light.range : dist * 2;
         const rangeFalloff = clamp(1 - (dist / Math.max(range, 1e-3)) ** 2, 0, 1);
         const attenuation = rangeFalloff * rangeFalloff / (1 + dist2 * 0.03);
         if (attenuation <= 0) continue;
-        const li = light.intensity * attenuation * finiteLightWeight;
+        const li = light.intensity * attenuation * finiteLightCompensation;
         const diffuseColor = light.diffuse;
-        const lightColorX = (diffuseColor?.r ?? 1) * li;
-        const lightColorY = (diffuseColor?.g ?? 1) * li;
-        const lightColorZ = (diffuseColor?.b ?? 1) * li;
+        const lightColorX = (diffuseColor?.r ?? 1) * shadowTransmittance.x * li;
+        const lightColorY = (diffuseColor?.g ?? 1) * shadowTransmittance.y * li;
+        const lightColorZ = (diffuseColor?.b ?? 1) * shadowTransmittance.z * li;
         const halfX = lightDirX + viewDir.x;
         const halfY = lightDirY + viewDir.y;
         const halfZ = lightDirZ + viewDir.z;
@@ -2095,11 +2210,15 @@ class PathQualityBackendV1 implements QualityBackend {
         if (specWeight > 0 && halfLenSq > 1e-10) {
           const invHalfLen = 1 / Math.sqrt(halfLenSq);
           const ndh = Math.max(0, normal.x * halfX * invHalfLen + normal.y * halfY * invHalfLen + normal.z * halfZ * invHalfLen);
-          specTerm = Math.pow(ndh, shininess) * ndl;
+          const vdh = Math.max(0, viewDir.x * halfX * invHalfLen + viewDir.y * halfY * invHalfLen + viewDir.z * halfZ * invHalfLen);
+          const specFresnel = schlickFresnel(vdh, specBaseF0);
+          const specFresnelGain = clamp(specFresnel / Math.max(specBaseF0, 1e-3), 0.75, 4);
+          specTerm = Math.pow(ndh, shininess) * ndl * specFresnelGain;
         }
-        out.x += lightColorX * (material.baseColor.x * diffuseWeight * ndl + specColorX * specTerm * specWeight);
-        out.y += lightColorY * (material.baseColor.y * diffuseWeight * ndl + specColorY * specTerm * specWeight);
-        out.z += lightColorZ * (material.baseColor.z * diffuseWeight * ndl + specColorZ * specTerm * specWeight);
+        const diffuseTerm = diffuseWeight * diffuseViewFresnelScale * ndl;
+        out.x += lightColorX * (material.baseColor.x * diffuseTerm + specColorX * specTerm * specWeight);
+        out.y += lightColorY * (material.baseColor.y * diffuseTerm + specColorY * specTerm * specWeight);
+        out.z += lightColorZ * (material.baseColor.z * diffuseTerm + specColorZ * specTerm * specWeight);
       }
     }
 
@@ -2132,6 +2251,7 @@ class PathQualityBackendV1 implements QualityBackend {
         throughput: new Vector3(1, 1, 1),
         nextMediumIor: 1,
         wasTransmission: false,
+        wasGlossySpecular: false,
       });
     const tangentScratch = this.cpuPathContinuationTangentScratch
       ?? (this.cpuPathContinuationTangentScratch = new Vector3(1, 0, 0));
@@ -2194,6 +2314,7 @@ class PathQualityBackendV1 implements QualityBackend {
       out.throughput.z = (1 + (material.baseColor.z - 1) * 0.2) * tintScale;
       out.nextMediumIor = refracted ? nextMediumIorForTransmission : mediumIor;
       out.wasTransmission = refracted;
+      out.wasGlossySpecular = !refracted || roughness <= 0.35;
       return out;
     }
 
@@ -2220,6 +2341,7 @@ class PathQualityBackendV1 implements QualityBackend {
       out.throughput.z = (1 + (material.baseColor.z - 1) * material.metallic) * specScale;
       out.nextMediumIor = mediumIor;
       out.wasTransmission = false;
+      out.wasGlossySpecular = roughness <= 0.35;
       return out;
     }
 
@@ -2241,17 +2363,18 @@ class PathQualityBackendV1 implements QualityBackend {
     out.throughput.z = material.baseColor.z * diffuseScale;
     out.nextMediumIor = mediumIor;
     out.wasTransmission = false;
+    out.wasGlossySpecular = false;
     return out;
   }
 
-  private isShadowedDirectional(
+  private computeShadowTransmittanceDirectional(
     hitPoint: Vector3,
     normal: Vector3,
     lightDirX: number,
     lightDirY: number,
     lightDirZ: number,
     hitMesh: AbstractMesh,
-  ): boolean {
+  ): Vector3 {
     const shadowRay = this.cpuPathShadowRayScratch
       ?? (this.cpuPathShadowRayScratch = new Ray(new Vector3(0, 0, 0), new Vector3(0, 0, 1), 1e6));
     shadowRay.origin.x = hitPoint.x + normal.x * 0.0035;
@@ -2261,10 +2384,10 @@ class PathQualityBackendV1 implements QualityBackend {
     shadowRay.direction.y = lightDirY;
     shadowRay.direction.z = lightDirZ;
     shadowRay.length = 1e6;
-    return this.hasAnyTraceHit(shadowRay, hitMesh);
+    return this.traceShadowTransmittance(shadowRay, hitMesh, undefined);
   }
 
-  private isShadowedPoint(
+  private computeShadowTransmittancePoint(
     hitPoint: Vector3,
     normal: Vector3,
     lightDirX: number,
@@ -2272,7 +2395,7 @@ class PathQualityBackendV1 implements QualityBackend {
     lightDirZ: number,
     lightDistance: number,
     hitMesh: AbstractMesh,
-  ): boolean {
+  ): Vector3 {
     const shadowRay = this.cpuPathShadowRayScratch
       ?? (this.cpuPathShadowRayScratch = new Ray(new Vector3(0, 0, 0), new Vector3(0, 0, 1), 1e6));
     shadowRay.origin.x = hitPoint.x + normal.x * 0.0035;
@@ -2283,7 +2406,93 @@ class PathQualityBackendV1 implements QualityBackend {
     shadowRay.direction.z = lightDirZ;
     const shadowMaxDistance = lightDistance - 0.005;
     shadowRay.length = Math.max(0, shadowMaxDistance);
-    return this.hasAnyTraceHit(shadowRay, hitMesh, shadowMaxDistance);
+    return this.traceShadowTransmittance(shadowRay, hitMesh, shadowMaxDistance);
+  }
+
+  private traceShadowTransmittance(
+    ray: Ray,
+    ignoreMesh: AbstractMesh | null,
+    maxDistance?: number,
+  ): Vector3 {
+    const transmittance = this.cpuPathShadowTransmittanceScratch
+      ?? (this.cpuPathShadowTransmittanceScratch = new Vector3(1, 1, 1));
+    transmittance.x = 1;
+    transmittance.y = 1;
+    transmittance.z = 1;
+    let remaining = Number.isFinite(maxDistance) ? Math.max(0, maxDistance ?? 0) : 1e6;
+    let currentIgnoreMesh = ignoreMesh;
+    const advanceEpsilon = 0.0045;
+    const minTransmittance = 0.02;
+    const maxOccluderHits = 4;
+
+    if (remaining <= 1e-6) {
+      return transmittance;
+    }
+
+    for (let step = 0; step < maxOccluderHits; step += 1) {
+      ray.length = remaining;
+      const hit = this.pickTraceRayClosest(ray, currentIgnoreMesh);
+      if (!hit?.hit || !hit.pickedPoint || !hit.pickedMesh) {
+        break;
+      }
+      if (!(hit.distance >= 0) || hit.distance > remaining) {
+        break;
+      }
+
+      const occluderTransmittance = this.shadowOccluderTransmittanceToRef(hit.hybridMaterial);
+      if (
+        occluderTransmittance.x <= 1e-4
+        && occluderTransmittance.y <= 1e-4
+        && occluderTransmittance.z <= 1e-4
+      ) {
+        transmittance.x = 0;
+        transmittance.y = 0;
+        transmittance.z = 0;
+        return transmittance;
+      }
+      transmittance.x *= occluderTransmittance.x;
+      transmittance.y *= occluderTransmittance.y;
+      transmittance.z *= occluderTransmittance.z;
+      if (
+        transmittance.x <= minTransmittance
+        && transmittance.y <= minTransmittance
+        && transmittance.z <= minTransmittance
+      ) {
+        transmittance.x = 0;
+        transmittance.y = 0;
+        transmittance.z = 0;
+        return transmittance;
+      }
+
+      ray.origin.x = hit.pickedPoint.x + ray.direction.x * advanceEpsilon;
+      ray.origin.y = hit.pickedPoint.y + ray.direction.y * advanceEpsilon;
+      ray.origin.z = hit.pickedPoint.z + ray.direction.z * advanceEpsilon;
+      remaining -= Math.max(0, hit.distance) + advanceEpsilon;
+      if (remaining <= 1e-5) {
+        break;
+      }
+      currentIgnoreMesh = hit.pickedMesh;
+    }
+
+    return transmittance;
+  }
+
+  private shadowOccluderTransmittanceToRef(material: HybridSurfaceMaterial): Vector3 {
+    const out = this.cpuPathShadowOccluderTransmittanceScratch
+      ?? (this.cpuPathShadowOccluderTransmittanceScratch = new Vector3(1, 1, 1));
+    const transmission = clamp01Safe(material.transmission);
+    if (transmission <= 0.02) {
+      out.x = 0;
+      out.y = 0;
+      out.z = 0;
+      return out;
+    }
+    const roughnessPenalty = 1 - clamp(material.roughness, 0, 1) * 0.2;
+    const baseScale = transmission * roughnessPenalty;
+    out.x = clamp(baseScale * Math.sqrt(Math.max(0, material.baseColor.x)), 0, 1);
+    out.y = clamp(baseScale * Math.sqrt(Math.max(0, material.baseColor.y)), 0, 1);
+    out.z = clamp(baseScale * Math.sqrt(Math.max(0, material.baseColor.z)), 0, 1);
+    return out;
   }
 
   private invalidateTraceMeshAcceleration(): void {
@@ -2339,6 +2548,7 @@ class PathQualityBackendV1 implements QualityBackend {
         return true;
       }
       try {
+        entry.hybridMaterial = extractHybridSurfaceMaterial(mesh.material);
         mesh.computeWorldMatrix(false);
         const worldMatrix = mesh.getWorldMatrix();
         const worldM = worldMatrix.m;
@@ -2390,6 +2600,7 @@ class PathQualityBackendV1 implements QualityBackend {
         }
         entries.push({
           mesh,
+          hybridMaterial: extractHybridSurfaceMaterial(mesh.material),
           worldMatrixUpdateFlag: getMeshWorldMatrixUpdateFlag(mesh),
           worldMatrixElements: new Float32Array(mesh.getWorldMatrix().m),
           triangleAccel: buildTraceTriangleAccel(mesh),
@@ -2433,6 +2644,7 @@ class PathQualityBackendV1 implements QualityBackend {
         distance: triangleHit.distance,
         pickedPoint: triangleHit.point,
         pickedMesh: entry.mesh,
+        hybridMaterial: entry.hybridMaterial,
         getNormal: () => triangleHit.normal.clone(),
       };
     }
@@ -2450,6 +2662,7 @@ class PathQualityBackendV1 implements QualityBackend {
       distance: pick.distance,
       pickedPoint,
       pickedMesh: pick.pickedMesh ?? entry.mesh,
+      hybridMaterial: entry.hybridMaterial,
       getNormal: (useWorldCoordinates = true, useVerticesNormals = true) => {
         try {
           return pick.getNormal?.(useWorldCoordinates, useVerticesNormals) ?? null;
@@ -2478,29 +2691,6 @@ class PathQualityBackendV1 implements QualityBackend {
     };
   }
 
-  private hasAnyTraceHitOnEntry(
-    entry: TraceMeshAccelEntry,
-    ray: Ray,
-    maxDistance: number | null,
-  ): boolean {
-    if (entry.triangleAccel) {
-      return intersectTraceTriangleSoupAny(ray, entry.triangleAccel, maxDistance);
-    }
-    const pick = entry.mesh.intersects(ray, true);
-    if (!pick?.hit) {
-      return false;
-    }
-    if (maxDistance !== null) {
-      if (typeof pick.distance !== 'number' || !Number.isFinite(pick.distance)) {
-        return false;
-      }
-      if (pick.distance >= maxDistance) {
-        return false;
-      }
-    }
-    return true;
-  }
-
   private pickTraceRayClosest(
     ray: Ray,
     ignoreMesh: AbstractMesh | null,
@@ -2510,7 +2700,9 @@ class PathQualityBackendV1 implements QualityBackend {
     this.getTraceableMeshesForCurrentFrame();
     const root = this.traceMeshBvhRoot;
     if (root) {
-      const stack: TraceMeshBvhNode[] = [root];
+      const stack = traceMeshBvhStackScratch;
+      stack.length = 0;
+      stack.push(root);
       while (stack.length > 0) {
         const node = stack.pop()!;
         const nodeHitDist = rayIntersectsTraceAabb(ray, node.minX, node.minY, node.minZ, node.maxX, node.maxY, node.maxZ, bestDistance);
@@ -2599,6 +2791,7 @@ class PathQualityBackendV1 implements QualityBackend {
         distance: pick.distance,
         pickedPoint,
         pickedMesh: pick.pickedMesh ?? mesh,
+        hybridMaterial: extractHybridSurfaceMaterial((pick.pickedMesh ?? mesh).material),
         getNormal: (useWorldCoordinates = true, useVerticesNormals = true) => {
           try {
             return pick.getNormal?.(useWorldCoordinates, useVerticesNormals) ?? null;
@@ -2609,101 +2802,6 @@ class PathQualityBackendV1 implements QualityBackend {
       };
     }
     return bestPick;
-  }
-
-  private hasAnyTraceHit(ray: Ray, ignoreMesh: AbstractMesh | null, maxDistance?: number): boolean {
-    const limit = Number.isFinite(maxDistance) ? Math.max(0, maxDistance ?? 0) : null;
-    this.getTraceableMeshesForCurrentFrame();
-    const root = this.traceMeshBvhRoot;
-    if (root) {
-      const stack: TraceMeshBvhNode[] = [root];
-      const maxT = limit ?? Number.POSITIVE_INFINITY;
-      while (stack.length > 0) {
-        const node = stack.pop()!;
-        const nodeHitDist = rayIntersectsTraceAabb(ray, node.minX, node.minY, node.minZ, node.maxX, node.maxY, node.maxZ, maxT);
-        if (nodeHitDist === null) {
-          continue;
-        }
-        if (node.items) {
-          for (const entry of node.items) {
-            if (ignoreMesh && entry.mesh === ignoreMesh) {
-              continue;
-            }
-            const entryHitDist = rayIntersectsTraceAabb(
-              ray,
-              entry.minX,
-              entry.minY,
-              entry.minZ,
-              entry.maxX,
-              entry.maxY,
-              entry.maxZ,
-              maxT,
-            );
-            if (entryHitDist === null) {
-              continue;
-            }
-            if (!this.hasAnyTraceHitOnEntry(entry, ray, limit)) {
-              continue;
-            }
-            return true;
-          }
-          continue;
-        }
-
-        const left = node.left;
-        const right = node.right;
-        if (!left && !right) {
-          continue;
-        }
-        if (left && right) {
-          const leftHit = rayIntersectsTraceAabb(ray, left.minX, left.minY, left.minZ, left.maxX, left.maxY, left.maxZ, maxT);
-          const rightHit = rayIntersectsTraceAabb(ray, right.minX, right.minY, right.minZ, right.maxX, right.maxY, right.maxZ, maxT);
-          if (leftHit !== null && rightHit !== null) {
-            if (leftHit < rightHit) {
-              stack.push(right, left);
-            } else {
-              stack.push(left, right);
-            }
-            continue;
-          }
-          if (leftHit !== null) {
-            stack.push(left);
-          }
-          if (rightHit !== null) {
-            stack.push(right);
-          }
-          continue;
-        }
-        if (left) {
-          stack.push(left);
-        }
-        if (right) {
-          stack.push(right);
-        }
-      }
-      return false;
-    }
-
-    const meshes = this.traceMeshCache;
-    for (const mesh of meshes) {
-      if (ignoreMesh && mesh === ignoreMesh) {
-        continue;
-      }
-      const pick = mesh.intersects(ray, true);
-      if (!pick?.hit) {
-        continue;
-      }
-      if (limit !== null) {
-        if (typeof pick.distance !== 'number' || !Number.isFinite(pick.distance)) {
-          continue;
-        }
-        if (pick.distance >= limit) {
-          continue;
-        }
-      }
-      return true;
-    }
-    return false;
   }
 
   private isTraceRenderableMesh(mesh: AbstractMesh, ignoreMesh: AbstractMesh | null): boolean {
@@ -3467,6 +3565,8 @@ const PATH_PICK_WORLD_MATRIX = Matrix.Identity();
 const TRACE_MESH_BVH_LEAF_SIZE = 4;
 const TRACE_TRIANGLE_ACCEL_MAX_TRIANGLES = 250_000;
 const TRACE_TRIANGLE_BVH_LEAF_SIZE = 8;
+const traceMeshBvhStackScratch: TraceMeshBvhNode[] = [];
+const traceTriangleBvhStackScratch: TraceTriangleBvhNode[] = [];
 
 function extractHybridSurfaceMaterial(material: Material | null | undefined): HybridSurfaceMaterial {
   if (material instanceof PBRMaterial) {
@@ -3763,83 +3863,6 @@ function intersectTraceTriangleSoupClosest(
   };
 }
 
-function intersectTraceTriangleSoupAny(
-  ray: Ray,
-  accel: TraceTriangleAccel | null,
-  maxDistance: number | null,
-): boolean {
-  if (!accel || accel.triangleCount <= 0) {
-    return false;
-  }
-  if (accel.triangleBvhRoot) {
-    return intersectTraceTriangleLocalBvhAny(ray, accel, maxDistance);
-  }
-
-  const positions = accel.positionsWorld;
-  const ox = ray.origin.x;
-  const oy = ray.origin.y;
-  const oz = ray.origin.z;
-  const dx = ray.direction.x;
-  const dy = ray.direction.y;
-  const dz = ray.direction.z;
-  const epsilon = 1e-8;
-  const minT = 1e-5;
-  const limit = maxDistance !== null && Number.isFinite(maxDistance)
-    ? Math.max(minT, maxDistance)
-    : Number.POSITIVE_INFINITY;
-
-  for (let base = 0; base < positions.length; base += 9) {
-    const ax = positions[base];
-    const ay = positions[base + 1];
-    const az = positions[base + 2];
-    const bx = positions[base + 3];
-    const by = positions[base + 4];
-    const bz = positions[base + 5];
-    const cx = positions[base + 6];
-    const cy = positions[base + 7];
-    const cz = positions[base + 8];
-
-    const e1x = bx - ax;
-    const e1y = by - ay;
-    const e1z = bz - az;
-    const e2x = cx - ax;
-    const e2y = cy - ay;
-    const e2z = cz - az;
-
-    const px = dy * e2z - dz * e2y;
-    const py = dz * e2x - dx * e2z;
-    const pz = dx * e2y - dy * e2x;
-    const det = e1x * px + e1y * py + e1z * pz;
-    if (Math.abs(det) <= epsilon) {
-      continue;
-    }
-    const invDet = 1 / det;
-
-    const tx = ox - ax;
-    const ty = oy - ay;
-    const tz = oz - az;
-    const u = (tx * px + ty * py + tz * pz) * invDet;
-    if (u < -1e-6 || u > 1 + 1e-6) {
-      continue;
-    }
-
-    const qx = ty * e1z - tz * e1y;
-    const qy = tz * e1x - tx * e1z;
-    const qz = tx * e1y - ty * e1x;
-    const v = (dx * qx + dy * qy + dz * qz) * invDet;
-    if (v < -1e-6 || u + v > 1 + 1e-6) {
-      continue;
-    }
-
-    const t = (e2x * qx + e2y * qy + e2z * qz) * invDet;
-    if (t > minT && t < limit) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 function buildTraceTriangleLocalBvh(
   positionsWorld: Float32Array,
   triangleCount: number,
@@ -4037,7 +4060,9 @@ function intersectTraceTriangleLocalBvhClosest(
   let hitBase = -1;
   let hitU = 0;
   let hitV = 0;
-  const stack: TraceTriangleBvhNode[] = [root];
+  const stack = traceTriangleBvhStackScratch;
+  stack.length = 0;
+  stack.push(root);
 
   while (stack.length > 0) {
     const node = stack.pop()!;
@@ -4157,135 +4182,6 @@ function intersectTraceTriangleLocalBvhClosest(
     ),
     normal: sampleTraceTriangleNormal(positions, normals, hitBase, hitU, hitV),
   };
-}
-
-function intersectTraceTriangleLocalBvhAny(
-  ray: Ray,
-  accel: TraceTriangleAccel,
-  maxDistance: number | null,
-): boolean {
-  const root = accel.triangleBvhRoot;
-  if (!root) {
-    return false;
-  }
-
-  const positions = accel.positionsWorld;
-  const ox = ray.origin.x;
-  const oy = ray.origin.y;
-  const oz = ray.origin.z;
-  const dx = ray.direction.x;
-  const dy = ray.direction.y;
-  const dz = ray.direction.z;
-  const epsilon = 1e-8;
-  const minT = 1e-5;
-  const maxT = maxDistance !== null && Number.isFinite(maxDistance)
-    ? Math.max(minT, maxDistance)
-    : Number.POSITIVE_INFINITY;
-  const stack: TraceTriangleBvhNode[] = [root];
-
-  while (stack.length > 0) {
-    const node = stack.pop()!;
-    const nodeHitDist = rayIntersectsTraceAabb(
-      ray,
-      node.minX,
-      node.minY,
-      node.minZ,
-      node.maxX,
-      node.maxY,
-      node.maxZ,
-      maxT,
-    );
-    if (nodeHitDist === null) {
-      continue;
-    }
-
-    if (node.triangleIndices) {
-      for (let i = 0; i < node.triangleIndices.length; i += 1) {
-        const triIndex = node.triangleIndices[i];
-        const base = triIndex * 9;
-        const ax = positions[base];
-        const ay = positions[base + 1];
-        const az = positions[base + 2];
-        const bx = positions[base + 3];
-        const by = positions[base + 4];
-        const bz = positions[base + 5];
-        const cx = positions[base + 6];
-        const cy = positions[base + 7];
-        const cz = positions[base + 8];
-
-        const e1x = bx - ax;
-        const e1y = by - ay;
-        const e1z = bz - az;
-        const e2x = cx - ax;
-        const e2y = cy - ay;
-        const e2z = cz - az;
-
-        const px = dy * e2z - dz * e2y;
-        const py = dz * e2x - dx * e2z;
-        const pz = dx * e2y - dy * e2x;
-        const det = e1x * px + e1y * py + e1z * pz;
-        if (Math.abs(det) <= epsilon) {
-          continue;
-        }
-        const invDet = 1 / det;
-
-        const tx = ox - ax;
-        const ty = oy - ay;
-        const tz = oz - az;
-        const u = (tx * px + ty * py + tz * pz) * invDet;
-        if (u < -1e-6 || u > 1 + 1e-6) {
-          continue;
-        }
-
-        const qx = ty * e1z - tz * e1y;
-        const qy = tz * e1x - tx * e1z;
-        const qz = tx * e1y - ty * e1x;
-        const v = (dx * qx + dy * qy + dz * qz) * invDet;
-        if (v < -1e-6 || u + v > 1 + 1e-6) {
-          continue;
-        }
-
-        const t = (e2x * qx + e2y * qy + e2z * qz) * invDet;
-        if (t > minT && t < maxT) {
-          return true;
-        }
-      }
-      continue;
-    }
-
-    const left = node.left;
-    const right = node.right;
-    if (!left && !right) {
-      continue;
-    }
-    if (left && right) {
-      const leftHit = rayIntersectsTraceAabb(ray, left.minX, left.minY, left.minZ, left.maxX, left.maxY, left.maxZ, maxT);
-      const rightHit = rayIntersectsTraceAabb(ray, right.minX, right.minY, right.minZ, right.maxX, right.maxY, right.maxZ, maxT);
-      if (leftHit !== null && rightHit !== null) {
-        if (leftHit < rightHit) {
-          stack.push(right, left);
-        } else {
-          stack.push(left, right);
-        }
-        continue;
-      }
-      if (leftHit !== null) {
-        stack.push(left);
-      }
-      if (rightHit !== null) {
-        stack.push(right);
-      }
-      continue;
-    }
-    if (left) {
-      stack.push(left);
-    }
-    if (right) {
-      stack.push(right);
-    }
-  }
-
-  return false;
 }
 
 function buildTraceMeshBvh(entries: TraceMeshAccelEntry[]): TraceMeshBvhNode | null {
@@ -4607,6 +4503,16 @@ function linearToSrgbByte(value: number): number {
 
 function luminance(r: number, g: number, b: number): number {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function finiteDirectLightSamplingWeight(light: DirectionalLight | PointLight): number {
+  const intensity = Number.isFinite(light.intensity) ? Math.max(0, light.intensity) : 0;
+  const diffuse = light.diffuse;
+  const r = Number.isFinite(diffuse?.r) ? diffuse!.r : 1;
+  const g = Number.isFinite(diffuse?.g) ? diffuse!.g : 1;
+  const b = Number.isFinite(diffuse?.b) ? diffuse!.b : 1;
+  const colorLum = Math.max(0.05, luminance(r, g, b));
+  return Math.max(0.05, intensity * colorLum);
 }
 
 function computeQualityFireflyClampScale(

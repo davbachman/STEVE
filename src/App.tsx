@@ -4,14 +4,18 @@ import { Viewport3D } from './renderer/Viewport3D';
 import type { ViewportApi } from './renderer/SceneController';
 import { useAutosave } from './hooks/useAutosave';
 import { useWorkerPipeline } from './hooks/useWorkerPipeline';
+import { LEGACY_QUALITY_MODE_PARKED_MESSAGE } from './state/renderCompat';
 import { useAppStore } from './state/store';
 import { createBuiltInTestScene } from './testing/testScenes';
+import { EquationEditor } from './ui/components/EquationEditor';
 import { ObjectListPanel } from './ui/components/ObjectListPanel';
 import { InspectorPanel } from './ui/components/InspectorPanel';
 import { TopBar } from './ui/components/TopBar';
 
 export default function App() {
   const [viewportApi, setViewportApi] = useState<ViewportApi | null>(null);
+  const [leftSidebarVisible, setLeftSidebarVisible] = useState(true);
+  const [rightSidebarVisible, setRightSidebarVisible] = useState(true);
   const deleteSelected = useAppStore((s) => s.deleteSelected);
   const copySelected = useAppStore((s) => s.copySelectedToClipboard);
   const pasteClipboard = useAppStore((s) => s.pasteClipboard);
@@ -20,6 +24,9 @@ export default function App() {
   const selectObject = useAppStore((s) => s.selectObject);
   const replaceProject = useAppStore((s) => s.replaceProject);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
+  const objects = useAppStore((s) => s.objects);
+  const selectedId = useAppStore((s) => s.selectedId);
+  const updatePlotEquationText = useAppStore((s) => s.updatePlotEquationText);
 
   useAutosave();
   useWorkerPipeline();
@@ -32,8 +39,14 @@ export default function App() {
       || testScene === 'point-shadow-regression'
       || testScene === 'phase5b-path-mixed-geometry'
     ) {
-      replaceProject(createBuiltInTestScene(testScene));
-      setStatusMessage(`Loaded test scene: ${testScene}`);
+      const builtIn = createBuiltInTestScene(testScene);
+      const requestedLegacyQualityMode = builtIn.render.mode === 'quality';
+      replaceProject(builtIn);
+      setStatusMessage(
+        requestedLegacyQualityMode
+          ? `Loaded test scene: ${testScene}. ${LEGACY_QUALITY_MODE_PARKED_MESSAGE}`
+          : `Loaded test scene: ${testScene}`,
+      );
     }
   }, [replaceProject, setStatusMessage]);
 
@@ -86,15 +99,42 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [copySelected, deleteSelected, pasteClipboard, redo, selectObject, undo]);
 
+  const selectedObject = selectedId ? objects.find((obj) => obj.id === selectedId) ?? null : null;
+  const selectedPlot = selectedObject?.type === 'plot' ? selectedObject : null;
+
   return (
     <div className="app-shell">
-      <TopBar viewportApi={viewportApi} />
-      <div className="app-body">
-        <ObjectListPanel />
+      <TopBar
+        viewportApi={viewportApi}
+        leftSidebarVisible={leftSidebarVisible}
+        rightSidebarVisible={rightSidebarVisible}
+        onToggleLeftSidebar={() => setLeftSidebarVisible((v) => !v)}
+        onToggleRightSidebar={() => setRightSidebarVisible((v) => !v)}
+      />
+      <section className="equation-dock" aria-label="Selected equation editor">
+        <div className="equation-dock__inner">
+          {selectedPlot ? (
+            <EquationEditor
+              equation={selectedPlot.equation}
+              onChange={(rawText) => updatePlotEquationText(selectedPlot.id, rawText)}
+            />
+          ) : (
+            <div className="equation-dock__blank" aria-hidden="true" />
+          )}
+        </div>
+      </section>
+      <div
+        className={[
+          'app-body',
+          leftSidebarVisible ? '' : 'app-body--hide-left',
+          rightSidebarVisible ? '' : 'app-body--hide-right',
+        ].filter(Boolean).join(' ')}
+      >
+        {leftSidebarVisible ? <ObjectListPanel /> : null}
         <main className="viewport-panel">
           <Viewport3D onApiReady={setViewportApi} />
         </main>
-        <InspectorPanel />
+        {rightSidebarVisible ? <InspectorPanel /> : null}
       </div>
     </div>
   );

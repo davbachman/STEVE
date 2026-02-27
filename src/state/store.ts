@@ -28,6 +28,7 @@ import {
   defaultSceneSettings,
   materialPresets,
 } from './defaults';
+import { coerceRenderSettingsForInteractiveOnly, LEGACY_QUALITY_MODE_PARKED_MESSAGE } from './renderCompat';
 
 interface AppStateShape {
   scene: SceneSettings;
@@ -44,6 +45,11 @@ interface AppStateShape {
   plotJobs: Record<UUID, PlotJobStatus>;
   historyPast: HistorySnapshot[];
   historyFuture: HistorySnapshot[];
+  activeObjectDragHistory: {
+    objectId: UUID;
+    startPosition: { x: number; y: number; z: number };
+    before: HistorySnapshot;
+  } | null;
 }
 
 interface AppActions {
@@ -63,7 +69,12 @@ interface AppActions {
   updateRender: (patch: Partial<RenderSettings>) => void;
   moveSelectedByDeltaXY: (dx: number, dy: number) => void;
   moveSelectedByDeltaZ: (dz: number) => void;
+  setObjectName: (id: UUID, name: string) => void;
+  setObjectVisibility: (id: UUID, visible: boolean) => void;
   setObjectPosition: (id: UUID, pos: { x: number; y: number; z: number }) => void;
+  beginObjectDragHistory: (id: UUID) => void;
+  commitObjectDragHistory: (id: UUID) => void;
+  cancelObjectDragHistory: () => void;
   deleteSelected: () => void;
   duplicateSelected: () => void;
   copySelectedToClipboard: () => Promise<void>;
@@ -100,6 +111,11 @@ function defaultRenderDiagnostics(): RenderDiagnostics {
     shadowMapResolution: 0,
     pointShadowMode: 'off',
     pointShadowCapability: 'unknown',
+    interactiveReflectionPath: 'none',
+    interactiveReflectionFallbackReason: null,
+    interactiveReflectionProbeSize: 0,
+    interactiveReflectionProbeRefreshCount: 0,
+    interactiveReflectionLastRefreshReason: null,
     qualityActiveRenderer: 'none',
     qualityRendererFallbackReason: null,
     qualityResolutionScale: 1,
@@ -148,6 +164,7 @@ function initialState(): AppStateShape {
     plotJobs: {},
     historyPast: [],
     historyFuture: [],
+    activeObjectDragHistory: null,
   };
 }
 
@@ -344,29 +361,55 @@ function asProjectFile(state: AppStateShape): ProjectFileV1 {
   };
 }
 
-function normalizeImportedProject(project: ProjectFileV1): ProjectFileV1 {
-  if (project.schemaVersion !== 1) {
-    throw new Error(`Unsupported schema version ${project.schemaVersion}`);
+function normalizeImportedProject(project: ProjectFileV1): {
+  project: ProjectFileV1;
+  coercedLegacyQualityMode: boolean;
+  inferredLegacySchemaVersion: boolean;
+  skippedInvalidObjects: number;
+} {
+  const projectRecord = asRecord(project);
+  if (!projectRecord) {
+    throw new Error('Invalid project file: expected object');
   }
+  const rawSchemaVersion = projectRecord.schemaVersion;
+  const inferredLegacySchemaVersion = rawSchemaVersion == null;
+  const schemaVersion = inferredLegacySchemaVersion ? 1 : rawSchemaVersion;
+  if (schemaVersion !== 1) {
+    throw new Error(`Unsupported schema version ${String(projectRecord.schemaVersion)}`);
+  }
+  const sceneInput = asRecord(projectRecord.scene) ?? {};
+  const renderInput = asRecord(projectRecord.render) ?? {};
+  const ambientInput = asRecord(sceneInput.ambient) ?? {};
+  const directionalInput = asRecord(sceneInput.directional) ?? {};
+  const shadowInput = asRecord(sceneInput.shadow) ?? {};
+  const sceneDefaults = defaultSceneSettings();
+  const renderDefaults = defaultRenderSettings();
+  const mergedRender: RenderSettings = {
+    ...renderDefaults,
+    ...(renderInput as Partial<RenderSettings>),
+    qualityCurrentSamples: 0,
+    qualityRunning: false,
+    showDiagnostics: (renderInput as Partial<RenderSettings>).showDiagnostics ?? renderDefaults.showDiagnostics,
+  };
+  const normalizedScene = normalizeSceneSettingsImport(sceneInput, ambientInput, directionalInput, shadowInput, sceneDefaults);
+  const normalizedRender = normalizeRenderSettingsImport(mergedRender, renderInput, renderDefaults);
+  const renderCompat = coerceRenderSettingsForInteractiveOnly(normalizedRender);
+  const objectInputs = Array.isArray(projectRecord.objects) ? projectRecord.objects : [];
+  const normalizedObjects = objectInputs
+    .map((obj, index) => normalizeSceneObjectImport(obj, index))
+    .filter((result): result is { object: SceneObject } => !!result)
+    .map((result) => result.object);
   return {
-    schemaVersion: 1,
-    appVersion: project.appVersion ?? APP_VERSION,
-    scene: {
-      ...defaultSceneSettings(),
-      ...project.scene,
-      ambient: { ...defaultSceneSettings().ambient, ...project.scene.ambient },
-      directional: { ...defaultSceneSettings().directional, ...project.scene.directional },
-      shadow: { ...defaultSceneSettings().shadow, ...(project.scene as Partial<SceneSettings>).shadow },
-      defaultGraphBounds: project.scene.defaultGraphBounds ?? structuredClone(defaultSceneSettings().defaultGraphBounds),
+    project: {
+      schemaVersion: 1,
+      appVersion: typeof projectRecord.appVersion === 'string' ? projectRecord.appVersion : APP_VERSION,
+      scene: normalizedScene,
+      render: renderCompat.render,
+      objects: normalizedObjects,
     },
-    render: {
-      ...defaultRenderSettings(),
-      ...project.render,
-      qualityCurrentSamples: 0,
-      qualityRunning: false,
-      showDiagnostics: project.render?.showDiagnostics ?? defaultRenderSettings().showDiagnostics,
-    },
-    objects: project.objects ?? [],
+    coercedLegacyQualityMode: renderCompat.coercedLegacyQualityMode,
+    inferredLegacySchemaVersion,
+    skippedInvalidObjects: objectInputs.length - normalizedObjects.length,
   };
 }
 
@@ -528,23 +571,65 @@ export const useAppStore = create<AppState>((set, get) => ({
     })),
 
   updateRender: (patch) =>
-    set((state) => ({
-      ...state,
-      render: { ...state.render, ...patch },
-      historyPast: [...state.historyPast, snapshotOf(state)],
-      historyFuture: [],
-    })),
+    set((state) => {
+      const requestedLegacyQualityMode = patch.mode === 'quality';
+      const compat = coerceRenderSettingsForInteractiveOnly({ ...state.render, ...patch });
+      return {
+        ...state,
+        render: compat.render,
+        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyFuture: [],
+        ui: requestedLegacyQualityMode && compat.coercedLegacyQualityMode
+          ? { ...state.ui, statusMessage: LEGACY_QUALITY_MODE_PARKED_MESSAGE }
+          : state.ui,
+      };
+    }),
 
   moveSelectedByDeltaXY: (dx, dy) =>
-    set((state) => moveSelected(state, { dx, dy, dz: 0 })),
+    set((state) => moveSelected(state, { dx, dy, dz: 0 }, { pushHistory: true })),
 
   moveSelectedByDeltaZ: (dz) =>
-    set((state) => moveSelected(state, { dx: 0, dy: 0, dz })),
+    set((state) => moveSelected(state, { dx: 0, dy: 0, dz }, { pushHistory: true })),
+
+  setObjectName: (id, name) =>
+    set((state) => {
+      const idx = state.objects.findIndex((obj) => obj.id === id);
+      if (idx === -1) return state;
+      const nextName = name.trim();
+      if (!nextName) return state;
+      if (state.objects[idx].name === nextName) return state;
+      const next = produce(state, (draft) => {
+        draft.objects[idx].name = nextName;
+      });
+      return {
+        ...next,
+        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyFuture: [],
+        activeObjectDragHistory: null,
+      };
+    }),
+
+  setObjectVisibility: (id, visible) =>
+    set((state) => {
+      const idx = state.objects.findIndex((obj) => obj.id === id);
+      if (idx === -1) return state;
+      if (state.objects[idx].visible === visible) return state;
+      const next = produce(state, (draft) => {
+        draft.objects[idx].visible = visible;
+      });
+      return {
+        ...next,
+        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyFuture: [],
+      };
+    }),
 
   setObjectPosition: (id, pos) =>
     set((state) => {
       const idx = state.objects.findIndex((obj) => obj.id === id);
       if (idx === -1) return state;
+      const currentPos = getObjectPosition(state.objects[idx]);
+      if (positionsEqual(currentPos, pos)) return state;
       const next = produce(state, (draft) => {
         const obj = draft.objects[idx];
         if (obj.type === 'plot') {
@@ -555,6 +640,51 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       return next;
     }),
+
+  beginObjectDragHistory: (id) =>
+    set((state) => {
+      const obj = state.objects.find((candidate) => candidate.id === id);
+      if (!obj) return state;
+      const startPosition = getObjectPosition(obj);
+      if (
+        state.activeObjectDragHistory &&
+        state.activeObjectDragHistory.objectId === id &&
+        positionsEqual(state.activeObjectDragHistory.startPosition, startPosition)
+      ) {
+        return state;
+      }
+      return {
+        ...state,
+        activeObjectDragHistory: {
+          objectId: id,
+          startPosition,
+          before: snapshotOf(state),
+        },
+      };
+    }),
+
+  commitObjectDragHistory: (id) =>
+    set((state) => {
+      const active = state.activeObjectDragHistory;
+      if (!active) return state;
+      if (active.objectId !== id) {
+        return { ...state, activeObjectDragHistory: null };
+      }
+      const obj = state.objects.find((candidate) => candidate.id === id);
+      const currentPosition = obj ? getObjectPosition(obj) : null;
+      if (!currentPosition || positionsEqual(active.startPosition, currentPosition)) {
+        return { ...state, activeObjectDragHistory: null };
+      }
+      return {
+        ...state,
+        activeObjectDragHistory: null,
+        historyPast: [...state.historyPast, active.before],
+        historyFuture: [],
+      };
+    }),
+
+  cancelObjectDragHistory: () =>
+    set((state) => (state.activeObjectDragHistory ? { ...state, activeObjectDragHistory: null } : state)),
 
   deleteSelected: () =>
     set((state) => {
@@ -652,15 +782,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     const normalized = normalizeImportedProject(project);
     set((state) => ({
       ...state,
-      scene: normalized.scene,
-      render: normalized.render,
-      objects: normalized.objects,
+      scene: normalized.project.scene,
+      render: normalized.project.render,
+      objects: normalized.project.objects,
       selectedId: null,
       renderDiagnostics: defaultRenderDiagnostics(),
       plotJobs: {},
       historyPast: [],
       historyFuture: [],
-      ui: { ...state.ui, statusMessage: 'Project loaded' },
+      activeObjectDragHistory: null,
+      ui: {
+        ...state.ui,
+        statusMessage: buildProjectLoadStatusMessage(normalized),
+      },
     }));
   },
 
@@ -677,6 +811,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ui: state.ui,
         historyPast: state.historyPast.slice(0, -1),
         historyFuture: [snapshotOf(state), ...state.historyFuture],
+        activeObjectDragHistory: null,
       };
     }),
 
@@ -691,6 +826,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ui: state.ui,
         historyPast: [...state.historyPast, snapshotOf(state)],
         historyFuture: state.historyFuture.slice(1),
+        activeObjectDragHistory: null,
       };
     }),
 
@@ -803,11 +939,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     }),
 }));
 
-function moveSelected(state: AppState, delta: { dx: number; dy: number; dz: number }): AppState {
+function moveSelected(
+  state: AppState,
+  delta: { dx: number; dy: number; dz: number },
+  options: { pushHistory: boolean },
+): AppState {
   if (!state.selectedId) return state;
   const idx = state.objects.findIndex((obj) => obj.id === state.selectedId);
   if (idx === -1) return state;
-  return produce(state, (draft) => {
+  const next = produce(state, (draft) => {
     const obj = draft.objects[idx];
     if (obj.type === 'plot') {
       obj.transform.position.x += delta.dx;
@@ -819,6 +959,302 @@ function moveSelected(state: AppState, delta: { dx: number; dy: number; dz: numb
       obj.position.z += delta.dz;
     }
   });
+  if (!options.pushHistory) {
+    return next;
+  }
+  return {
+    ...next,
+    historyPast: [...state.historyPast, snapshotOf(state)],
+    historyFuture: [],
+    activeObjectDragHistory: null,
+  };
+}
+
+function getObjectPosition(obj: SceneObject): { x: number; y: number; z: number } {
+  return obj.type === 'plot' ? { ...obj.transform.position } : { ...obj.position };
+}
+
+function positionsEqual(
+  a: { x: number; y: number; z: number } | null,
+  b: { x: number; y: number; z: number } | null,
+): boolean {
+  return !!a && !!b && a.x === b.x && a.y === b.y && a.z === b.z;
+}
+
+function buildProjectLoadStatusMessage(normalized: {
+  coercedLegacyQualityMode: boolean;
+  inferredLegacySchemaVersion: boolean;
+  skippedInvalidObjects: number;
+}): string {
+  if (!normalized.coercedLegacyQualityMode && !normalized.inferredLegacySchemaVersion && normalized.skippedInvalidObjects === 0) {
+    return 'Project loaded';
+  }
+  if (!normalized.inferredLegacySchemaVersion && normalized.skippedInvalidObjects === 0 && normalized.coercedLegacyQualityMode) {
+    return LEGACY_QUALITY_MODE_PARKED_MESSAGE;
+  }
+  const notes: string[] = [];
+  if (normalized.coercedLegacyQualityMode) {
+    notes.push('legacy quality mode parked');
+  }
+  if (normalized.inferredLegacySchemaVersion) {
+    notes.push('schema version inferred as 1');
+  }
+  if (normalized.skippedInvalidObjects > 0) {
+    notes.push(`skipped ${normalized.skippedInvalidObjects} invalid object${normalized.skippedInvalidObjects === 1 ? '' : 's'}`);
+  }
+  return notes.length > 0 ? `Project loaded (${notes.join('; ')})` : 'Project loaded';
+}
+
+function normalizeSceneSettingsImport(
+  sceneInput: Record<string, unknown>,
+  ambientInput: Record<string, unknown>,
+  directionalInput: Record<string, unknown>,
+  shadowInput: Record<string, unknown>,
+  defaults: SceneSettings,
+): SceneSettings {
+  return {
+    ...defaults,
+    backgroundMode: asEnum(sceneInput.backgroundMode, ['solid', 'gradient']) ?? defaults.backgroundMode,
+    backgroundColor: asNonEmptyString(sceneInput.backgroundColor) ?? defaults.backgroundColor,
+    gradientTopColor: asNonEmptyString(sceneInput.gradientTopColor) ?? defaults.gradientTopColor,
+    gradientBottomColor: asNonEmptyString(sceneInput.gradientBottomColor) ?? defaults.gradientBottomColor,
+    groundPlaneVisible: asBoolean(sceneInput.groundPlaneVisible) ?? defaults.groundPlaneVisible,
+    groundPlaneSize: asFiniteNumber(sceneInput.groundPlaneSize) ?? defaults.groundPlaneSize,
+    groundPlaneColor: asNonEmptyString(sceneInput.groundPlaneColor) ?? defaults.groundPlaneColor,
+    groundPlaneRoughness: clampNumber(asFiniteNumber(sceneInput.groundPlaneRoughness) ?? defaults.groundPlaneRoughness, 0, 1),
+    groundPlaneReflective: asBoolean(sceneInput.groundPlaneReflective) ?? defaults.groundPlaneReflective,
+    gridVisible: asBoolean(sceneInput.gridVisible) ?? defaults.gridVisible,
+    gridExtent: asFiniteNumber(sceneInput.gridExtent) ?? defaults.gridExtent,
+    gridSpacing: asFiniteNumber(sceneInput.gridSpacing) ?? defaults.gridSpacing,
+    gridLineOpacity: clampNumber(asFiniteNumber(sceneInput.gridLineOpacity) ?? defaults.gridLineOpacity, 0, 1),
+    axesVisible: asBoolean(sceneInput.axesVisible) ?? defaults.axesVisible,
+    axesLength: asFiniteNumber(sceneInput.axesLength) ?? defaults.axesLength,
+    axesLabelsVisible: asBoolean(sceneInput.axesLabelsVisible) ?? defaults.axesLabelsVisible,
+    defaultGraphBounds: normalizeBounds3D(sceneInput.defaultGraphBounds, defaults.defaultGraphBounds),
+    ambient: {
+      ...defaults.ambient,
+      color: asNonEmptyString(ambientInput.color) ?? defaults.ambient.color,
+      intensity: asFiniteNumber(ambientInput.intensity) ?? defaults.ambient.intensity,
+    },
+    directional: {
+      ...defaults.directional,
+      direction: normalizeVec3(directionalInput.direction, defaults.directional.direction),
+      color: asNonEmptyString(directionalInput.color) ?? defaults.directional.color,
+      intensity: asFiniteNumber(directionalInput.intensity) ?? defaults.directional.intensity,
+      castShadows: asBoolean(directionalInput.castShadows) ?? defaults.directional.castShadows,
+    },
+    shadow: {
+      ...defaults.shadow,
+      directionalShadowEnabled: asBoolean(shadowInput.directionalShadowEnabled) ?? defaults.shadow.directionalShadowEnabled,
+      pointShadowMode: asEnum(shadowInput.pointShadowMode, ['off', 'auto', 'on']) ?? defaults.shadow.pointShadowMode,
+      pointShadowMaxLights: asFiniteInteger(shadowInput.pointShadowMaxLights) ?? defaults.shadow.pointShadowMaxLights,
+      shadowMapResolution: asFiniteInteger(shadowInput.shadowMapResolution) ?? defaults.shadow.shadowMapResolution,
+      shadowSoftness: clampNumber(asFiniteNumber(shadowInput.shadowSoftness) ?? defaults.shadow.shadowSoftness, 0, 1),
+    },
+  };
+}
+
+function normalizeRenderSettingsImport(
+  mergedRender: RenderSettings,
+  renderInput: Record<string, unknown>,
+  defaults: RenderSettings,
+): RenderSettings {
+  return {
+    ...mergedRender,
+    mode: asEnum(renderInput.mode, ['interactive', 'quality']) ?? mergedRender.mode,
+    toneMapping: asEnum(renderInput.toneMapping, ['aces', 'filmic', 'none']) ?? mergedRender.toneMapping,
+    interactiveQuality: asEnum(renderInput.interactiveQuality, ['performance', 'balanced', 'quality']) ?? mergedRender.interactiveQuality,
+    qualityRenderer: asEnum(renderInput.qualityRenderer, ['taa_preview', 'hybrid_gpu_preview', 'path']) ?? mergedRender.qualityRenderer,
+    qualitySamplesTarget: Math.max(1, asFiniteInteger(renderInput.qualitySamplesTarget) ?? mergedRender.qualitySamplesTarget),
+    qualityResolutionScale: clampNumber(asFiniteNumber(renderInput.qualityResolutionScale) ?? mergedRender.qualityResolutionScale, 0.1, 2),
+    qualityMaxBounces: Math.max(0, asFiniteInteger(renderInput.qualityMaxBounces) ?? mergedRender.qualityMaxBounces),
+    qualityClampFireflies: asBoolean(renderInput.qualityClampFireflies) ?? mergedRender.qualityClampFireflies,
+    qualityEarlyExportBehavior: asEnum(renderInput.qualityEarlyExportBehavior, ['wait', 'immediate']) ?? mergedRender.qualityEarlyExportBehavior,
+    denoise: asBoolean(renderInput.denoise) ?? mergedRender.denoise,
+    showDiagnostics: asBoolean(renderInput.showDiagnostics) ?? mergedRender.showDiagnostics ?? defaults.showDiagnostics,
+    exposure: asFiniteNumber(renderInput.exposure) ?? mergedRender.exposure,
+    qualityRunning: false,
+    qualityCurrentSamples: 0,
+  };
+}
+
+function normalizeSceneObjectImport(input: unknown, index: number): { object: SceneObject } | null {
+  const record = asRecord(input);
+  if (!record) return null;
+  const type = asEnum(record.type, ['plot', 'point_light']);
+  if (type === 'plot') {
+    return { object: normalizePlotObjectImport(record, index) };
+  }
+  if (type === 'point_light') {
+    return { object: normalizePointLightObjectImport(record, index) };
+  }
+  return null;
+}
+
+function normalizePlotObjectImport(record: Record<string, unknown>, index: number): PlotObject {
+  const fallback = createBlankPlot(`Imported Plot ${index + 1}`);
+  const transformInput = asRecord(record.transform);
+  const materialInput = asRecord(record.material);
+  const equationInput = asRecord(record.equation);
+  return {
+    ...fallback,
+    id: asNonEmptyString(record.id) ?? fallback.id,
+    name: asNonEmptyString(record.name) ?? fallback.name,
+    visible: asBoolean(record.visible) ?? fallback.visible,
+    transform: {
+      position: normalizeVec3(transformInput?.position, fallback.transform.position),
+    },
+    material: normalizeMaterialImport(materialInput, fallback.material),
+    equation: normalizeEquationSpecImport(equationInput, fallback.equation),
+  };
+}
+
+function normalizePointLightObjectImport(record: Record<string, unknown>, index: number): PointLightObject {
+  const fallback = createPointLight(`Imported Light ${index + 1}`);
+  return {
+    ...fallback,
+    id: asNonEmptyString(record.id) ?? fallback.id,
+    name: asNonEmptyString(record.name) ?? fallback.name,
+    visible: asBoolean(record.visible) ?? fallback.visible,
+    position: normalizeVec3(record.position, fallback.position),
+    color: asNonEmptyString(record.color) ?? fallback.color,
+    intensity: Math.max(0, asFiniteNumber(record.intensity) ?? fallback.intensity),
+    range: Math.max(0, asFiniteNumber(record.range) ?? fallback.range),
+    castShadows: asBoolean(record.castShadows) ?? fallback.castShadows,
+  };
+}
+
+function normalizeMaterialImport(
+  materialInput: Record<string, unknown> | null,
+  fallback: PlotObject['material'],
+): PlotObject['material'] {
+  if (!materialInput) return { ...fallback };
+  return {
+    ...fallback,
+    baseColor: asNonEmptyString(materialInput.baseColor) ?? fallback.baseColor,
+    opacity: clampNumber(asFiniteNumber(materialInput.opacity) ?? fallback.opacity, 0, 1),
+    transmission: clampNumber(asFiniteNumber(materialInput.transmission) ?? fallback.transmission, 0, 1),
+    ior: clampNumber(asFiniteNumber(materialInput.ior) ?? fallback.ior, 1, 4),
+    reflectiveness: clampNumber(asFiniteNumber(materialInput.reflectiveness) ?? fallback.reflectiveness, 0, 1),
+    roughness: clampNumber(asFiniteNumber(materialInput.roughness) ?? fallback.roughness, 0, 1),
+    presetName: asNonEmptyString(materialInput.presetName) ?? fallback.presetName,
+    wireframeVisible: asBoolean(materialInput.wireframeVisible) ?? fallback.wireframeVisible,
+    wireframeCellSize: positiveFiniteNumber(materialInput.wireframeCellSize) ?? fallback.wireframeCellSize,
+  };
+}
+
+function normalizeEquationSpecImport(
+  equationInput: Record<string, unknown> | null,
+  fallback: PlotObject['equation'],
+): PlotObject['equation'] {
+  if (!equationInput) return structuredClone(fallback);
+  const sourceInput = asRecord(equationInput.source);
+  const rawText = asNonEmptyString(sourceInput?.rawText) ?? fallback.source.rawText;
+  const requestedKind =
+    asEnum(equationInput.kind, ['parametric_curve', 'parametric_surface', 'implicit_surface', 'explicit_surface']) ?? undefined;
+  const base = coerceEquationSpec(fallback, rawText, requestedKind);
+
+  if (base.kind === 'parametric_curve') {
+    const tDomainInput = asRecord(equationInput.tDomain);
+    return {
+      ...base,
+      tDomain: normalizeDomain1D(tDomainInput, base.tDomain),
+      tubeRadius: Math.max(0, asFiniteNumber(equationInput.tubeRadius) ?? base.tubeRadius),
+      renderAsTube: asBoolean(equationInput.renderAsTube) ?? base.renderAsTube,
+    };
+  }
+
+  if (base.kind === 'parametric_surface') {
+    return {
+      ...base,
+      domain: normalizeDomain2D(asRecord(equationInput.domain), base.domain),
+    };
+  }
+
+  if (base.kind === 'explicit_surface') {
+    return {
+      ...base,
+      solvedAxis: asEnum(equationInput.solvedAxis, ['x', 'y', 'z']) ?? base.solvedAxis,
+      domainAxes: normalizeExplicitDomainAxes(equationInput.domainAxes, base.domainAxes),
+      domain: normalizeDomain2D(asRecord(equationInput.domain), base.domain),
+      compileAsParametric: true,
+    };
+  }
+
+  return {
+    ...base,
+    bounds: normalizeBounds3D(equationInput.bounds, base.bounds),
+    isoValue: asFiniteNumber(equationInput.isoValue) ?? base.isoValue,
+    quality: asEnum(equationInput.quality, ['draft', 'medium', 'high']) ?? base.quality,
+  };
+}
+
+function normalizeDomain1D(
+  input: Record<string, unknown> | null,
+  fallback: { min: number; max: number; samples: number },
+): { min: number; max: number; samples: number } {
+  if (!input) return { ...fallback };
+  return {
+    min: asFiniteNumber(input.min) ?? fallback.min,
+    max: asFiniteNumber(input.max) ?? fallback.max,
+    samples: Math.max(2, asFiniteInteger(input.samples) ?? fallback.samples),
+  };
+}
+
+function normalizeDomain2D(
+  input: Record<string, unknown> | null,
+  fallback: { uMin: number; uMax: number; vMin: number; vMax: number; uSamples: number; vSamples: number },
+): { uMin: number; uMax: number; vMin: number; vMax: number; uSamples: number; vSamples: number } {
+  if (!input) return { ...fallback };
+  return {
+    uMin: asFiniteNumber(input.uMin) ?? fallback.uMin,
+    uMax: asFiniteNumber(input.uMax) ?? fallback.uMax,
+    vMin: asFiniteNumber(input.vMin) ?? fallback.vMin,
+    vMax: asFiniteNumber(input.vMax) ?? fallback.vMax,
+    uSamples: Math.max(2, asFiniteInteger(input.uSamples) ?? fallback.uSamples),
+    vSamples: Math.max(2, asFiniteInteger(input.vSamples) ?? fallback.vSamples),
+  };
+}
+
+function normalizeBounds3D(
+  input: unknown,
+  fallback: { min: { x: number; y: number; z: number }; max: { x: number; y: number; z: number } },
+): { min: { x: number; y: number; z: number }; max: { x: number; y: number; z: number } } {
+  const record = asRecord(input);
+  if (!record) {
+    return {
+      min: { ...fallback.min },
+      max: { ...fallback.max },
+    };
+  }
+  return {
+    min: normalizeVec3(record.min, fallback.min),
+    max: normalizeVec3(record.max, fallback.max),
+  };
+}
+
+function normalizeVec3(
+  input: unknown,
+  fallback: { x: number; y: number; z: number },
+): { x: number; y: number; z: number } {
+  const record = asRecord(input);
+  if (!record) return { ...fallback };
+  return {
+    x: asFiniteNumber(record.x) ?? fallback.x,
+    y: asFiniteNumber(record.y) ?? fallback.y,
+    z: asFiniteNumber(record.z) ?? fallback.z,
+  };
+}
+
+function normalizeExplicitDomainAxes(
+  value: unknown,
+  fallback: ['x' | 'y' | 'z', 'x' | 'y' | 'z'],
+): ['x' | 'y' | 'z', 'x' | 'y' | 'z'] {
+  if (!Array.isArray(value) || value.length !== 2) return [...fallback];
+  const a = asEnum(value[0], ['x', 'y', 'z']);
+  const b = asEnum(value[1], ['x', 'y', 'z']);
+  if (!a || !b || a === b) return [...fallback];
+  return [a, b];
 }
 
 function countPlots(objects: SceneObject[]): number {
@@ -843,6 +1279,11 @@ function shallowDiagnosticsEqual(a: RenderDiagnostics, b: RenderDiagnostics): bo
     a.shadowMapResolution === b.shadowMapResolution &&
     a.pointShadowMode === b.pointShadowMode &&
     a.pointShadowCapability === b.pointShadowCapability &&
+    a.interactiveReflectionPath === b.interactiveReflectionPath &&
+    a.interactiveReflectionFallbackReason === b.interactiveReflectionFallbackReason &&
+    a.interactiveReflectionProbeSize === b.interactiveReflectionProbeSize &&
+    a.interactiveReflectionProbeRefreshCount === b.interactiveReflectionProbeRefreshCount &&
+    a.interactiveReflectionLastRefreshReason === b.interactiveReflectionLastRefreshReason &&
     a.qualityActiveRenderer === b.qualityActiveRenderer &&
     a.qualityRendererFallbackReason === b.qualityRendererFallbackReason &&
     a.qualityResolutionScale === b.qualityResolutionScale &&
@@ -887,4 +1328,42 @@ function shallowPlotJobEqual(a: PlotJobStatus, b: PlotJobStatus): boolean {
     a.lastMeshBuildMs === b.lastMeshBuildMs &&
     a.lastError === b.lastError
   );
+}
+
+function asNonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value : null;
+}
+
+function asBoolean(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function positiveFiniteNumber(value: unknown): number | null {
+  const n = asFiniteNumber(value);
+  return n !== null && n > 0 ? n : null;
+}
+
+function asFiniteInteger(value: unknown): number | null {
+  const n = asFiniteNumber(value);
+  return n === null ? null : Math.round(n);
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function asEnum<T extends string>(value: unknown, allowed: readonly T[]): T | null {
+  if (typeof value !== 'string') return null;
+  return (allowed as readonly string[]).includes(value) ? (value as T) : null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
 }
