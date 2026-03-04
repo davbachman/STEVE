@@ -121,7 +121,6 @@ function compileSpecAsPlot(
       baseColor: '#ffffff',
       opacity: 1,
       transmission: 0,
-      ior: 1.5,
       reflectiveness: 0,
       roughness: 0.5,
     },

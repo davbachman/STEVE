@@ -20,12 +20,6 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
   const selectedId = useAppStore((s) => s.selectedId);
   const plotJobs = useAppStore((s) => s.plotJobs);
   const diagnostics = useAppStore((s) => s.renderDiagnostics);
-  const displayQualitySamples = Math.max(0, Math.floor(render.qualityCurrentSamples));
-  const showQualityFallback =
-    render.mode === 'quality'
-    && diagnostics.qualityRendererFallbackReason
-    && diagnostics.qualityActiveRenderer !== 'none'
-    && diagnostics.qualityActiveRenderer !== render.qualityRenderer;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -109,24 +103,6 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
           <p>Use a desktop browser with WebGPU enabled (Chrome/Edge/Safari Technology Preview).</p>
         </div>
       ) : null}
-      {render.mode === 'quality' ? (
-        <div className="viewport-overlay viewport-overlay--quality">
-          <div>Legacy Quality Render Mode (parked / experimental)</div>
-          <div>
-            Requested: {render.qualityRenderer} | Active: {diagnostics.qualityActiveRenderer}
-          </div>
-          <div>
-            Samples: {displayQualitySamples} / {render.qualitySamplesTarget}
-            {render.qualityRunning ? ' (running)' : ' (idle)'}
-          </div>
-          <div>
-            Resolution: {diagnostics.qualityResolutionScale.toFixed(2)}x | {diagnostics.qualitySamplesPerSecond} samples/sec
-          </div>
-          <div>Interactive mode is the active roadmap; this legacy path is retained for compatibility/reference.</div>
-          <div>Last reset: {diagnostics.qualityLastResetReason ?? 'none'}</div>
-          {showQualityFallback ? <div>Fallback: {diagnostics.qualityRendererFallbackReason}</div> : null}
-        </div>
-      ) : null}
       {render.showDiagnostics ? (
         <div className="viewport-overlay viewport-overlay--diagnostics">
           <div><strong>Renderer Diagnostics</strong></div>
@@ -149,12 +125,13 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
           <div>Shadow map: {diagnostics.shadowMapResolution}px</div>
           <div>Point shadow support: {diagnostics.pointShadowCapability}</div>
           <div>Interactive reflections: {diagnostics.interactiveReflectionPath}</div>
+          <div>Reflection source: {diagnostics.interactiveReflectionSource}</div>
           <div>Reflection probe: {diagnostics.interactiveReflectionProbeSize}px | refreshes {diagnostics.interactiveReflectionProbeRefreshCount}</div>
+          <div>Reflection probe capture: {diagnostics.interactiveReflectionProbeHasCapture ? 'yes' : 'no'} | usable: {diagnostics.interactiveReflectionProbeUsable ? 'yes' : 'no'}</div>
+          <div>Reflection probe texture: ready {diagnostics.interactiveReflectionProbeTextureReady ? 'yes' : 'no'} | allocated {diagnostics.interactiveReflectionProbeTextureAllocated ? 'yes' : 'no'}</div>
+          <div>Reflection fallback kind: {diagnostics.interactiveReflectionFallbackKind} | ever usable {diagnostics.interactiveReflectionFallbackEverUsable ? 'yes' : 'no'}</div>
+          <div>Reflection fallback texture: {diagnostics.interactiveReflectionFallbackTexturePresent ? 'present' : 'missing'} | ready {diagnostics.interactiveReflectionFallbackTextureReady ? 'yes' : 'no'} | usable {diagnostics.interactiveReflectionFallbackTextureUsable ? 'yes' : 'no'}</div>
           {diagnostics.interactiveReflectionFallbackReason ? <div>Reflection fallback: {diagnostics.interactiveReflectionFallbackReason}</div> : null}
-          <div>Quality backend: {diagnostics.qualityActiveRenderer}</div>
-          <div>Quality samples/sec: {diagnostics.qualitySamplesPerSecond}</div>
-          <div>Quality reset: {diagnostics.qualityLastResetReason ?? 'none'}</div>
-          {showQualityFallback ? <div>Quality fallback: {diagnostics.qualityRendererFallbackReason}</div> : null}
         </div>
       ) : null}
     </div>

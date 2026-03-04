@@ -51,6 +51,7 @@ describe('project import normalization', () => {
       throw new Error('Expected imported plot');
     }
     expect(state.objects[0].equation.source.rawText).toBe('z = cos(x) * sin(y)');
+    expect('ior' in state.objects[0].material).toBe(false);
     expect(state.ui.statusMessage).toContain('skipped 2 invalid objects');
   });
 

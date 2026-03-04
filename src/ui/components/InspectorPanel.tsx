@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { materialPresets } from '../../state/defaults';
-import { LEGACY_QUALITY_MODE_PARKED_MESSAGE } from '../../state/renderCompat';
 import { useAppStore } from '../../state/store';
 import type { PlotObject, PointLightObject } from '../../types/contracts';
 
@@ -177,7 +176,6 @@ function MaterialTab({ selected }: { selected: PlotObject | PointLightObject | n
       </label>
       <RangeField label="Opacity" min={0.05} max={1} step={0.01} value={selected.material.opacity} onChange={(v) => updatePlotMaterial(selected.id, { opacity: v })} />
       <RangeField label="Transmission" min={0} max={1} step={0.01} value={selected.material.transmission} onChange={(v) => updatePlotMaterial(selected.id, { transmission: v })} />
-      <RangeField label="IOR" min={1} max={2.5} step={0.01} value={selected.material.ior} onChange={(v) => updatePlotMaterial(selected.id, { ior: v })} />
       <RangeField label="Reflectiveness" min={0} max={1} step={0.01} value={selected.material.reflectiveness} onChange={(v) => updatePlotMaterial(selected.id, { reflectiveness: v })} />
       <RangeField label="Roughness" min={0} max={1} step={0.01} value={selected.material.roughness} onChange={(v) => updatePlotMaterial(selected.id, { roughness: v })} />
       {(selected.equation.kind === 'parametric_surface' || selected.equation.kind === 'explicit_surface') ? (
@@ -348,18 +346,9 @@ function RenderTab() {
   const render = useAppStore((s) => s.render);
   const updateRender = useAppStore((s) => s.updateRender);
   const diagnostics = useAppStore((s) => s.renderDiagnostics);
-  const qualityModeImplemented = useAppStore((s) => s.ui.qualityModeImplemented);
   return (
     <div className="inspector-section">
       <h3>Render</h3>
-      <label>
-        Mode
-        <select value={render.mode} disabled={!qualityModeImplemented} onChange={(e) => updateRender({ mode: e.target.value as 'interactive' | 'quality' })}>
-          <option value="interactive">Interactive</option>
-          {qualityModeImplemented ? <option value="quality">Quality (progressive)</option> : null}
-        </select>
-      </label>
-      {!qualityModeImplemented ? <div className="inspector-note">{LEGACY_QUALITY_MODE_PARKED_MESSAGE}</div> : null}
       <label>
         Tone Mapping
         <select value={render.toneMapping} onChange={(e) => updateRender({ toneMapping: e.target.value as typeof render.toneMapping })}>
@@ -377,41 +366,6 @@ function RenderTab() {
           <option value="quality">Quality</option>
         </select>
       </label>
-      <details>
-        <summary>Legacy quality settings (parked / compatibility)</summary>
-        <div className="inspector-note">
-          These settings are preserved for older project files and regression scenes, but the app runs in Interactive mode.
-        </div>
-        <RangeField label="Quality Samples" min={16} max={2048} step={1} value={render.qualitySamplesTarget} onChange={(v) => updateRender({ qualitySamplesTarget: Math.round(v) })} />
-        <RangeField label="Resolution Scale" min={0.5} max={2} step={0.1} value={render.qualityResolutionScale} onChange={(v) => updateRender({ qualityResolutionScale: v })} />
-        <label>
-          Quality Renderer
-          <select value={render.qualityRenderer} onChange={(e) => updateRender({ qualityRenderer: e.target.value as typeof render.qualityRenderer })}>
-            <option value="taa_preview">TAA Preview (legacy)</option>
-            <option value="hybrid_gpu_preview">Hybrid GPU Preview (legacy Phase 5A)</option>
-            <option value="path">Path (legacy Phase 5B experimental)</option>
-          </select>
-        </label>
-        <RangeField label="Max Bounces" min={1} max={12} step={1} value={render.qualityMaxBounces} onChange={(v) => updateRender({ qualityMaxBounces: Math.round(v) })} />
-        <label className="checkbox-row">
-          <input type="checkbox" checked={render.qualityClampFireflies} onChange={(e) => updateRender({ qualityClampFireflies: e.target.checked })} />
-          Clamp fireflies (hybrid/path)
-        </label>
-        <label>
-          Quality Export
-          <select
-            value={render.qualityEarlyExportBehavior}
-            onChange={(e) => updateRender({ qualityEarlyExportBehavior: e.target.value as typeof render.qualityEarlyExportBehavior })}
-          >
-            <option value="wait">Wait for target samples</option>
-            <option value="immediate">Export immediately</option>
-          </select>
-        </label>
-        <label className="checkbox-row">
-          <input type="checkbox" checked={render.denoise} onChange={(e) => updateRender({ denoise: e.target.checked })} />
-          Denoise (future)
-        </label>
-      </details>
       <label className="checkbox-row">
         <input type="checkbox" checked={render.showDiagnostics} onChange={(e) => updateRender({ showDiagnostics: e.target.checked })} />
         Render diagnostics overlay
@@ -424,39 +378,16 @@ function RenderTab() {
           <div>Shadow receiver: {diagnostics.shadowReceiver}</div>
           <div>Point shadow capability: {diagnostics.pointShadowCapability}</div>
           <div>Interactive reflections: {diagnostics.interactiveReflectionPath}</div>
+          <div>Reflection source: {diagnostics.interactiveReflectionSource}</div>
           <div>Reflection probe: {diagnostics.interactiveReflectionProbeSize}px | refreshes {diagnostics.interactiveReflectionProbeRefreshCount}</div>
+          <div>Reflection probe capture: {diagnostics.interactiveReflectionProbeHasCapture ? 'yes' : 'no'} | usable: {diagnostics.interactiveReflectionProbeUsable ? 'yes' : 'no'}</div>
+          <div>Reflection probe texture: ready {diagnostics.interactiveReflectionProbeTextureReady ? 'yes' : 'no'} | allocated {diagnostics.interactiveReflectionProbeTextureAllocated ? 'yes' : 'no'}</div>
+          <div>Reflection fallback kind: {diagnostics.interactiveReflectionFallbackKind} | ever usable {diagnostics.interactiveReflectionFallbackEverUsable ? 'yes' : 'no'}</div>
+          <div>Reflection fallback texture: {diagnostics.interactiveReflectionFallbackTexturePresent ? 'present' : 'missing'} | ready {diagnostics.interactiveReflectionFallbackTextureReady ? 'yes' : 'no'} | usable {diagnostics.interactiveReflectionFallbackTextureUsable ? 'yes' : 'no'}</div>
           <div>Reflection refresh: {diagnostics.interactiveReflectionLastRefreshReason ?? 'none'}</div>
           {diagnostics.interactiveReflectionFallbackReason ? <div>Reflection fallback: {diagnostics.interactiveReflectionFallbackReason}</div> : null}
-          <div>Quality backend: {diagnostics.qualityActiveRenderer}</div>
-          <div>Quality res scale: {diagnostics.qualityResolutionScale.toFixed(2)}</div>
-          <div>Quality samples/sec: {diagnostics.qualitySamplesPerSecond}</div>
-          <div>Quality reset: {diagnostics.qualityLastResetReason ?? 'none'}</div>
-          {diagnostics.qualityPathExecutionMode ? <div>Path exec: {diagnostics.qualityPathExecutionMode}</div> : null}
-          {diagnostics.qualityPathAlignmentStatus ? (
-            <div>
-              Path align: {diagnostics.qualityPathAlignmentStatus}
-              {' '}| probes {diagnostics.qualityPathAlignmentProbeCount}
-              {' '}| hit mismatches {diagnostics.qualityPathAlignmentHitMismatches}
-              {' '}| max point err {diagnostics.qualityPathAlignmentMaxPointError.toFixed(4)}
-              {' '}| max dist err {diagnostics.qualityPathAlignmentMaxDistanceError.toFixed(4)}
-            </div>
-          ) : null}
-          {(diagnostics.qualityPathWorkerBatchCount > 0 || diagnostics.qualityPathMainThreadBatchCount > 0) ? (
-            <div>
-              Path work:
-              {' '}worker {diagnostics.qualityPathWorkerBatchCount} batches / {diagnostics.qualityPathWorkerPixelCount} px
-              {' '}({diagnostics.qualityPathWorkerPixelsPerSecond.toFixed(0)} px/s)
-              {' '}| worker avg {diagnostics.qualityPathWorkerBatchLatencyMs.toFixed(1)} ms / {diagnostics.qualityPathWorkerBatchPixelsPerBatch.toFixed(0)} px
-              {' '}| main {diagnostics.qualityPathMainThreadBatchCount} batches / {diagnostics.qualityPathMainThreadPixelCount} px
-              {' '}({diagnostics.qualityPathMainThreadPixelsPerSecond.toFixed(0)} px/s)
-            </div>
-          ) : null}
-          {diagnostics.qualityRendererFallbackReason ? <div>Quality fallback: {diagnostics.qualityRendererFallbackReason}</div> : null}
         </div>
       ) : null}
-      <div className="inspector-note">
-        Interactive rendering is the active roadmap. Legacy quality backends remain in code for compatibility and regression reference only.
-      </div>
     </div>
   );
 }

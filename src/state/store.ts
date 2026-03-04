@@ -39,7 +39,6 @@ interface AppStateShape {
   ui: {
     inspectorTab: 'object' | 'material' | 'lighting' | 'scene' | 'render';
     statusMessage: string | null;
-    qualityModeImplemented: boolean;
   };
   renderDiagnostics: RenderDiagnostics;
   plotJobs: Record<UUID, PlotJobStatus>;
@@ -59,16 +58,12 @@ interface AppActions {
   addPlot: (template?: 'explicit' | 'curve' | 'surface' | 'implicit') => void;
   addPointLight: () => void;
   updatePlotEquationText: (id: UUID, rawText: string) => void;
-  setPlotClassificationOverride: (id: UUID, kind: EquationSpec['kind']) => void;
   updatePlotSpec: (id: UUID, updater: (spec: EquationSpec) => EquationSpec) => void;
   updatePlotMaterial: (id: UUID, patch: Partial<PlotObject['material']>) => void;
   applyMaterialPreset: (id: UUID, presetName: string) => void;
   updatePointLight: (id: UUID, patch: Partial<PointLightObject>) => void;
   updateScene: (patch: Partial<SceneSettings>) => void;
-  updateSceneNested: <K extends keyof SceneSettings>(key: K, value: SceneSettings[K]) => void;
   updateRender: (patch: Partial<RenderSettings>) => void;
-  moveSelectedByDeltaXY: (dx: number, dy: number) => void;
-  moveSelectedByDeltaZ: (dz: number) => void;
   setObjectName: (id: UUID, name: string) => void;
   setObjectVisibility: (id: UUID, visible: boolean) => void;
   setObjectPosition: (id: UUID, pos: { x: number; y: number; z: number }) => void;
@@ -76,7 +71,6 @@ interface AppActions {
   commitObjectDragHistory: (id: UUID) => void;
   cancelObjectDragHistory: () => void;
   deleteSelected: () => void;
-  duplicateSelected: () => void;
   copySelectedToClipboard: () => Promise<void>;
   pasteClipboard: () => Promise<void>;
   newProject: () => void;
@@ -112,10 +106,20 @@ function defaultRenderDiagnostics(): RenderDiagnostics {
     pointShadowMode: 'off',
     pointShadowCapability: 'unknown',
     interactiveReflectionPath: 'none',
+    interactiveReflectionSource: 'none',
     interactiveReflectionFallbackReason: null,
     interactiveReflectionProbeSize: 0,
     interactiveReflectionProbeRefreshCount: 0,
     interactiveReflectionLastRefreshReason: null,
+    interactiveReflectionProbeHasCapture: false,
+    interactiveReflectionProbeUsable: false,
+    interactiveReflectionProbeTextureReady: false,
+    interactiveReflectionProbeTextureAllocated: false,
+    interactiveReflectionFallbackKind: 'none',
+    interactiveReflectionFallbackEverUsable: false,
+    interactiveReflectionFallbackTexturePresent: false,
+    interactiveReflectionFallbackTextureReady: false,
+    interactiveReflectionFallbackTextureUsable: false,
     qualityActiveRenderer: 'none',
     qualityRendererFallbackReason: null,
     qualityResolutionScale: 1,
@@ -158,7 +162,6 @@ function initialState(): AppStateShape {
     ui: {
       inspectorTab: 'object',
       statusMessage: null,
-      qualityModeImplemented: false,
     },
     renderDiagnostics: defaultRenderDiagnostics(),
     plotJobs: {},
@@ -223,7 +226,7 @@ function makeExplicitSpec(rawText: string): EquationSpec {
       source,
       bounds: structuredClone(defaultBounds),
       isoValue: 0,
-      quality: 'draft',
+      quality: 'high',
     };
   }
   return {
@@ -280,7 +283,7 @@ function coerceEquationSpec(existing: EquationSpec, rawText: string, forcedKind?
       source,
       bounds: existing.kind === 'implicit_surface' ? existing.bounds : structuredClone(defaultBounds),
       isoValue: existing.kind === 'implicit_surface' ? existing.isoValue : 0,
-      quality: existing.kind === 'implicit_surface' ? existing.quality : 'draft',
+      quality: existing.kind === 'implicit_surface' ? existing.quality : 'high',
     };
   }
 
@@ -475,23 +478,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       };
     }),
 
-  setPlotClassificationOverride: (id, kind) =>
-    set((state) => {
-      const idx = state.objects.findIndex((obj) => obj.id === id && obj.type === 'plot');
-      if (idx === -1) return state;
-      const plot = state.objects[idx] as PlotObject;
-      const rawText = plot.equation.source.rawText;
-      const next = produce(state, (draft) => {
-        const draftPlot = draft.objects[idx] as PlotObject;
-        draftPlot.equation = coerceEquationSpec(draftPlot.equation, rawText, kind);
-      });
-      return {
-        ...next,
-        historyPast: [...state.historyPast, snapshotOf(state)],
-        historyFuture: [],
-      };
-    }),
-
   updatePlotSpec: (id, updater) =>
     set((state) => {
       const idx = state.objects.findIndex((obj) => obj.id === id && obj.type === 'plot');
@@ -562,14 +548,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       historyFuture: [],
     })),
 
-  updateSceneNested: (key, value) =>
-    set((state) => ({
-      ...state,
-      scene: { ...state.scene, [key]: value },
-      historyPast: [...state.historyPast, snapshotOf(state)],
-      historyFuture: [],
-    })),
-
   updateRender: (patch) =>
     set((state) => {
       const requestedLegacyQualityMode = patch.mode === 'quality';
@@ -584,12 +562,6 @@ export const useAppStore = create<AppState>((set, get) => ({
           : state.ui,
       };
     }),
-
-  moveSelectedByDeltaXY: (dx, dy) =>
-    set((state) => moveSelected(state, { dx, dy, dz: 0 }, { pushHistory: true })),
-
-  moveSelectedByDeltaZ: (dz) =>
-    set((state) => moveSelected(state, { dx: 0, dy: 0, dz }, { pushHistory: true })),
 
   setObjectName: (id, name) =>
     set((state) => {
@@ -693,20 +665,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...state,
         objects: state.objects.filter((obj) => obj.id !== state.selectedId),
         selectedId: null,
-        historyPast: [...state.historyPast, snapshotOf(state)],
-        historyFuture: [],
-      };
-    }),
-
-  duplicateSelected: () =>
-    set((state) => {
-      const selected = state.objects.find((obj) => obj.id === state.selectedId);
-      if (!selected) return state;
-      const cloned = cloneWithNewId(selected);
-      return {
-        ...state,
-        objects: [...state.objects, cloned],
-        selectedId: cloned.id,
         historyPast: [...state.historyPast, snapshotOf(state)],
         historyFuture: [],
       };
@@ -939,37 +897,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     }),
 }));
 
-function moveSelected(
-  state: AppState,
-  delta: { dx: number; dy: number; dz: number },
-  options: { pushHistory: boolean },
-): AppState {
-  if (!state.selectedId) return state;
-  const idx = state.objects.findIndex((obj) => obj.id === state.selectedId);
-  if (idx === -1) return state;
-  const next = produce(state, (draft) => {
-    const obj = draft.objects[idx];
-    if (obj.type === 'plot') {
-      obj.transform.position.x += delta.dx;
-      obj.transform.position.y += delta.dy;
-      obj.transform.position.z += delta.dz;
-    } else {
-      obj.position.x += delta.dx;
-      obj.position.y += delta.dy;
-      obj.position.z += delta.dz;
-    }
-  });
-  if (!options.pushHistory) {
-    return next;
-  }
-  return {
-    ...next,
-    historyPast: [...state.historyPast, snapshotOf(state)],
-    historyFuture: [],
-    activeObjectDragHistory: null,
-  };
-}
-
 function getObjectPosition(obj: SceneObject): { x: number; y: number; z: number } {
   return obj.type === 'plot' ? { ...obj.transform.position } : { ...obj.position };
 }
@@ -1029,7 +956,6 @@ function normalizeSceneSettingsImport(
     gridLineOpacity: clampNumber(asFiniteNumber(sceneInput.gridLineOpacity) ?? defaults.gridLineOpacity, 0, 1),
     axesVisible: asBoolean(sceneInput.axesVisible) ?? defaults.axesVisible,
     axesLength: asFiniteNumber(sceneInput.axesLength) ?? defaults.axesLength,
-    axesLabelsVisible: asBoolean(sceneInput.axesLabelsVisible) ?? defaults.axesLabelsVisible,
     defaultGraphBounds: normalizeBounds3D(sceneInput.defaultGraphBounds, defaults.defaultGraphBounds),
     ambient: {
       ...defaults.ambient,
@@ -1134,7 +1060,6 @@ function normalizeMaterialImport(
     baseColor: asNonEmptyString(materialInput.baseColor) ?? fallback.baseColor,
     opacity: clampNumber(asFiniteNumber(materialInput.opacity) ?? fallback.opacity, 0, 1),
     transmission: clampNumber(asFiniteNumber(materialInput.transmission) ?? fallback.transmission, 0, 1),
-    ior: clampNumber(asFiniteNumber(materialInput.ior) ?? fallback.ior, 1, 4),
     reflectiveness: clampNumber(asFiniteNumber(materialInput.reflectiveness) ?? fallback.reflectiveness, 0, 1),
     roughness: clampNumber(asFiniteNumber(materialInput.roughness) ?? fallback.roughness, 0, 1),
     presetName: asNonEmptyString(materialInput.presetName) ?? fallback.presetName,
@@ -1280,10 +1205,20 @@ function shallowDiagnosticsEqual(a: RenderDiagnostics, b: RenderDiagnostics): bo
     a.pointShadowMode === b.pointShadowMode &&
     a.pointShadowCapability === b.pointShadowCapability &&
     a.interactiveReflectionPath === b.interactiveReflectionPath &&
+    a.interactiveReflectionSource === b.interactiveReflectionSource &&
     a.interactiveReflectionFallbackReason === b.interactiveReflectionFallbackReason &&
     a.interactiveReflectionProbeSize === b.interactiveReflectionProbeSize &&
     a.interactiveReflectionProbeRefreshCount === b.interactiveReflectionProbeRefreshCount &&
     a.interactiveReflectionLastRefreshReason === b.interactiveReflectionLastRefreshReason &&
+    a.interactiveReflectionProbeHasCapture === b.interactiveReflectionProbeHasCapture &&
+    a.interactiveReflectionProbeUsable === b.interactiveReflectionProbeUsable &&
+    a.interactiveReflectionProbeTextureReady === b.interactiveReflectionProbeTextureReady &&
+    a.interactiveReflectionProbeTextureAllocated === b.interactiveReflectionProbeTextureAllocated &&
+    a.interactiveReflectionFallbackKind === b.interactiveReflectionFallbackKind &&
+    a.interactiveReflectionFallbackEverUsable === b.interactiveReflectionFallbackEverUsable &&
+    a.interactiveReflectionFallbackTexturePresent === b.interactiveReflectionFallbackTexturePresent &&
+    a.interactiveReflectionFallbackTextureReady === b.interactiveReflectionFallbackTextureReady &&
+    a.interactiveReflectionFallbackTextureUsable === b.interactiveReflectionFallbackTextureUsable &&
     a.qualityActiveRenderer === b.qualityActiveRenderer &&
     a.qualityRendererFallbackReason === b.qualityRendererFallbackReason &&
     a.qualityResolutionScale === b.qualityResolutionScale &&

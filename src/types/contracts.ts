@@ -68,7 +68,6 @@ export interface MaterialParams {
   baseColor: string;
   opacity: number;
   transmission: number;
-  ior: number;
   reflectiveness: number;
   roughness: number;
   presetName?: string;
@@ -173,7 +172,6 @@ export interface SceneSettings {
   gridLineOpacity: number;
   axesVisible: boolean;
   axesLength: number;
-  axesLabelsVisible: boolean;
   defaultGraphBounds: Bounds3D;
   ambient: AmbientLightSettings;
   directional: DirectionalLightSettings;
@@ -276,10 +274,20 @@ export interface RenderDiagnostics {
   pointShadowMode: PointShadowMode;
   pointShadowCapability: 'unknown' | 'available' | 'unavailable';
   interactiveReflectionPath: 'none' | 'environment_fallback' | 'probe';
+  interactiveReflectionSource: InteractiveReflectionSource;
   interactiveReflectionFallbackReason: string | null;
   interactiveReflectionProbeSize: number;
   interactiveReflectionProbeRefreshCount: number;
   interactiveReflectionLastRefreshReason: string | null;
+  interactiveReflectionProbeHasCapture: boolean;
+  interactiveReflectionProbeUsable: boolean;
+  interactiveReflectionProbeTextureReady: boolean;
+  interactiveReflectionProbeTextureAllocated: boolean;
+  interactiveReflectionFallbackKind: 'none' | 'raw_cube' | 'image_cube' | 'raw_equirect';
+  interactiveReflectionFallbackEverUsable: boolean;
+  interactiveReflectionFallbackTexturePresent: boolean;
+  interactiveReflectionFallbackTextureReady: boolean;
+  interactiveReflectionFallbackTextureUsable: boolean;
   qualityActiveRenderer: 'none' | 'taa_preview' | 'hybrid_gpu_preview' | 'path';
   qualityRendererFallbackReason: string | null;
   qualityResolutionScale: number;
@@ -300,6 +308,8 @@ export interface RenderDiagnostics {
   qualityPathMainThreadPixelCount: number;
   qualityPathMainThreadPixelsPerSecond: number;
 }
+
+export type InteractiveReflectionSource = 'probe_ready' | 'fallback_ready' | 'external_env' | 'none';
 
 export type PlotJobPhase = 'idle' | 'queued' | 'parsing' | 'mesh_preview' | 'mesh_final' | 'ready' | 'error' | 'skipped';
 

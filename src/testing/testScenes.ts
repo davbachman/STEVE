@@ -208,7 +208,6 @@ function createPhase5BPathMixedGeometryScene(): ProjectFileV1 {
     baseColor: '#78d4bd',
     opacity: 0.28,
     transmission: 0.9,
-    ior: 1.52,
     reflectiveness: 0.42,
     roughness: 0.12,
   };

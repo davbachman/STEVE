@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import './index.css';
 import { Viewport3D } from './renderer/Viewport3D';
 import type { ViewportApi } from './renderer/SceneController';
-import { useAutosave } from './hooks/useAutosave';
 import { useWorkerPipeline } from './hooks/useWorkerPipeline';
 import { LEGACY_QUALITY_MODE_PARKED_MESSAGE } from './state/renderCompat';
 import { useAppStore } from './state/store';
@@ -28,7 +27,6 @@ export default function App() {
   const selectedId = useAppStore((s) => s.selectedId);
   const updatePlotEquationText = useAppStore((s) => s.updatePlotEquationText);
 
-  useAutosave();
   useWorkerPipeline();
 
   useEffect(() => {
