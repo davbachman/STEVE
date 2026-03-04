@@ -1898,6 +1898,9 @@ export class SceneController {
         updated.parent = visual.root.parent;
         updated.receiveShadows = visual.root.receiveShadows;
         updated.renderOverlay = visual.root.renderOverlay;
+        updated.renderOutline = visual.root.renderOutline;
+        updated.outlineColor = visual.root.outlineColor.clone();
+        updated.outlineWidth = visual.root.outlineWidth;
         updated.material = visual.root.material;
         visual.root.dispose(false, true);
         visual.root = updated;
@@ -1908,9 +1911,12 @@ export class SceneController {
 
   private syncSelection(selectedId: string | null): void {
     for (const [id, visual] of this.plotVisuals.entries()) {
-      visual.root.renderOverlay = id === selectedId;
-      visual.root.overlayColor = id === selectedId ? new Color3(0.98, 0.78, 0.18) : new Color3(0, 0, 0);
-      visual.root.overlayAlpha = id === selectedId ? 0.22 : 0;
+      const selected = id === selectedId;
+      visual.root.renderOverlay = false;
+      visual.root.overlayAlpha = 0;
+      visual.root.renderOutline = selected;
+      visual.root.outlineColor = selected ? new Color3(0.85, 0.92, 1) : new Color3(0, 0, 0);
+      visual.root.outlineWidth = selected ? 0.0125 : 0;
     }
     for (const [id, visual] of this.pointLightVisuals.entries()) {
       const mat = visual.gizmo.material as StandardMaterial | null;
