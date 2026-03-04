@@ -29,7 +29,11 @@ window.addEventListener('error', (event) => {
 window.addEventListener('unhandledrejection', (event) => {
   const reason = event.reason;
   const message = reason instanceof Error ? reason.stack ?? reason.message : String(reason);
-  mountFatalOverlay('Unhandled Promise Rejection', message);
+  if (import.meta.env.DEV) {
+    mountFatalOverlay('Unhandled Promise Rejection', message);
+    return;
+  }
+  console.error('Unhandled Promise Rejection', reason);
 });
 
 createRoot(document.getElementById('root')!).render(
