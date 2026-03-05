@@ -1923,6 +1923,12 @@ export class SceneController {
   }
 
   private applyPlotSelectionHalo(mesh: Mesh, plot: PlotObject): void {
+    mesh.renderOverlay = false;
+    mesh.overlayAlpha = 0;
+    mesh.renderOutline = false;
+    mesh.outlineWidth = 0;
+    mesh.disableEdgesRendering();
+
     const kind = plot.equation.kind;
     if (kind === 'parametric_curve') {
       mesh.enableEdgesRendering(0.9, false);
@@ -1930,15 +1936,19 @@ export class SceneController {
       mesh.edgesWidth = 0.72;
       return;
     }
-    if (kind === 'implicit_surface') {
-      mesh.enableEdgesRendering(0.99995, true);
-      mesh.edgesColor = new Color4(0.88, 0.95, 1, 0.98);
-      mesh.edgesWidth = 2.85;
+
+    const isTransparent = plot.material.opacity < 0.98 || plot.material.transmission > 0.05;
+    if (isTransparent) {
+      // Babylon's outline pass can darken transparent/glass surfaces; keep a subtle edge-only fallback there.
+      mesh.enableEdgesRendering(0.92, false);
+      mesh.edgesColor = new Color4(0.82, 0.9, 1, 0.62);
+      mesh.edgesWidth = 0.9;
       return;
     }
-    mesh.enableEdgesRendering(0.9985, true);
-    mesh.edgesColor = new Color4(0.88, 0.95, 1, 0.98);
-    mesh.edgesWidth = 2.25;
+
+    mesh.renderOutline = true;
+    mesh.outlineColor = new Color3(0.88, 0.95, 1);
+    mesh.outlineWidth = kind === 'implicit_surface' ? 0.019 : 0.015;
   }
 
   private syncSelection(selectedId: string | null, objects: ReadonlyArray<SceneObject>): void {
