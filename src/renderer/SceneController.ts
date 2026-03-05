@@ -824,6 +824,7 @@ export class SceneController {
         for (const wire of visual.wireframeLines) {
           wire.isVisible = plot.visible && Boolean(plot.material.wireframeVisible);
           wire.position.copyFrom(vec3(plot.transform.position));
+          this.configurePlotWireframeLine(wire, plot);
         }
         continue;
       }
@@ -860,6 +861,7 @@ export class SceneController {
       for (const wire of visual.wireframeLines) {
         wire.isVisible = plot.visible && Boolean(plot.material.wireframeVisible);
         wire.position.copyFrom(vec3(plot.transform.position));
+        this.configurePlotWireframeLine(wire, plot);
       }
     }
 
@@ -1710,9 +1712,9 @@ export class SceneController {
           }
           if (points.length >= 2) {
             const line = MeshBuilder.CreateLines(`plot-${plot.id}-wire-${idx}`, { points }, this.scene);
-            line.color = Color3.FromHexString('#0f172a');
             line.parent = this.plotRoot;
             line.isPickable = false;
+            this.configurePlotWireframeLine(line, plot);
             wireframeLines.push(line);
           }
         });
@@ -1786,9 +1788,9 @@ export class SceneController {
         const points = floatArrayToVector3Path(coords);
         if (points.length >= 2) {
           const line = MeshBuilder.CreateLines(`plot-${plot.id}-wire-${idx}`, { points }, this.scene);
-          line.color = Color3.FromHexString('#0f172a');
           line.parent = this.plotRoot;
           line.isPickable = false;
+          this.configurePlotWireframeLine(line, plot);
           wireframeLines.push(line);
         }
       });
@@ -1874,6 +1876,23 @@ export class SceneController {
     pbr.needDepthPrePass = isTransparent;
     mesh.renderingGroupId = isTransparent ? 1 : 0;
     mesh.alphaIndex = isTransparent ? stableAlphaIndex(plot.id) : 0;
+  }
+
+  private configurePlotWireframeLine(line: LinesMesh, plot: PlotObject): void {
+    const opacity = clamp01(plot.material.opacity);
+    const transmission = clamp01(plot.material.transmission);
+    const isTransparent = opacity < 0.98 || transmission > 0.05;
+    line.color = new Color3(0.95, 0.98, 1);
+    line.alpha = 1;
+    line.renderingGroupId = isTransparent ? 2 : 1;
+    line.alphaIndex = 10_000 + stableAlphaIndex(plot.id);
+    const mat = line.material;
+    if (mat) {
+      mat.backFaceCulling = false;
+      mat.disableDepthWrite = true;
+      mat.zOffset = -2;
+      mat.zOffsetUnits = -2;
+    }
   }
 
   private syncCurveTubePixelWidth(): void {
