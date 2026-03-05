@@ -436,7 +436,7 @@ export class SceneController {
     this.syncInteractiveReflectionSetup(state);
     this.syncPlots(state);
     this.syncInteractiveReflectionProbe(state);
-    this.syncSelection(state.selectedId);
+    this.syncSelection(state.selectedId, state.objects);
 
     this.syncQualityRenderer(state);
 
@@ -1893,7 +1893,6 @@ export class SceneController {
       );
 
       if (updated !== visual.root) {
-        const previousRoot = visual.root;
         updated.metadata = visual.root.metadata;
         updated.isPickable = visual.root.isPickable;
         updated.parent = visual.root.parent;
@@ -1903,10 +1902,10 @@ export class SceneController {
         updated.outlineColor = visual.root.outlineColor.clone();
         updated.outlineWidth = visual.root.outlineWidth;
         updated.material = visual.root.material;
-        if (previousRoot.edgesRenderer) {
-          updated.enableEdgesRendering();
-          updated.edgesColor = previousRoot.edgesColor.clone();
-          updated.edgesWidth = previousRoot.edgesWidth;
+        if (obj.id === useAppStore.getState().selectedId) {
+          this.applyPlotSelectionHalo(updated, obj);
+        } else {
+          this.clearPlotSelectionHalo(updated);
         }
         visual.root.dispose(false, true);
         visual.root = updated;
@@ -1915,19 +1914,44 @@ export class SceneController {
     }
   }
 
-  private syncSelection(selectedId: string | null): void {
+  private clearPlotSelectionHalo(mesh: Mesh): void {
+    mesh.renderOverlay = false;
+    mesh.overlayAlpha = 0;
+    mesh.renderOutline = false;
+    mesh.outlineWidth = 0;
+    mesh.disableEdgesRendering();
+  }
+
+  private applyPlotSelectionHalo(mesh: Mesh, plot: PlotObject): void {
+    const kind = plot.equation.kind;
+    if (kind === 'parametric_curve') {
+      mesh.enableEdgesRendering(0.9, false);
+      mesh.edgesColor = new Color4(0.8, 0.88, 1, 0.58);
+      mesh.edgesWidth = 0.72;
+      return;
+    }
+    if (kind === 'implicit_surface') {
+      mesh.enableEdgesRendering(0.99995, true);
+      mesh.edgesColor = new Color4(0.88, 0.95, 1, 0.98);
+      mesh.edgesWidth = 2.85;
+      return;
+    }
+    mesh.enableEdgesRendering(0.9985, true);
+    mesh.edgesColor = new Color4(0.88, 0.95, 1, 0.98);
+    mesh.edgesWidth = 2.25;
+  }
+
+  private syncSelection(selectedId: string | null, objects: ReadonlyArray<SceneObject>): void {
+    const plotsById = new Map(
+      objects.filter((object): object is PlotObject => object.type === 'plot').map((plot) => [plot.id, plot]),
+    );
     for (const [id, visual] of this.plotVisuals.entries()) {
       const selected = id === selectedId;
-      visual.root.renderOverlay = false;
-      visual.root.overlayAlpha = 0;
-      visual.root.renderOutline = false;
-      visual.root.outlineWidth = 0;
-      if (selected) {
-        visual.root.enableEdgesRendering();
-        visual.root.edgesColor = new Color4(0.86, 0.93, 1, 0.95);
-        visual.root.edgesWidth = 1.25;
+      const plot = plotsById.get(id);
+      if (selected && plot) {
+        this.applyPlotSelectionHalo(visual.root, plot);
       } else {
-        visual.root.disableEdgesRendering();
+        this.clearPlotSelectionHalo(visual.root);
       }
     }
     for (const [id, visual] of this.pointLightVisuals.entries()) {
