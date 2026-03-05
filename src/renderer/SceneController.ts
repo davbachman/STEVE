@@ -4,7 +4,6 @@ import {
   Color3,
   Color4,
   DirectionalLight,
-  HighlightLayer,
   HemisphericLight,
   ImageProcessingConfiguration,
   LinesMesh,
@@ -150,7 +149,7 @@ export class SceneController {
   private lastQualitySignature = '';
   private lastQualityCameraSignature = '';
   private qualityBackends: QualityBackendRouter | null = null;
-  private implicitSelectionHaloLayer: HighlightLayer | null = null;
+  private implicitSelectionHalos = new Map<string, Mesh>();
   private qualityActiveRenderer: RenderDiagnostics['qualityActiveRenderer'] = 'none';
   private qualityFallbackReason: string | null = null;
   private qualityLastResetReason: string | null = null;
@@ -198,15 +197,6 @@ export class SceneController {
     this.scene.texturesEnabled = true;
     this.scene.probesEnabled = true;
     this.scene.renderTargetsEnabled = true;
-    this.implicitSelectionHaloLayer = new HighlightLayer('implicit-selection-halo', this.scene, {
-      isStroke: true,
-      mainTextureRatio: 1,
-      blurTextureSizeRatio: 0.5,
-      blurHorizontalSize: 0.5,
-      blurVerticalSize: 0.5,
-    });
-    this.implicitSelectionHaloLayer.innerGlow = false;
-    this.implicitSelectionHaloLayer.outerGlow = true;
 
     this.plotRoot = new TransformNode('plots-root', this.scene);
     this.lightRoot = new TransformNode('lights-root', this.scene);
@@ -286,9 +276,11 @@ export class SceneController {
     this.qualityPreviewOverlayCanvas?.remove();
     this.qualityPreviewOverlayCanvas = null;
     this.qualityPreviewOverlayCtx = null;
-    this.implicitSelectionHaloLayer?.removeAllMeshes();
-    this.implicitSelectionHaloLayer?.dispose();
-    this.implicitSelectionHaloLayer = null;
+    for (const halo of this.implicitSelectionHalos.values()) {
+      halo.material?.dispose(false, true);
+      halo.dispose(false, true);
+    }
+    this.implicitSelectionHalos.clear();
     this.restoreProbeCaptureMaterials();
     this.detachProbeFromSceneRenderTargets();
     this.sceneReflectionProbe?.dispose();
@@ -829,9 +821,7 @@ export class SceneController {
         continue;
       }
       if (!visual || oldHash !== geometryKey) {
-        if (visual?.root && this.implicitSelectionHaloLayer?.hasMesh(visual.root)) {
-          this.implicitSelectionHaloLayer.removeMesh(visual.root);
-        }
+        this.disposeImplicitSelectionHalo(plot.id);
         visual?.wireframeLines.forEach((line) => line.dispose(false, true));
         visual?.root.dispose(false, true);
         try {
@@ -867,9 +857,7 @@ export class SceneController {
 
     for (const [id, visual] of this.plotVisuals.entries()) {
       if (!seen.has(id)) {
-        if (this.implicitSelectionHaloLayer?.hasMesh(visual.root)) {
-          this.implicitSelectionHaloLayer.removeMesh(visual.root);
-        }
+        this.disposeImplicitSelectionHalo(id);
         visual.wireframeLines.forEach((line) => line.dispose(false, true));
         visual.root.dispose(false, true);
         this.plotVisuals.delete(id);
@@ -1960,9 +1948,6 @@ export class SceneController {
   }
 
   private clearPlotSelectionHalo(mesh: Mesh): void {
-    if (this.implicitSelectionHaloLayer?.hasMesh(mesh)) {
-      this.implicitSelectionHaloLayer.removeMesh(mesh);
-    }
     mesh.renderOverlay = false;
     mesh.overlayAlpha = 0;
     mesh.renderOutline = false;
@@ -1971,9 +1956,6 @@ export class SceneController {
   }
 
   private applyPlotSelectionHalo(mesh: Mesh, plot: PlotObject): void {
-    if (this.implicitSelectionHaloLayer?.hasMesh(mesh)) {
-      this.implicitSelectionHaloLayer.removeMesh(mesh);
-    }
     mesh.renderOverlay = false;
     mesh.overlayAlpha = 0;
     mesh.renderOutline = false;
@@ -1988,7 +1970,7 @@ export class SceneController {
       return;
     }
     if (kind === 'implicit_surface') {
-      this.implicitSelectionHaloLayer?.addMesh(mesh, new Color3(0.88, 0.95, 1));
+      this.ensureImplicitSelectionHalo(plot.id, mesh);
       return;
     }
 
@@ -2016,6 +1998,7 @@ export class SceneController {
       if (selected && plot) {
         this.applyPlotSelectionHalo(visual.root, plot);
       } else {
+        this.disposeImplicitSelectionHalo(id);
         this.clearPlotSelectionHalo(visual.root);
       }
     }
@@ -2040,6 +2023,56 @@ export class SceneController {
       const selectedScale = selected ? 1.25 : 1;
       visual.gizmo.scaling.setAll(baseScale * selectedScale);
     }
+  }
+
+  private disposeImplicitSelectionHalo(plotId: string): void {
+    const halo = this.implicitSelectionHalos.get(plotId);
+    if (!halo) {
+      return;
+    }
+    halo.material?.dispose(false, true);
+    halo.dispose(false, true);
+    this.implicitSelectionHalos.delete(plotId);
+  }
+
+  private ensureImplicitSelectionHalo(plotId: string, source: Mesh): void {
+    if (!this.scene) {
+      return;
+    }
+    const existing = this.implicitSelectionHalos.get(plotId);
+    if (existing && existing.parent === source) {
+      existing.isVisible = source.isVisible;
+      return;
+    }
+    this.disposeImplicitSelectionHalo(plotId);
+    const halo = source.clone(`plot-${plotId}-selection-halo`, null, false);
+    if (!(halo instanceof Mesh)) {
+      return;
+    }
+    halo.parent = source;
+    halo.position.setAll(0);
+    halo.rotationQuaternion = null;
+    halo.rotation.setAll(0);
+    halo.scaling.setAll(1.02);
+    halo.isPickable = false;
+    halo.receiveShadows = false;
+    halo.renderOverlay = false;
+    halo.renderOutline = false;
+    halo.renderingGroupId = 2;
+    halo.alphaIndex = 20_000 + stableAlphaIndex(plotId);
+    halo.metadata = { selectableId: null, selectableType: 'selectionHalo', sourceId: plotId };
+    const haloMaterial = new StandardMaterial(`plot-${plotId}-selection-halo-mat`, this.scene);
+    haloMaterial.disableLighting = true;
+    haloMaterial.emissiveColor = new Color3(0.86, 0.93, 1);
+    haloMaterial.alpha = 0.7;
+    haloMaterial.backFaceCulling = true;
+    haloMaterial.cullBackFaces = false;
+    haloMaterial.disableDepthWrite = true;
+    haloMaterial.zOffset = -1;
+    haloMaterial.zOffsetUnits = -1;
+    halo.material = haloMaterial;
+    halo.isVisible = source.isVisible;
+    this.implicitSelectionHalos.set(plotId, halo);
   }
 
   private createGroundAndGrid(): void {
