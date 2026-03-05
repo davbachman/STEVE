@@ -4,7 +4,6 @@ import {
   Color3,
   Color4,
   DirectionalLight,
-  HighlightLayer,
   HemisphericLight,
   ImageProcessingConfiguration,
   LinesMesh,
@@ -150,8 +149,6 @@ export class SceneController {
   private lastQualitySignature = '';
   private lastQualityCameraSignature = '';
   private qualityBackends: QualityBackendRouter | null = null;
-  private selectionHighlightLayer: HighlightLayer | null = null;
-  private highlightedPlotId: string | null = null;
   private qualityActiveRenderer: RenderDiagnostics['qualityActiveRenderer'] = 'none';
   private qualityFallbackReason: string | null = null;
   private qualityLastResetReason: string | null = null;
@@ -199,11 +196,6 @@ export class SceneController {
     this.scene.texturesEnabled = true;
     this.scene.probesEnabled = true;
     this.scene.renderTargetsEnabled = true;
-    this.selectionHighlightLayer = new HighlightLayer('selection-halo', this.scene);
-    this.selectionHighlightLayer.innerGlow = false;
-    this.selectionHighlightLayer.outerGlow = true;
-    this.selectionHighlightLayer.blurHorizontalSize = 0.25;
-    this.selectionHighlightLayer.blurVerticalSize = 0.25;
 
     this.plotRoot = new TransformNode('plots-root', this.scene);
     this.lightRoot = new TransformNode('lights-root', this.scene);
@@ -283,9 +275,6 @@ export class SceneController {
     this.qualityPreviewOverlayCanvas?.remove();
     this.qualityPreviewOverlayCanvas = null;
     this.qualityPreviewOverlayCtx = null;
-    this.selectionHighlightLayer?.dispose();
-    this.selectionHighlightLayer = null;
-    this.highlightedPlotId = null;
     this.restoreProbeCaptureMaterials();
     this.detachProbeFromSceneRenderTargets();
     this.sceneReflectionProbe?.dispose();
@@ -1914,9 +1903,10 @@ export class SceneController {
         updated.outlineColor = visual.root.outlineColor.clone();
         updated.outlineWidth = visual.root.outlineWidth;
         updated.material = visual.root.material;
-        if (this.highlightedPlotId === obj.id && this.selectionHighlightLayer) {
-          this.selectionHighlightLayer.removeMesh(previousRoot);
-          this.selectionHighlightLayer.addMesh(updated, new Color3(0.86, 0.93, 1));
+        if (previousRoot.edgesRenderer) {
+          updated.enableEdgesRendering();
+          updated.edgesColor = previousRoot.edgesColor.clone();
+          updated.edgesWidth = previousRoot.edgesWidth;
         }
         visual.root.dispose(false, true);
         visual.root = updated;
@@ -1926,21 +1916,18 @@ export class SceneController {
   }
 
   private syncSelection(selectedId: string | null): void {
-    for (const [, visual] of this.plotVisuals.entries()) {
+    for (const [id, visual] of this.plotVisuals.entries()) {
+      const selected = id === selectedId;
       visual.root.renderOverlay = false;
       visual.root.overlayAlpha = 0;
       visual.root.renderOutline = false;
       visual.root.outlineWidth = 0;
-    }
-    if (this.selectionHighlightLayer && this.highlightedPlotId !== selectedId) {
-      this.selectionHighlightLayer.removeAllMeshes();
-      this.highlightedPlotId = null;
-      if (selectedId) {
-        const selectedVisual = this.plotVisuals.get(selectedId);
-        if (selectedVisual) {
-          this.selectionHighlightLayer.addMesh(selectedVisual.root, new Color3(0.86, 0.93, 1));
-          this.highlightedPlotId = selectedId;
-        }
+      if (selected) {
+        visual.root.enableEdgesRendering();
+        visual.root.edgesColor = new Color4(0.86, 0.93, 1, 0.95);
+        visual.root.edgesWidth = 1.25;
+      } else {
+        visual.root.disableEdgesRendering();
       }
     }
     for (const [id, visual] of this.pointLightVisuals.entries()) {
