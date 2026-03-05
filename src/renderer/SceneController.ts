@@ -199,6 +199,12 @@ export class SceneController {
     this.scene.texturesEnabled = true;
     this.scene.probesEnabled = true;
     this.scene.renderTargetsEnabled = true;
+    // Preserve depth across later rendering groups so overlays (wireframe/selection halos)
+    // can respect occlusion from already rendered geometry.
+    this.scene.setRenderingAutoClearDepthStencil(1, false);
+    this.scene.setRenderingAutoClearDepthStencil(2, false);
+    this.scene.setRenderingAutoClearDepthStencil(3, false);
+    this.scene.setRenderingAutoClearDepthStencil(4, false);
 
     this.plotRoot = new TransformNode('plots-root', this.scene);
     this.lightRoot = new TransformNode('lights-root', this.scene);
@@ -1905,7 +1911,8 @@ export class SceneController {
     const isTransparent = opacity < 0.98 || transmission > 0.05;
     line.color = new Color3(0.95, 0.98, 1);
     line.alpha = 1;
-    line.renderingGroupId = isTransparent ? 2 : 1;
+    // Keep depth-tested wireframe in the same group as the owning mesh.
+    line.renderingGroupId = isTransparent ? 1 : 0;
     line.alphaIndex = 10_000 + stableAlphaIndex(plot.id);
     const mat = line.material;
     if (mat) {
@@ -1921,10 +1928,10 @@ export class SceneController {
     const opacity = clamp01(plot.material.opacity);
     const transmission = clamp01(plot.material.transmission);
     const isTransparent = opacity < 0.98 || transmission > 0.05;
-    const throughAlpha = isTransparent ? clamp((1 - opacity) * 3.5, 0, 0.65) : 0;
+    const throughAlpha = isTransparent ? clamp((1 - opacity) * 8, 0, 0.7) : 0;
     line.color = new Color3(0.93, 0.97, 1);
     line.alpha = throughAlpha;
-    line.renderingGroupId = isTransparent ? 3 : 2;
+    line.renderingGroupId = isTransparent ? 2 : 1;
     line.alphaIndex = 30_000 + stableAlphaIndex(plot.id);
     const mat = line.material;
     if (mat) {
@@ -2117,9 +2124,10 @@ export class SceneController {
     const haloMaterial = new StandardMaterial(`plot-${plotId}-selection-halo-mat`, this.scene);
     haloMaterial.disableLighting = true;
     haloMaterial.emissiveColor = new Color3(0.86, 0.93, 1);
-    haloMaterial.alpha = 0.7;
+    haloMaterial.alpha = 0.32;
     haloMaterial.backFaceCulling = true;
     haloMaterial.cullBackFaces = false;
+    haloMaterial.sideOrientation = (source.material as Material | null)?.sideOrientation ?? Material.ClockWiseSideOrientation;
     haloMaterial.disableDepthWrite = true;
     haloMaterial.zOffset = -1;
     haloMaterial.zOffsetUnits = -1;
