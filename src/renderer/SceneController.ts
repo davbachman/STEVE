@@ -3,6 +3,7 @@ import {
   BaseTexture,
   Color3,
   Color4,
+  Constants,
   DirectionalLight,
   HemisphericLight,
   ImageProcessingConfiguration,
@@ -57,6 +58,7 @@ export interface ViewportApi {
 interface PlotVisual {
   root: Mesh;
   wireframeLines: LinesMesh[];
+  wireframeXrayLines: LinesMesh[];
   geometryKey: string;
   curveTube?: {
     path: Vector3[];
@@ -300,6 +302,7 @@ export class SceneController {
     for (const visual of this.plotVisuals.values()) {
       visual.root.dispose(false, true);
       visual.wireframeLines.forEach((line) => line.dispose(false, true));
+      visual.wireframeXrayLines.forEach((line) => line.dispose(false, true));
     }
     this.plotVisuals.clear();
     for (const visual of this.pointLightVisuals.values()) {
@@ -813,16 +816,25 @@ export class SceneController {
             pointLight.shadow?.addShadowCaster(visual.root, true);
           }
         }
-        for (const wire of visual.wireframeLines) {
-          wire.isVisible = plot.visible && Boolean(plot.material.wireframeVisible);
+        for (let i = 0; i < visual.wireframeLines.length; i += 1) {
+          const wire = visual.wireframeLines[i];
+          const xrayWire = visual.wireframeXrayLines[i];
+          const wireVisible = plot.visible && Boolean(plot.material.wireframeVisible);
+          wire.isVisible = wireVisible;
           wire.position.copyFrom(vec3(plot.transform.position));
           this.configurePlotWireframeLine(wire, plot);
+          if (xrayWire) {
+            xrayWire.isVisible = wireVisible;
+            xrayWire.position.copyFrom(vec3(plot.transform.position));
+            this.configurePlotWireframeXrayLine(xrayWire, plot);
+          }
         }
         continue;
       }
       if (!visual || oldHash !== geometryKey) {
         this.disposeImplicitSelectionHalo(plot.id);
         visual?.wireframeLines.forEach((line) => line.dispose(false, true));
+        visual?.wireframeXrayLines.forEach((line) => line.dispose(false, true));
         visual?.root.dispose(false, true);
         try {
           visual = this.buildPlotVisual(plot);
@@ -848,10 +860,18 @@ export class SceneController {
           pointLight.shadow?.addShadowCaster(visual.root, true);
         }
       }
-      for (const wire of visual.wireframeLines) {
-        wire.isVisible = plot.visible && Boolean(plot.material.wireframeVisible);
+      for (let i = 0; i < visual.wireframeLines.length; i += 1) {
+        const wire = visual.wireframeLines[i];
+        const xrayWire = visual.wireframeXrayLines[i];
+        const wireVisible = plot.visible && Boolean(plot.material.wireframeVisible);
+        wire.isVisible = wireVisible;
         wire.position.copyFrom(vec3(plot.transform.position));
         this.configurePlotWireframeLine(wire, plot);
+        if (xrayWire) {
+          xrayWire.isVisible = wireVisible;
+          xrayWire.position.copyFrom(vec3(plot.transform.position));
+          this.configurePlotWireframeXrayLine(xrayWire, plot);
+        }
       }
     }
 
@@ -859,6 +879,7 @@ export class SceneController {
       if (!seen.has(id)) {
         this.disposeImplicitSelectionHalo(id);
         visual.wireframeLines.forEach((line) => line.dispose(false, true));
+        visual.wireframeXrayLines.forEach((line) => line.dispose(false, true));
         visual.root.dispose(false, true);
         this.plotVisuals.delete(id);
         this.meshHashCache.delete(id);
@@ -1641,6 +1662,7 @@ export class SceneController {
 
     let root: Mesh;
     const wireframeLines: LinesMesh[] = [];
+    const wireframeXrayLines: LinesMesh[] = [];
     let curveTube: PlotVisual['curveTube'];
 
     if (compiled.kind === 'curve') {
@@ -1703,7 +1725,12 @@ export class SceneController {
             line.parent = this.plotRoot;
             line.isPickable = false;
             this.configurePlotWireframeLine(line, plot);
+            const xrayLine = MeshBuilder.CreateLines(`plot-${plot.id}-wire-${idx}-xray`, { points }, this.scene);
+            xrayLine.parent = this.plotRoot;
+            xrayLine.isPickable = false;
+            this.configurePlotWireframeXrayLine(xrayLine, plot);
             wireframeLines.push(line);
+            wireframeXrayLines.push(xrayLine);
           }
         });
       }
@@ -1730,7 +1757,7 @@ export class SceneController {
     root.receiveShadows = true;
     root.renderOverlay = false;
 
-    return { root, wireframeLines, geometryKey: buildGeometryKey(plot), curveTube };
+    return { root, wireframeLines, wireframeXrayLines, geometryKey: buildGeometryKey(plot), curveTube };
   }
 
   private buildPlotVisualFromSerialized(plot: PlotObject, meshData: SerializedMesh): PlotVisual {
@@ -1740,6 +1767,7 @@ export class SceneController {
 
     let root: Mesh;
     const wireframeLines: LinesMesh[] = [];
+    const wireframeXrayLines: LinesMesh[] = [];
     let curveTube: PlotVisual['curveTube'];
 
     if (meshData.curvePath && meshData.curvePath.length >= 6) {
@@ -1779,7 +1807,12 @@ export class SceneController {
           line.parent = this.plotRoot;
           line.isPickable = false;
           this.configurePlotWireframeLine(line, plot);
+          const xrayLine = MeshBuilder.CreateLines(`plot-${plot.id}-wire-${idx}-xray`, { points }, this.scene);
+          xrayLine.parent = this.plotRoot;
+          xrayLine.isPickable = false;
+          this.configurePlotWireframeXrayLine(xrayLine, plot);
           wireframeLines.push(line);
+          wireframeXrayLines.push(xrayLine);
         }
       });
     }
@@ -1790,7 +1823,7 @@ export class SceneController {
     root.receiveShadows = true;
     root.renderOverlay = false;
 
-    return { root, wireframeLines, geometryKey: buildGeometryKey(plot), curveTube };
+    return { root, wireframeLines, wireframeXrayLines, geometryKey: buildGeometryKey(plot), curveTube };
   }
 
   private applyPlotMaterial(plot: PlotObject, mesh: Mesh): void {
@@ -1878,8 +1911,28 @@ export class SceneController {
     if (mat) {
       mat.backFaceCulling = false;
       mat.disableDepthWrite = true;
-      mat.zOffset = -2;
-      mat.zOffsetUnits = -2;
+      mat.depthFunction = 0;
+      mat.zOffset = -0.3;
+      mat.zOffsetUnits = -0.3;
+    }
+  }
+
+  private configurePlotWireframeXrayLine(line: LinesMesh, plot: PlotObject): void {
+    const opacity = clamp01(plot.material.opacity);
+    const transmission = clamp01(plot.material.transmission);
+    const isTransparent = opacity < 0.98 || transmission > 0.05;
+    const throughAlpha = isTransparent ? clamp((1 - opacity) * 3.5, 0, 0.65) : 0;
+    line.color = new Color3(0.93, 0.97, 1);
+    line.alpha = throughAlpha;
+    line.renderingGroupId = isTransparent ? 3 : 2;
+    line.alphaIndex = 30_000 + stableAlphaIndex(plot.id);
+    const mat = line.material;
+    if (mat) {
+      mat.backFaceCulling = false;
+      mat.disableDepthWrite = true;
+      mat.depthFunction = Constants.ALWAYS;
+      mat.zOffset = 0;
+      mat.zOffsetUnits = 0;
     }
   }
 
