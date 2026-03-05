@@ -1796,6 +1796,7 @@ export class SceneController {
     const opacity = clamp01(plot.material.opacity);
     const transmission = clamp01(plot.material.transmission);
     const isTransparent = opacity < 0.98 || transmission > 0.05;
+    const isImplicitSurface = plot.equation.kind === 'implicit_surface';
     const metallicForOpaque = reflectiveness > 0.65 ? clamp((reflectiveness - 0.55) / 0.45, 0, 1) : reflectiveness * 0.16;
     const reflectionTexture = this.resolvePlotReflectionTexture();
     const hasUsableReflectionTexture = this.isUsableReflectionTexture(reflectionTexture);
@@ -1815,8 +1816,8 @@ export class SceneController {
     pbr.specularIntensity = isTransparent ? 1.15 : 1;
     pbr.directIntensity = 1;
     pbr.environmentIntensity = clamp(0.75 + reflectiveness * 0.9 + (isTransparent ? 0.2 : 0), 0.7, 1.8);
-    pbr.useRadianceOverAlpha = isTransparent;
-    pbr.useAlphaFresnel = isTransparent;
+    pbr.useRadianceOverAlpha = isTransparent && !isImplicitSurface;
+    pbr.useAlphaFresnel = isTransparent && !isImplicitSurface;
     pbr.useLinearAlphaFresnel = false;
     pbr.reflectionTexture = hasUsableReflectionTexture ? reflectionTexture : null;
     if (!isTransparent && !hasUsableReflectionTexture) {
@@ -1829,20 +1830,25 @@ export class SceneController {
       pbr.emissiveColor = Color3.Black();
     }
     pbr.realTimeFiltering = false;
-    // Implicit meshes are generated with a winding convention that ends up
-    // inverted relative to Babylon's default LH front-face expectation.
-    // Pinning sideOrientation fixes front/back classification so two-sided
-    // lighting doesn't flip the visible shell normals.
-    pbr.sideOrientation = plot.equation.kind === 'implicit_surface' ? Material.ClockWiseSideOrientation : null;
-    // Keep culling disabled so Babylon can run the extra front/back pass when
-    // `separateCullingPass` is enabled for transparent surfaces. Enabling
-    // back-face culling here disables that path and can make implicit surfaces
-    // look lit "inside out" / drop the expected front-facing shell.
-    pbr.backFaceCulling = false;
-    pbr.separateCullingPass = isTransparent;
-    // Generated parametric/implicit meshes may have arbitrary winding (and users may
-    // view the back side). Two-sided lighting prevents the \"lit side is dark\" issue.
-    pbr.twoSidedLighting = true;
+    // Implicit meshes are generated with winding opposite Babylon's default LH
+    // front-face expectation; pin sideOrientation so front/back classification
+    // stays stable across transparent and opaque rendering paths.
+    pbr.sideOrientation = isImplicitSurface ? Material.ClockWiseSideOrientation : null;
+    if (isImplicitSurface && isTransparent) {
+      // Transparent implicit surfaces can show dark patches when both front and
+      // back shells are blended. Render only the front shell in this case.
+      pbr.backFaceCulling = true;
+      pbr.cullBackFaces = true;
+      pbr.separateCullingPass = false;
+      pbr.twoSidedLighting = false;
+    } else {
+      // For non-implicit and opaque implicit surfaces, keep two-sided behavior
+      // to avoid "lit side is dark" artifacts with arbitrary input winding.
+      pbr.backFaceCulling = false;
+      pbr.cullBackFaces = true;
+      pbr.separateCullingPass = isTransparent;
+      pbr.twoSidedLighting = true;
+    }
     pbr.enableSpecularAntiAliasing = true;
     pbr.forceDepthWrite = !isTransparent;
     pbr.needDepthPrePass = isTransparent;
@@ -1936,6 +1942,12 @@ export class SceneController {
       mesh.edgesWidth = 0.72;
       return;
     }
+    if (kind === 'implicit_surface') {
+      mesh.renderOutline = true;
+      mesh.outlineColor = new Color3(0.88, 0.95, 1);
+      mesh.outlineWidth = 0.019;
+      return;
+    }
 
     const isTransparent = plot.material.opacity < 0.98 || plot.material.transmission > 0.05;
     if (isTransparent) {
@@ -1948,7 +1960,7 @@ export class SceneController {
 
     mesh.renderOutline = true;
     mesh.outlineColor = new Color3(0.88, 0.95, 1);
-    mesh.outlineWidth = kind === 'implicit_surface' ? 0.019 : 0.015;
+    mesh.outlineWidth = 0.015;
   }
 
   private syncSelection(selectedId: string | null, objects: ReadonlyArray<SceneObject>): void {
