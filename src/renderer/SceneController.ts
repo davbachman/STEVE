@@ -1727,11 +1727,11 @@ export class SceneController {
             }
           }
           if (points.length >= 2) {
-            const line = MeshBuilder.CreateLines(`plot-${plot.id}-wire-${idx}`, { points }, this.scene);
+            const line = MeshBuilder.CreateLines(`plot-${plot.id}-wire-${idx}`, { points, useVertexAlpha: true }, this.scene);
             line.parent = this.plotRoot;
             line.isPickable = false;
             this.configurePlotWireframeLine(line, plot);
-            const xrayLine = MeshBuilder.CreateLines(`plot-${plot.id}-wire-${idx}-xray`, { points }, this.scene);
+            const xrayLine = MeshBuilder.CreateLines(`plot-${plot.id}-wire-${idx}-xray`, { points, useVertexAlpha: true }, this.scene);
             xrayLine.parent = this.plotRoot;
             xrayLine.isPickable = false;
             this.configurePlotWireframeXrayLine(xrayLine, plot);
@@ -1809,11 +1809,11 @@ export class SceneController {
       meshData.lines.forEach((coords, idx) => {
         const points = floatArrayToVector3Path(coords);
         if (points.length >= 2) {
-          const line = MeshBuilder.CreateLines(`plot-${plot.id}-wire-${idx}`, { points }, this.scene);
+          const line = MeshBuilder.CreateLines(`plot-${plot.id}-wire-${idx}`, { points, useVertexAlpha: true }, this.scene);
           line.parent = this.plotRoot;
           line.isPickable = false;
           this.configurePlotWireframeLine(line, plot);
-          const xrayLine = MeshBuilder.CreateLines(`plot-${plot.id}-wire-${idx}-xray`, { points }, this.scene);
+          const xrayLine = MeshBuilder.CreateLines(`plot-${plot.id}-wire-${idx}-xray`, { points, useVertexAlpha: true }, this.scene);
           xrayLine.parent = this.plotRoot;
           xrayLine.isPickable = false;
           this.configurePlotWireframeXrayLine(xrayLine, plot);
@@ -1919,8 +1919,10 @@ export class SceneController {
       mat.backFaceCulling = false;
       mat.disableDepthWrite = true;
       mat.depthFunction = Constants.LEQUAL;
-      mat.zOffset = 0;
-      mat.zOffsetUnits = 0;
+      // Pull the primary wireframe pass very slightly toward the camera so front
+      // lines stay stable while still respecting depth from the surface shell.
+      mat.zOffset = -1;
+      mat.zOffsetUnits = -1;
     }
   }
 
@@ -1931,6 +1933,7 @@ export class SceneController {
     const throughAlpha = isTransparent ? clamp((1 - opacity) * 8, 0, 0.7) : 0;
     line.color = new Color3(0.93, 0.97, 1);
     line.alpha = throughAlpha;
+    line.isVisible = line.isVisible && throughAlpha > 0.001;
     line.renderingGroupId = isTransparent ? 2 : 1;
     line.alphaIndex = 30_000 + stableAlphaIndex(plot.id);
     const mat = line.material;
