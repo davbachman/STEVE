@@ -151,9 +151,7 @@ export class SceneController {
   private lastQualitySignature = '';
   private lastQualityCameraSignature = '';
   private qualityBackends: QualityBackendRouter | null = null;
-  private selectionBoundingBoxLines: LinesMesh[] = [];
-  private selectionBoundingBoxTargetId: string | null = null;
-  private selectionBoundingBoxKey = '';
+  private implicitSelectionHalos = new Map<string, Mesh>();
   private qualityActiveRenderer: RenderDiagnostics['qualityActiveRenderer'] = 'none';
   private qualityFallbackReason: string | null = null;
   private qualityLastResetReason: string | null = null;
@@ -286,7 +284,11 @@ export class SceneController {
     this.qualityPreviewOverlayCanvas?.remove();
     this.qualityPreviewOverlayCanvas = null;
     this.qualityPreviewOverlayCtx = null;
-    this.disposeSelectionBoundingBox();
+    for (const halo of this.implicitSelectionHalos.values()) {
+      halo.material?.dispose(false, true);
+      halo.dispose(false, true);
+    }
+    this.implicitSelectionHalos.clear();
     this.restoreProbeCaptureMaterials();
     this.detachProbeFromSceneRenderTargets();
     this.sceneReflectionProbe?.dispose();
@@ -836,6 +838,7 @@ export class SceneController {
         continue;
       }
       if (!visual || oldHash !== geometryKey) {
+        this.disposeImplicitSelectionHalo(plot.id);
         visual?.wireframeLines.forEach((line) => line.dispose(false, true));
         visual?.wireframeXrayLines.forEach((line) => line.dispose(false, true));
         visual?.root.dispose(false, true);
@@ -880,6 +883,7 @@ export class SceneController {
 
     for (const [id, visual] of this.plotVisuals.entries()) {
       if (!seen.has(id)) {
+        this.disposeImplicitSelectionHalo(id);
         visual.wireframeLines.forEach((line) => line.dispose(false, true));
         visual.wireframeXrayLines.forEach((line) => line.dispose(false, true));
         visual.root.dispose(false, true);
@@ -2012,8 +2016,36 @@ export class SceneController {
   }
 
   private applyPlotSelectionHalo(mesh: Mesh, plot: PlotObject): void {
-    void plot;
-    this.clearPlotSelectionHalo(mesh);
+    mesh.renderOverlay = false;
+    mesh.overlayAlpha = 0;
+    mesh.renderOutline = false;
+    mesh.outlineWidth = 0;
+    mesh.disableEdgesRendering();
+
+    const kind = plot.equation.kind;
+    if (kind === 'parametric_curve') {
+      mesh.enableEdgesRendering(0.9, false);
+      mesh.edgesColor = new Color4(0.8, 0.88, 1, 0.58);
+      mesh.edgesWidth = 0.72;
+      return;
+    }
+    if (kind === 'implicit_surface') {
+      this.ensureImplicitSelectionHalo(plot.id, mesh);
+      return;
+    }
+
+    const isTransparent = plot.material.opacity < 0.98 || plot.material.transmission > 0.05;
+    if (isTransparent) {
+      // Babylon's outline pass can darken transparent/glass surfaces; keep a subtle edge-only fallback there.
+      mesh.enableEdgesRendering(0.92, false);
+      mesh.edgesColor = new Color4(0.82, 0.9, 1, 0.62);
+      mesh.edgesWidth = 0.9;
+      return;
+    }
+
+    mesh.renderOutline = true;
+    mesh.outlineColor = new Color3(0.88, 0.95, 1);
+    mesh.outlineWidth = 0.015;
   }
 
   private syncSelection(selectedId: string | null, objects: ReadonlyArray<SceneObject>): void {
@@ -2026,6 +2058,7 @@ export class SceneController {
       if (selected && plot) {
         this.applyPlotSelectionHalo(visual.root, plot);
       } else {
+        this.disposeImplicitSelectionHalo(id);
         this.clearPlotSelectionHalo(visual.root);
       }
     }
@@ -2050,100 +2083,57 @@ export class SceneController {
       const selectedScale = selected ? 1.25 : 1;
       visual.gizmo.scaling.setAll(baseScale * selectedScale);
     }
-    this.syncSelectionBoundingBox(selectedId);
   }
 
-  private disposeSelectionBoundingBox(): void {
-    this.selectionBoundingBoxLines.forEach((line) => line.dispose(false, true));
-    this.selectionBoundingBoxLines = [];
-    this.selectionBoundingBoxTargetId = null;
-    this.selectionBoundingBoxKey = '';
+  private disposeImplicitSelectionHalo(plotId: string): void {
+    const halo = this.implicitSelectionHalos.get(plotId);
+    if (!halo) {
+      return;
+    }
+    halo.material?.dispose(false, true);
+    halo.dispose(false, true);
+    this.implicitSelectionHalos.delete(plotId);
   }
 
-  private syncSelectionBoundingBox(selectedId: string | null): void {
-    if (!this.scene || !selectedId) {
-      this.disposeSelectionBoundingBox();
+  private ensureImplicitSelectionHalo(plotId: string, source: Mesh): void {
+    if (!this.scene) {
       return;
     }
-    const plotTarget = this.plotVisuals.get(selectedId)?.root ?? null;
-    const lightTarget = this.pointLightVisuals.get(selectedId)?.pickShell ?? null;
-    const target = plotTarget ?? lightTarget;
-    if (!target) {
-      this.disposeSelectionBoundingBox();
+    const existing = this.implicitSelectionHalos.get(plotId);
+    if (existing && existing.parent === source) {
+      existing.isVisible = source.isVisible;
       return;
     }
-    const { min, max } = target.getHierarchyBoundingVectors(true);
-    if (
-      !Number.isFinite(min.x)
-      || !Number.isFinite(min.y)
-      || !Number.isFinite(min.z)
-      || !Number.isFinite(max.x)
-      || !Number.isFinite(max.y)
-      || !Number.isFinite(max.z)
-    ) {
-      this.disposeSelectionBoundingBox();
+    this.disposeImplicitSelectionHalo(plotId);
+    const halo = source.clone(`plot-${plotId}-selection-halo`, null, false);
+    if (!(halo instanceof Mesh)) {
       return;
     }
-    const diagonal = Vector3.Distance(min, max);
-    const pad = Math.max(diagonal * 0.02, 0.05);
-    const minPadded = min.subtract(new Vector3(pad, pad, pad));
-    const maxPadded = max.add(new Vector3(pad, pad, pad));
-    const nextKey = [
-      selectedId,
-      round3(minPadded.x),
-      round3(minPadded.y),
-      round3(minPadded.z),
-      round3(maxPadded.x),
-      round3(maxPadded.y),
-      round3(maxPadded.z),
-    ].join('|');
-    if (nextKey === this.selectionBoundingBoxKey && this.selectionBoundingBoxTargetId === selectedId) {
-      return;
-    }
-
-    this.disposeSelectionBoundingBox();
-    const corners: Vector3[] = [
-      new Vector3(minPadded.x, minPadded.y, minPadded.z),
-      new Vector3(maxPadded.x, minPadded.y, minPadded.z),
-      new Vector3(maxPadded.x, maxPadded.y, minPadded.z),
-      new Vector3(minPadded.x, maxPadded.y, minPadded.z),
-      new Vector3(minPadded.x, minPadded.y, maxPadded.z),
-      new Vector3(maxPadded.x, minPadded.y, maxPadded.z),
-      new Vector3(maxPadded.x, maxPadded.y, maxPadded.z),
-      new Vector3(minPadded.x, maxPadded.y, maxPadded.z),
-    ];
-    const edges: Array<[number, number]> = [
-      [0, 1], [1, 2], [2, 3], [3, 0],
-      [4, 5], [5, 6], [6, 7], [7, 4],
-      [0, 4], [1, 5], [2, 6], [3, 7],
-    ];
-    edges.forEach(([a, b], idx) => {
-      const start = corners[a];
-      const end = corners[b];
-      const length = Vector3.Distance(start, end);
-      const dashSize = Math.max(length / 22, 0.04);
-      const gapSize = dashSize * 0.75;
-      const dashNb = Math.max(4, Math.round(length / (dashSize + gapSize)));
-      const line = MeshBuilder.CreateDashedLines(
-        `selection-bbox-${selectedId}-${idx}`,
-        { points: [start, end], dashSize, gapSize, dashNb },
-        this.scene,
-      );
-      line.color = new Color3(0.9, 0.95, 1);
-      line.alpha = 0.85;
-      line.isPickable = false;
-      line.renderingGroupId = 4;
-      line.alphaIndex = 40_000;
-      const mat = line.material;
-      if (mat) {
-        mat.backFaceCulling = false;
-        mat.disableDepthWrite = true;
-        mat.depthFunction = Constants.ALWAYS;
-      }
-      this.selectionBoundingBoxLines.push(line);
-    });
-    this.selectionBoundingBoxTargetId = selectedId;
-    this.selectionBoundingBoxKey = nextKey;
+    halo.parent = source;
+    halo.position.setAll(0);
+    halo.rotationQuaternion = null;
+    halo.rotation.setAll(0);
+    halo.scaling.setAll(1.02);
+    halo.isPickable = false;
+    halo.receiveShadows = false;
+    halo.renderOverlay = false;
+    halo.renderOutline = false;
+    halo.renderingGroupId = 2;
+    halo.alphaIndex = 20_000 + stableAlphaIndex(plotId);
+    halo.metadata = { selectableId: null, selectableType: 'selectionHalo', sourceId: plotId };
+    const haloMaterial = new StandardMaterial(`plot-${plotId}-selection-halo-mat`, this.scene);
+    haloMaterial.disableLighting = true;
+    haloMaterial.emissiveColor = new Color3(0.86, 0.93, 1);
+    haloMaterial.alpha = 0.32;
+    haloMaterial.backFaceCulling = true;
+    haloMaterial.cullBackFaces = false;
+    haloMaterial.sideOrientation = (source.material as Material | null)?.sideOrientation ?? Material.ClockWiseSideOrientation;
+    haloMaterial.disableDepthWrite = true;
+    haloMaterial.zOffset = -1;
+    haloMaterial.zOffsetUnits = -1;
+    halo.material = haloMaterial;
+    halo.isVisible = source.isVisible;
+    this.implicitSelectionHalos.set(plotId, halo);
   }
 
   private createGroundAndGrid(): void {
