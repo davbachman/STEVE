@@ -59,7 +59,6 @@ interface HybridSurfaceMaterial {
   metallic: number;
   roughness: number;
   reflectance: number;
-  transmission: number;
   ior: number;
   opacity: number;
 }
@@ -963,7 +962,6 @@ class PathQualityBackendV1 implements QualityBackend {
         sigNum(material.metallic),
         sigNum(material.roughness),
         sigNum(material.reflectance),
-        sigNum(material.transmission),
         sigNum(material.ior),
         sigNum(material.opacity),
       ].join(','));
@@ -1297,7 +1295,6 @@ class PathQualityBackendV1 implements QualityBackend {
         metallic: material.metallic,
         roughness: material.roughness,
         reflectance: material.reflectance,
-        transmission: material.transmission,
         ior: material.ior,
         opacity: material.opacity,
       };
@@ -1976,7 +1973,7 @@ class PathQualityBackendV1 implements QualityBackend {
     out.x = 0;
     out.y = 0;
     out.z = 0;
-    const diffuseWeight = clamp01Safe((1 - material.metallic) * (1 - material.transmission) * material.opacity);
+    const diffuseWeight = clamp01Safe((1 - material.metallic) * material.opacity);
     const specWeight = clamp01Safe(Math.max(material.reflectance, material.metallic));
     const specColorX = 1 + (material.baseColor.x - 1) * material.metallic;
     const specColorY = 1 + (material.baseColor.y - 1) * material.metallic;
@@ -2265,12 +2262,12 @@ class PathQualityBackendV1 implements QualityBackend {
     const fresnel = schlickFresnel(cosTheta, Math.max(dielectricF0, material.reflectance));
 
     let reflectWeight = clamp01Safe(Math.max(material.reflectance, material.metallic));
-    let transmitWeight = clamp01Safe(material.transmission);
+    let transmitWeight = opacityDrivenTransmission(material.opacity);
     if (transmitWeight > 0) {
       reflectWeight = clamp01Safe(reflectWeight + transmitWeight * fresnel);
       transmitWeight = clamp01Safe(transmitWeight * (1 - fresnel));
     }
-    const diffuseWeight = clamp01Safe((1 - material.metallic) * (1 - material.transmission) * material.opacity);
+    const diffuseWeight = clamp01Safe((1 - material.metallic) * material.opacity);
     const total = reflectWeight + transmitWeight + diffuseWeight;
     if (total <= 1e-5) {
       return null;
@@ -2480,15 +2477,15 @@ class PathQualityBackendV1 implements QualityBackend {
   private shadowOccluderTransmittanceToRef(material: HybridSurfaceMaterial): Vector3 {
     const out = this.cpuPathShadowOccluderTransmittanceScratch
       ?? (this.cpuPathShadowOccluderTransmittanceScratch = new Vector3(1, 1, 1));
-    const transmission = clamp01Safe(material.transmission);
-    if (transmission <= 0.02) {
+    const transmittance = opacityDrivenTransmission(material.opacity);
+    if (transmittance <= 0.02) {
       out.x = 0;
       out.y = 0;
       out.z = 0;
       return out;
     }
     const roughnessPenalty = 1 - clamp(material.roughness, 0, 1) * 0.2;
-    const baseScale = transmission * roughnessPenalty;
+    const baseScale = transmittance * roughnessPenalty;
     out.x = clamp(baseScale * Math.sqrt(Math.max(0, material.baseColor.x)), 0, 1);
     out.y = clamp(baseScale * Math.sqrt(Math.max(0, material.baseColor.y)), 0, 1);
     out.z = clamp(baseScale * Math.sqrt(Math.max(0, material.baseColor.z)), 0, 1);
@@ -2844,7 +2841,7 @@ class PathQualityBackendV1 implements QualityBackend {
     const a = clamp(sampleA, 0, 1);
 
     // Path mode is especially sensitive to early-sample highlight loss; delay clamp startup
-    // slightly so legitimate bright reflections/transmission are visible sooner.
+    // slightly so legitimate bright reflections/translucency are visible sooner.
     if (render.qualityClampFireflies && count > 2) {
       const avgR = this.accumLinear[base4] / count;
       const avgG = this.accumLinear[base4 + 1] / count;
@@ -3575,7 +3572,6 @@ function extractHybridSurfaceMaterial(material: Material | null | undefined): Hy
       metallic: clamp(material.metallic ?? 0, 0, 1),
       roughness: clamp(material.roughness ?? 0.6, 0, 1),
       reflectance: clamp(Math.max(material.metallic ?? 0, (1 - (material.roughness ?? 0.6)) * 0.08), 0, 1),
-      transmission: clamp(material.subSurface?.isRefractionEnabled ? (material.subSurface.refractionIntensity ?? 0) : 0, 0, 1),
       ior: Math.max(1, material.subSurface?.isRefractionEnabled ? (material.subSurface.indexOfRefraction ?? material.indexOfRefraction ?? 1.45) : (material.indexOfRefraction ?? 1.45)),
       opacity: clamp(material.alpha ?? 1, 0, 1),
     };
@@ -3590,7 +3586,6 @@ function extractHybridSurfaceMaterial(material: Material | null | undefined): Hy
       metallic: metallicLike * 0.15,
       roughness: 0.55,
       reflectance: metallicLike * 0.2,
-      transmission: 0,
       ior: 1.45,
       opacity: clamp(material.alpha ?? 1, 0, 1),
     };
@@ -3601,7 +3596,6 @@ function extractHybridSurfaceMaterial(material: Material | null | undefined): Hy
     metallic: 0,
     roughness: 0.6,
     reflectance: 0.04,
-    transmission: 0,
     ior: 1.45,
     opacity: 1,
   };
@@ -4466,6 +4460,10 @@ function clamp(value: number, min: number, max: number): number {
 
 function clamp01Safe(value: number): number {
   return clamp(Number.isFinite(value) ? value : 0, 0, 1);
+}
+
+function opacityDrivenTransmission(opacity: number): number {
+  return clamp01Safe(1 - opacity);
 }
 
 function clampFinite(value: number): number {

@@ -207,7 +207,6 @@ function createPhase5BPathMixedGeometryScene(): ProjectFileV1 {
     ...materialPresets['Tinted Glass'],
     baseColor: '#78d4bd',
     opacity: 0.28,
-    transmission: 0.9,
     reflectiveness: 0.42,
     roughness: 0.12,
   };

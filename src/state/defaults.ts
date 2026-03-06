@@ -21,7 +21,6 @@ export const materialPresets: Record<string, MaterialParams> = {
   'Matte Plastic': {
     baseColor: '#4ea1ff',
     opacity: 1,
-    transmission: 0,
     reflectiveness: 0.05,
     roughness: 0.78,
     presetName: 'Matte Plastic',
@@ -31,7 +30,6 @@ export const materialPresets: Record<string, MaterialParams> = {
   'Glossy Plastic': {
     baseColor: '#ff7a59',
     opacity: 1,
-    transmission: 0,
     reflectiveness: 0.14,
     roughness: 0.2,
     presetName: 'Glossy Plastic',
@@ -41,7 +39,6 @@ export const materialPresets: Record<string, MaterialParams> = {
   Ceramic: {
     baseColor: '#f1f1ea',
     opacity: 1,
-    transmission: 0,
     reflectiveness: 0.18,
     roughness: 0.28,
     presetName: 'Ceramic',
@@ -51,7 +48,6 @@ export const materialPresets: Record<string, MaterialParams> = {
   'Brushed Metal': {
     baseColor: '#9fa8b3',
     opacity: 1,
-    transmission: 0,
     reflectiveness: 0.92,
     roughness: 0.28,
     presetName: 'Brushed Metal',
@@ -61,7 +57,6 @@ export const materialPresets: Record<string, MaterialParams> = {
   Chrome: {
     baseColor: '#dce3ea',
     opacity: 1,
-    transmission: 0,
     reflectiveness: 1,
     roughness: 0.03,
     presetName: 'Chrome',
@@ -71,7 +66,6 @@ export const materialPresets: Record<string, MaterialParams> = {
   'Clear Glass': {
     baseColor: '#cbe8ff',
     opacity: 0.26,
-    transmission: 0.7,
     reflectiveness: 0.48,
     roughness: 0.03,
     presetName: 'Clear Glass',
@@ -81,7 +75,6 @@ export const materialPresets: Record<string, MaterialParams> = {
   'Frosted Glass': {
     baseColor: '#d8f0ff',
     opacity: 0.4,
-    transmission: 0.62,
     reflectiveness: 0.36,
     roughness: 0.5,
     presetName: 'Frosted Glass',
@@ -91,7 +84,6 @@ export const materialPresets: Record<string, MaterialParams> = {
   'Tinted Glass': {
     baseColor: '#60c2a2',
     opacity: 0.42,
-    transmission: 0.58,
     reflectiveness: 0.4,
     roughness: 0.18,
     presetName: 'Tinted Glass',
@@ -101,7 +93,6 @@ export const materialPresets: Record<string, MaterialParams> = {
   Rubber: {
     baseColor: '#2b2b2b',
     opacity: 1,
-    transmission: 0,
     reflectiveness: 0.02,
     roughness: 0.9,
     presetName: 'Rubber',
@@ -111,7 +102,6 @@ export const materialPresets: Record<string, MaterialParams> = {
   Mirror: {
     baseColor: '#ffffff',
     opacity: 1,
-    transmission: 0,
     reflectiveness: 1,
     roughness: 0,
     presetName: 'Mirror',

@@ -175,7 +175,6 @@ function MaterialTab({ selected }: { selected: PlotObject | PointLightObject | n
         <input type="color" value={selected.material.baseColor} onChange={(e) => updatePlotMaterial(selected.id, { baseColor: e.target.value })} />
       </label>
       <RangeField label="Opacity" min={0.05} max={1} step={0.01} value={selected.material.opacity} onChange={(v) => updatePlotMaterial(selected.id, { opacity: v })} />
-      <RangeField label="Transmission" min={0} max={1} step={0.01} value={selected.material.transmission} onChange={(v) => updatePlotMaterial(selected.id, { transmission: v })} />
       <RangeField label="Reflectiveness" min={0} max={1} step={0.01} value={selected.material.reflectiveness} onChange={(v) => updatePlotMaterial(selected.id, { reflectiveness: v })} />
       <RangeField label="Roughness" min={0} max={1} step={0.01} value={selected.material.roughness} onChange={(v) => updatePlotMaterial(selected.id, { roughness: v })} />
       {(selected.equation.kind === 'parametric_surface' || selected.equation.kind === 'explicit_surface') ? (

@@ -1059,7 +1059,6 @@ function normalizeMaterialImport(
     ...fallback,
     baseColor: asNonEmptyString(materialInput.baseColor) ?? fallback.baseColor,
     opacity: clampNumber(asFiniteNumber(materialInput.opacity) ?? fallback.opacity, 0, 1),
-    transmission: clampNumber(asFiniteNumber(materialInput.transmission) ?? fallback.transmission, 0, 1),
     reflectiveness: clampNumber(asFiniteNumber(materialInput.reflectiveness) ?? fallback.reflectiveness, 0, 1),
     roughness: clampNumber(asFiniteNumber(materialInput.roughness) ?? fallback.roughness, 0, 1),
     presetName: asNonEmptyString(materialInput.presetName) ?? fallback.presetName,

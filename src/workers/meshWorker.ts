@@ -120,7 +120,6 @@ function compileSpecAsPlot(
     material: {
       baseColor: '#ffffff',
       opacity: 1,
-      transmission: 0,
       reflectiveness: 0,
       roughness: 0.5,
     },

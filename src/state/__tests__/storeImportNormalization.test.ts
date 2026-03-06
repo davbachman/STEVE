@@ -31,7 +31,6 @@ describe('project import normalization', () => {
           material: {
             baseColor: '#ff5533',
             opacity: 0.9,
-            transmission: 0.1,
             ior: 1.45,
             reflectiveness: 0.35,
             roughness: 0.4,

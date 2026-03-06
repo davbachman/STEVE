@@ -67,7 +67,6 @@ export interface EquationSource {
 export interface MaterialParams {
   baseColor: string;
   opacity: number;
-  transmission: number;
   reflectiveness: number;
   roughness: number;
   presetName?: string;

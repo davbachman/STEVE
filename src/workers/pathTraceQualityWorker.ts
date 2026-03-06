@@ -33,7 +33,6 @@ interface WorkerMaterial {
   metallic: number;
   roughness: number;
   reflectance: number;
-  transmission: number;
   ior: number;
   opacity: number;
 }
@@ -243,7 +242,6 @@ function buildWorkerScene(snapshot: PathTraceWorkerSceneSnapshot): WorkerSceneSt
       metallic: mesh.material.metallic,
       roughness: mesh.material.roughness,
       reflectance: mesh.material.reflectance,
-      transmission: mesh.material.transmission,
       ior: mesh.material.ior,
       opacity: mesh.material.opacity,
     },
@@ -491,7 +489,7 @@ function sampleHybridDirectLighting(
   out.y = 0;
   out.z = 0;
   const baseColor = material.baseColor;
-  const diffuseWeight = clamp01Safe((1 - material.metallic) * (1 - material.transmission) * material.opacity);
+  const diffuseWeight = clamp01Safe((1 - material.metallic) * material.opacity);
   const specWeight = clamp01Safe(Math.max(material.reflectance, material.metallic));
   const specColorX = 1 + (baseColor.x - 1) * material.metallic;
   const specColorY = 1 + (baseColor.y - 1) * material.metallic;
@@ -741,12 +739,12 @@ function sampleHybridContinuation(
   const fresnel = schlickFresnel(cosTheta, Math.max(dielectricF0, material.reflectance));
 
   let reflectWeight = clamp01Safe(Math.max(material.reflectance, material.metallic));
-  let transmitWeight = clamp01Safe(material.transmission);
+  let transmitWeight = opacityDrivenTransmission(material.opacity);
   if (transmitWeight > 0) {
     reflectWeight = clamp01Safe(reflectWeight + transmitWeight * fresnel);
     transmitWeight = clamp01Safe(transmitWeight * (1 - fresnel));
   }
-  const diffuseWeight = clamp01Safe((1 - material.metallic) * (1 - material.transmission) * material.opacity);
+  const diffuseWeight = clamp01Safe((1 - material.metallic) * material.opacity);
   const total = reflectWeight + transmitWeight + diffuseWeight;
   if (total <= 1e-5) {
     return null;
@@ -952,19 +950,23 @@ function traceShadowTransmittance(
 }
 
 function shadowOccluderTransmittanceToRef(material: WorkerMaterial, out: Vector3): Vector3 {
-  const transmission = clamp01Safe(material.transmission);
-  if (transmission <= 0.02) {
+  const transmittance = opacityDrivenTransmission(material.opacity);
+  if (transmittance <= 0.02) {
     out.x = 0;
     out.y = 0;
     out.z = 0;
     return out;
   }
   const roughnessPenalty = 1 - clamp(material.roughness, 0, 1) * 0.2;
-  const baseScale = transmission * roughnessPenalty;
+  const baseScale = transmittance * roughnessPenalty;
   out.x = clamp(baseScale * Math.sqrt(Math.max(0, material.baseColor.x)), 0, 1);
   out.y = clamp(baseScale * Math.sqrt(Math.max(0, material.baseColor.y)), 0, 1);
   out.z = clamp(baseScale * Math.sqrt(Math.max(0, material.baseColor.z)), 0, 1);
   return out;
+}
+
+function opacityDrivenTransmission(opacity: number): number {
+  return clamp01Safe(1 - opacity);
 }
 
 function pickTraceRayClosest(scene: WorkerSceneState, ray: Ray, ignoreMeshIndex: number): WorkerHit | null {

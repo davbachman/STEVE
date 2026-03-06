@@ -57,7 +57,6 @@ test.describe('Import + Drag Undo Smoke', () => {
           material: {
             baseColor: '#ff7a45',
             opacity: 0.95,
-            transmission: 0.05,
             ior: 1.4,
             reflectiveness: 0.3,
             roughness: 0.45,

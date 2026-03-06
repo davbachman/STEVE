@@ -9,7 +9,6 @@ export interface PathTraceWorkerMaterial {
   metallic: number;
   roughness: number;
   reflectance: number;
-  transmission: number;
   ior: number;
   opacity: number;
 }
