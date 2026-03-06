@@ -70,12 +70,23 @@ interface PlotVisual {
 
 interface PointLightVisual {
   light: PointLight;
+  transmissionLight: PointLight | null;
   gizmo: Mesh;
   pickShell: Mesh;
   halo: Mesh;
   starLines: LinesMesh[];
   shadow: ShadowGenerator | null;
+  transmissionShadow: ShadowGenerator | null;
   shadowEnabled: boolean;
+  transmissionShadowEnabled: boolean;
+}
+
+type InteractiveShadowCasterMode = 'none' | 'opaque' | 'translucent';
+
+interface InteractiveShadowPlan {
+  translucentShadowTransmittance: number;
+  hasTranslucentCasters: boolean;
+  casterModes: Map<string, InteractiveShadowCasterMode>;
 }
 
 type DragState =
@@ -101,6 +112,7 @@ const FIXED_INTERACTIVE_IOR = 1.45;
 const INTERACTIVE_REFLECTION_PROBE_MAX_ERROR_STREAK = 3;
 const INTERACTIVE_REFLECTION_PROBE_RETRY_BASE_BACKOFF_FRAMES = 45;
 const INTERACTIVE_REFLECTION_PROBE_BLOCKED_COOLDOWN_FRAMES = 600;
+const INTERACTIVE_TRANSMISSION_EPSILON = 0.035;
 
 export class SceneController {
   private engine: WebGPUEngine | null = null;
@@ -109,6 +121,8 @@ export class SceneController {
   private ambientLight: HemisphericLight | null = null;
   private directionalLight: DirectionalLight | null = null;
   private directionalShadow: ShadowGenerator | null = null;
+  private directionalTransmissionLight: DirectionalLight | null = null;
+  private directionalTransmissionShadow: ShadowGenerator | null = null;
   private plotRoot: TransformNode | null = null;
   private lightRoot: TransformNode | null = null;
   private groundMesh: Mesh | null = null;
@@ -313,10 +327,12 @@ export class SceneController {
     this.plotVisuals.clear();
     for (const visual of this.pointLightVisuals.values()) {
       visual.shadow?.dispose();
+      visual.transmissionShadow?.dispose();
       visual.pickShell.dispose(false, true);
       visual.halo.dispose(false, true);
       visual.starLines.forEach((line) => line.dispose(false, true));
       visual.gizmo.dispose(false, true);
+      visual.transmissionLight?.dispose();
       visual.light.dispose();
     }
     this.pointLightVisuals.clear();
@@ -330,6 +346,10 @@ export class SceneController {
     this.plotRoot?.dispose();
     this.lightRoot?.dispose();
     this.ambientLight?.dispose();
+    this.directionalTransmissionShadow?.dispose();
+    this.directionalTransmissionShadow = null;
+    this.directionalTransmissionLight?.dispose();
+    this.directionalTransmissionLight = null;
     try {
       this.scene?.dispose();
     } catch (error) {
@@ -446,10 +466,12 @@ export class SceneController {
       return;
     }
 
-    this.syncSceneSettings(state);
-    this.syncLights(state);
+    const interactiveShadowPlan = this.buildInteractiveShadowPlan(state.objects);
+
+    this.syncSceneSettings(state, interactiveShadowPlan);
+    this.syncLights(state, interactiveShadowPlan);
     this.syncInteractiveReflectionSetup(state);
-    this.syncPlots(state);
+    this.syncPlots(state, interactiveShadowPlan);
     this.syncInteractiveReflectionProbe(state);
     this.syncSelection(state.selectedId, state.objects);
 
@@ -484,7 +506,83 @@ export class SceneController {
     this.syncRenderDiagnostics(state);
   }
 
-  private syncSceneSettings(state: Pick<AppState, 'scene' | 'render'>): void {
+  private buildInteractiveShadowPlan(objects: SceneObject[]): InteractiveShadowPlan {
+    const casterModes = new Map<string, InteractiveShadowCasterMode>();
+    let translucentTransmittanceSum = 0;
+    let translucentCasterCount = 0;
+
+    for (const obj of objects) {
+      if (obj.type !== 'plot' || !obj.visible) {
+        continue;
+      }
+      const approxTransmission = approximateInteractiveTransmission(
+        obj.material.opacity,
+        obj.material.transmission,
+        obj.material.roughness,
+      );
+      if (approxTransmission <= INTERACTIVE_TRANSMISSION_EPSILON) {
+        casterModes.set(obj.id, 'opaque');
+        continue;
+      }
+      if (approxTransmission >= 1 - INTERACTIVE_TRANSMISSION_EPSILON) {
+        casterModes.set(obj.id, 'none');
+        continue;
+      }
+      casterModes.set(obj.id, 'translucent');
+      translucentTransmittanceSum += approxTransmission;
+      translucentCasterCount += 1;
+    }
+
+    return {
+      translucentShadowTransmittance:
+        translucentCasterCount > 0 ? translucentTransmittanceSum / translucentCasterCount : 1,
+      hasTranslucentCasters: translucentCasterCount > 0,
+      casterModes,
+    };
+  }
+
+  private ensureDirectionalTransmissionLight(resolution: number, softness: number): void {
+    if (!this.scene || !this.directionalLight) {
+      return;
+    }
+    if (!this.directionalTransmissionLight) {
+      this.directionalTransmissionLight = new DirectionalLight('sun-transmission', this.directionalLight.direction.clone(), this.scene);
+      this.directionalTransmissionLight.autoCalcShadowZBounds = true;
+    }
+    const targetSize = clamp(Math.round(resolution), 256, 4096);
+    const currentSize = this.directionalTransmissionShadow?.getShadowMap()?.getSize()?.width;
+    if (!this.directionalTransmissionShadow || currentSize !== targetSize) {
+      this.directionalTransmissionShadow?.dispose();
+      this.directionalTransmissionShadow = new ShadowGenerator(targetSize, this.directionalTransmissionLight);
+    }
+    this.configureShadowGenerator(this.directionalTransmissionShadow, softness);
+  }
+
+  private ensurePointTransmissionShadow(
+    visual: PointLightVisual,
+    resolution: number,
+    softness: number,
+  ): void {
+    if (!this.scene) {
+      return;
+    }
+    if (!visual.transmissionLight) {
+      visual.transmissionLight = new PointLight(`${visual.light.name}-transmission`, visual.light.position.clone(), this.scene);
+      visual.transmissionLight.falloffType = visual.light.falloffType;
+    }
+    const targetSize = clamp(Math.round(resolution), 256, 4096);
+    const currentSize = visual.transmissionShadow?.getShadowMap()?.getSize()?.width;
+    if (!visual.transmissionShadow || currentSize !== targetSize) {
+      visual.transmissionShadow?.dispose();
+      visual.transmissionShadow = new ShadowGenerator(targetSize, visual.transmissionLight);
+    }
+    this.configureShadowGenerator(visual.transmissionShadow, softness);
+  }
+
+  private syncSceneSettings(
+    state: Pick<AppState, 'scene' | 'render'>,
+    interactiveShadowPlan: InteractiveShadowPlan,
+  ): void {
     if (!this.scene || !this.directionalLight || !this.groundMesh || !this.gridMesh) {
       return;
     }
@@ -502,9 +600,9 @@ export class SceneController {
       this.ambientLight.setEnabled(state.scene.ambient.intensity > 0);
     }
 
-    this.directionalLight.diffuse = color3(state.scene.directional.color);
-    this.directionalLight.specular = color3(state.scene.directional.color);
-    this.directionalLight.intensity = state.scene.directional.intensity;
+    const directionalColor = color3(state.scene.directional.color);
+    this.directionalLight.diffuse = directionalColor;
+    this.directionalLight.specular = directionalColor;
     const dir = vec3(state.scene.directional.direction);
     if (dir.lengthSquared() > 1e-8) {
       dir.normalize();
@@ -529,13 +627,52 @@ export class SceneController {
     this.directionalLight.shadowMinZ = 0.1;
     this.directionalLight.shadowMaxZ = Math.max(40, graphSpanZ * 6, shadowFrustumSize * 2);
     this.directionalLight.shadowOrthoScale = 0.2;
-    this.directionalLight.setEnabled(state.scene.directional.intensity > 0 || state.scene.directional.castShadows);
     const directionalShadowsActive = state.scene.directional.castShadows && state.scene.shadow.directionalShadowEnabled;
+    const needsDirectionalTransmissionSplit = directionalShadowsActive && interactiveShadowPlan.hasTranslucentCasters;
+    if (needsDirectionalTransmissionSplit) {
+      this.ensureDirectionalTransmissionLight(
+        clamp(Math.round(state.scene.shadow.shadowMapResolution), 256, 4096),
+        clamp01(state.scene.shadow.shadowSoftness),
+      );
+    }
+    const directionalShadowDarkness = this.directionalShadow?.getDarkness() ?? 0.22;
+    const directionalIntensitySplit = needsDirectionalTransmissionSplit
+      ? splitShadowedLightIntensity(
+          state.scene.directional.intensity,
+          interactiveShadowPlan.translucentShadowTransmittance,
+          directionalShadowDarkness,
+        )
+      : { primary: state.scene.directional.intensity, transmission: 0 };
+    this.directionalLight.intensity = directionalIntensitySplit.primary;
+    this.directionalLight.setEnabled(
+      directionalIntensitySplit.primary > 0
+      || directionalIntensitySplit.transmission > 0
+      || state.scene.directional.castShadows,
+    );
     this.directionalLight.shadowEnabled = directionalShadowsActive;
     if (this.directionalShadow) {
       const shadowMap = this.directionalShadow.getShadowMap();
       if (shadowMap) {
         shadowMap.refreshRate = directionalShadowsActive ? 1 : 0;
+      }
+    }
+    if (this.directionalTransmissionLight) {
+      this.directionalTransmissionLight.diffuse = directionalColor;
+      this.directionalTransmissionLight.specular = directionalColor;
+      this.directionalTransmissionLight.direction.copyFrom(this.directionalLight.direction);
+      this.directionalTransmissionLight.position.copyFrom(this.directionalLight.position);
+      this.directionalTransmissionLight.shadowFrustumSize = shadowFrustumSize;
+      this.directionalTransmissionLight.shadowMinZ = this.directionalLight.shadowMinZ;
+      this.directionalTransmissionLight.shadowMaxZ = this.directionalLight.shadowMaxZ;
+      this.directionalTransmissionLight.shadowOrthoScale = this.directionalLight.shadowOrthoScale;
+      this.directionalTransmissionLight.intensity = directionalIntensitySplit.transmission;
+      this.directionalTransmissionLight.setEnabled(directionalShadowsActive && directionalIntensitySplit.transmission > 1e-4);
+      this.directionalTransmissionLight.shadowEnabled = directionalShadowsActive && directionalIntensitySplit.transmission > 1e-4;
+    }
+    if (this.directionalTransmissionShadow) {
+      const shadowMap = this.directionalTransmissionShadow.getShadowMap();
+      if (shadowMap) {
+        shadowMap.refreshRate = directionalShadowsActive && directionalIntensitySplit.transmission > 1e-4 ? 1 : 0;
       }
     }
 
@@ -601,7 +738,10 @@ export class SceneController {
     });
   }
 
-  private syncLights(state: Pick<AppState, 'scene' | 'objects'>): void {
+  private syncLights(
+    state: Pick<AppState, 'scene' | 'objects'>,
+    interactiveShadowPlan: InteractiveShadowPlan,
+  ): void {
     if (!this.scene) return;
 
     const pointLights = state.objects.filter((o): o is PointLightObject => o.type === 'point_light');
@@ -678,12 +818,22 @@ export class SceneController {
           starLines.push(line);
         });
 
-        visual = { light, gizmo, pickShell, halo, starLines, shadow: null, shadowEnabled: false };
+        visual = {
+          light,
+          transmissionLight: null,
+          gizmo,
+          pickShell,
+          halo,
+          starLines,
+          shadow: null,
+          transmissionShadow: null,
+          shadowEnabled: false,
+          transmissionShadowEnabled: false,
+        };
         this.pointLightVisuals.set(lightObj.id, visual);
       }
 
       // Light visibility only controls viewport gizmos. Emission remains active.
-      visual.light.setEnabled(lightObj.intensity > 0);
       visual.gizmo.isVisible = lightObj.visible;
       visual.pickShell.isVisible = lightObj.visible;
       visual.halo.isVisible = lightObj.visible;
@@ -692,9 +842,9 @@ export class SceneController {
       });
       visual.light.position.copyFrom(vec3(lightObj.position));
       visual.gizmo.position.copyFrom(vec3(lightObj.position));
-      visual.light.diffuse = color3(lightObj.color);
-      visual.light.specular = color3(lightObj.color);
-      visual.light.intensity = lightObj.intensity;
+      const pointLightColor = color3(lightObj.color);
+      visual.light.diffuse = pointLightColor;
+      visual.light.specular = pointLightColor;
       visual.light.range = lightObj.range;
       visual.light.shadowMinZ = 0.1;
       visual.light.shadowMaxZ = Math.max(2, lightObj.range);
@@ -714,6 +864,7 @@ export class SceneController {
         pointShadowIds.has(lightObj.id)
         && shadowSettings.pointShadowMode !== 'off'
         && this.pointShadowCapability !== 'unavailable';
+      const needsTransmissionSplit = shouldUseShadow && interactiveShadowPlan.hasTranslucentCasters;
 
       if (shouldUseShadow && !visual.shadow) {
         try {
@@ -743,6 +894,31 @@ export class SceneController {
         visual.shadow.dispose();
         visual.shadow = null;
       }
+      if (needsTransmissionSplit) {
+        try {
+          this.ensurePointTransmissionShadow(
+            visual,
+            clamp(Math.round(shadowSettings.shadowMapResolution), 256, 4096),
+            clamp01(shadowSettings.shadowSoftness),
+          );
+          this.pointShadowCapability = 'available';
+        } catch (error) {
+          visual.transmissionShadow?.dispose();
+          visual.transmissionShadow = null;
+          visual.transmissionLight?.dispose();
+          visual.transmissionLight = null;
+          useAppStore.getState().setStatusMessage('Point-light transmission shadows unavailable on this WebGPU/browser configuration');
+          console.warn('Point-light transmission shadow generator creation failed', error);
+        }
+      }
+      if (!needsTransmissionSplit && visual.transmissionShadow) {
+        visual.transmissionShadow.dispose();
+        visual.transmissionShadow = null;
+      }
+      if (!needsTransmissionSplit && visual.transmissionLight) {
+        visual.transmissionLight.dispose();
+        visual.transmissionLight = null;
+      }
       if (visual.shadow) {
         const map = visual.shadow.getShadowMap();
         if (map) {
@@ -752,24 +928,65 @@ export class SceneController {
         }
         this.configureShadowGenerator(visual.shadow, clamp01(shadowSettings.shadowSoftness));
       }
+      if (visual.transmissionShadow) {
+        const map = visual.transmissionShadow.getShadowMap();
+        if (map) {
+          map.refreshRate = needsTransmissionSplit ? 1 : 0;
+          map.renderList = map.renderList ?? [];
+          map.renderList.length = 0;
+        }
+        this.configureShadowGenerator(visual.transmissionShadow, clamp01(shadowSettings.shadowSoftness));
+      }
+      const pointShadowDarkness = visual.shadow?.getDarkness() ?? 0.28;
+      const pointIntensitySplit = needsTransmissionSplit
+        ? splitShadowedLightIntensity(
+            lightObj.intensity,
+            interactiveShadowPlan.translucentShadowTransmittance,
+            pointShadowDarkness,
+          )
+        : { primary: lightObj.intensity, transmission: 0 };
+      visual.light.intensity = pointIntensitySplit.primary;
+      visual.light.setEnabled(pointIntensitySplit.primary > 0 || pointIntensitySplit.transmission > 0);
       visual.light.shadowEnabled = Boolean(visual.shadow && shouldUseShadow);
       visual.shadowEnabled = Boolean(visual.shadow && shouldUseShadow);
+      if (visual.transmissionLight) {
+        visual.transmissionLight.position.copyFrom(visual.light.position);
+        visual.transmissionLight.diffuse = pointLightColor;
+        visual.transmissionLight.specular = pointLightColor;
+        visual.transmissionLight.falloffType = visual.light.falloffType;
+        visual.transmissionLight.range = lightObj.range;
+        visual.transmissionLight.intensity = pointIntensitySplit.transmission;
+        visual.transmissionLight.shadowMinZ = visual.light.shadowMinZ;
+        visual.transmissionLight.shadowMaxZ = visual.light.shadowMaxZ;
+        visual.transmissionLight.setEnabled(needsTransmissionSplit && pointIntensitySplit.transmission > 1e-4);
+        visual.transmissionLight.shadowEnabled = Boolean(visual.transmissionShadow && needsTransmissionSplit && pointIntensitySplit.transmission > 1e-4);
+      }
+      visual.transmissionShadowEnabled = Boolean(
+        visual.transmissionShadow
+        && needsTransmissionSplit
+        && pointIntensitySplit.transmission > 1e-4,
+      );
     });
 
     for (const [id, visual] of this.pointLightVisuals.entries()) {
       if (!seen.has(id)) {
         visual.shadow?.dispose();
+        visual.transmissionShadow?.dispose();
         visual.pickShell.dispose(false, true);
         visual.halo.dispose(false, true);
         visual.starLines.forEach((line) => line.dispose(false, true));
         visual.gizmo.dispose(false, true);
+        visual.transmissionLight?.dispose();
         visual.light.dispose();
         this.pointLightVisuals.delete(id);
       }
     }
   }
 
-  private syncPlots(state: Pick<AppState, 'scene' | 'objects' | 'plotJobs'>): void {
+  private syncPlots(
+    state: Pick<AppState, 'scene' | 'objects' | 'plotJobs'>,
+    interactiveShadowPlan: InteractiveShadowPlan,
+  ): void {
     if (!this.scene) return;
     const plots = state.objects.filter((obj): obj is PlotObject => obj.type === 'plot');
     const seen = new Set<string>();
@@ -783,9 +1000,23 @@ export class SceneController {
         shadowMap.renderList.length = 0;
       }
     }
+    if (this.directionalTransmissionShadow) {
+      const shadowMap = this.directionalTransmissionShadow.getShadowMap();
+      if (shadowMap) {
+        shadowMap.renderList = shadowMap.renderList ?? [];
+        shadowMap.renderList.length = 0;
+      }
+    }
     for (const pointLight of this.pointLightVisuals.values()) {
       if (pointLight.shadow) {
         const map = pointLight.shadow.getShadowMap();
+        if (map) {
+          map.renderList = map.renderList ?? [];
+          map.renderList.length = 0;
+        }
+      }
+      if (pointLight.transmissionShadow) {
+        const map = pointLight.transmissionShadow.getShadowMap();
         if (map) {
           map.renderList = map.renderList ?? [];
           map.renderList.length = 0;
@@ -814,12 +1045,23 @@ export class SceneController {
         visual.root.position.copyFrom(vec3(plot.transform.position));
         visual.root.receiveShadows = directionalShadowsActive || this.hasAnyPointLightShadowsEnabled();
         this.applyPlotMaterial(plot, visual.root);
-        if (plot.visible && directionalShadowsActive && this.directionalShadow) {
-          this.directionalShadow.addShadowCaster(visual.root, true);
+        const shadowMode = interactiveShadowPlan.casterModes.get(plot.id) ?? 'opaque';
+        if (plot.visible && directionalShadowsActive && this.directionalShadow && shadowMode !== 'none') {
+          if (shadowMode === 'opaque') {
+            this.directionalShadow.addShadowCaster(visual.root, true);
+            this.directionalTransmissionShadow?.addShadowCaster(visual.root, true);
+          } else {
+            this.directionalTransmissionShadow?.addShadowCaster(visual.root, true);
+          }
         }
         for (const pointLight of this.pointLightVisuals.values()) {
           if (plot.visible && pointLight.shadowEnabled) {
-            pointLight.shadow?.addShadowCaster(visual.root, true);
+            if (shadowMode === 'opaque') {
+              pointLight.shadow?.addShadowCaster(visual.root, true);
+              pointLight.transmissionShadow?.addShadowCaster(visual.root, true);
+            } else if (shadowMode === 'translucent') {
+              pointLight.transmissionShadow?.addShadowCaster(visual.root, true);
+            }
           }
         }
         for (let i = 0; i < visual.wireframeLines.length; i += 1) {
@@ -858,12 +1100,23 @@ export class SceneController {
       visual.root.position.copyFrom(vec3(plot.transform.position));
       visual.root.receiveShadows = directionalShadowsActive || this.hasAnyPointLightShadowsEnabled();
       this.applyPlotMaterial(plot, visual.root);
-      if (plot.visible && directionalShadowsActive && this.directionalShadow) {
-        this.directionalShadow.addShadowCaster(visual.root, true);
+      const shadowMode = interactiveShadowPlan.casterModes.get(plot.id) ?? 'opaque';
+      if (plot.visible && directionalShadowsActive && this.directionalShadow && shadowMode !== 'none') {
+        if (shadowMode === 'opaque') {
+          this.directionalShadow.addShadowCaster(visual.root, true);
+          this.directionalTransmissionShadow?.addShadowCaster(visual.root, true);
+        } else {
+          this.directionalTransmissionShadow?.addShadowCaster(visual.root, true);
+        }
       }
       for (const pointLight of this.pointLightVisuals.values()) {
         if (plot.visible && pointLight.shadowEnabled) {
-          pointLight.shadow?.addShadowCaster(visual.root, true);
+          if (shadowMode === 'opaque') {
+            pointLight.shadow?.addShadowCaster(visual.root, true);
+            pointLight.transmissionShadow?.addShadowCaster(visual.root, true);
+          } else if (shadowMode === 'translucent') {
+            pointLight.transmissionShadow?.addShadowCaster(visual.root, true);
+          }
         }
       }
       for (let i = 0; i < visual.wireframeLines.length; i += 1) {
@@ -1844,30 +2097,34 @@ export class SceneController {
     const roughness = clamp(plot.material.roughness, 0.02, 1);
     const opacity = clamp01(plot.material.opacity);
     const transmission = clamp01(plot.material.transmission);
+    const interactiveTransmission = approximateInteractiveTransmission(opacity, transmission, roughness);
     const isTransparent = opacity < 0.98 || transmission > 0.05;
     const isImplicitSurface = plot.equation.kind === 'implicit_surface';
     const metallicForOpaque = reflectiveness > 0.65 ? clamp((reflectiveness - 0.55) / 0.45, 0, 1) : reflectiveness * 0.16;
     const reflectionTexture = this.resolvePlotReflectionTexture();
     const hasUsableReflectionTexture = this.isUsableReflectionTexture(reflectionTexture);
-    pbr.albedoColor = color3(plot.material.baseColor);
+    const baseColor = color3(plot.material.baseColor);
+    const diffuseRetention = clamp(1 - interactiveTransmission * 0.68, 0.18, 1);
+    pbr.albedoColor = mixColor(baseColor, Color3.White(), interactiveTransmission * 0.14).scale(diffuseRetention);
     pbr.metallic = isTransparent ? 0 : clamp01(metallicForOpaque);
-    pbr.roughness = roughness;
-    pbr.alpha = opacity;
+    pbr.roughness = clamp(roughness * (1 - interactiveTransmission * 0.42), 0.02, 1);
+    pbr.alpha = clamp(opacity * (1 - interactiveTransmission * 0.62) + interactiveTransmission * 0.08, 0.04, 1);
     pbr.transparencyMode = isTransparent ? PBRMaterial.PBRMATERIAL_ALPHABLEND : PBRMaterial.PBRMATERIAL_OPAQUE;
     pbr.indexOfRefraction = FIXED_INTERACTIVE_IOR;
-    // Interactive renderer simplification: keep transmission as an alpha/highlight cue,
-    // but disable true refraction to avoid unstable transparent stacking behavior.
+    // Interactive renderer approximation: transmission pushes the surface toward a
+    // glossier, optically thinner glass look without enabling true refraction.
     pbr.subSurface.isRefractionEnabled = false;
     pbr.subSurface.isTranslucencyEnabled = false;
     pbr.subSurface.refractionIntensity = 0;
     pbr.subSurface.indexOfRefraction = FIXED_INTERACTIVE_IOR;
-    pbr.metallicF0Factor = clamp(0.65 + reflectiveness * 1.35 + transmission * 0.4, 0.65, 2);
-    pbr.specularIntensity = isTransparent ? 1.15 : 1;
+    pbr.metallicF0Factor = clamp(0.65 + reflectiveness * 1.35 + interactiveTransmission * 0.9, 0.65, 2.4);
+    pbr.specularIntensity = isTransparent ? 1.15 + interactiveTransmission * 0.65 : 1;
     pbr.directIntensity = 1;
-    pbr.environmentIntensity = clamp(0.75 + reflectiveness * 0.9 + (isTransparent ? 0.2 : 0), 0.7, 1.8);
+    pbr.environmentIntensity = clamp(0.75 + reflectiveness * 0.9 + (isTransparent ? 0.2 : 0) + interactiveTransmission * 0.75, 0.7, 2.1);
     pbr.useRadianceOverAlpha = isTransparent && !isImplicitSurface;
     pbr.useAlphaFresnel = isTransparent && !isImplicitSurface;
     pbr.useLinearAlphaFresnel = false;
+    pbr.useSpecularOverAlpha = isTransparent;
     pbr.reflectionTexture = hasUsableReflectionTexture ? reflectionTexture : null;
     if (!isTransparent && !hasUsableReflectionTexture) {
       // Keep highly reflective materials visible when the interactive reflection source is unavailable.
@@ -2961,6 +3218,32 @@ function isHeadlessOrAutomatedBrowser(): boolean {
 
 function clamp01(value: number): number {
   return clamp(value, 0, 1);
+}
+
+function approximateInteractiveTransmission(opacity: number, transmission: number, roughness: number): number {
+  const alpha = clamp01(opacity);
+  const glass = clamp01(transmission);
+  const smoothness = 1 - clamp01(roughness);
+  const openness = Math.max(1 - alpha, glass * 0.55);
+  const clarity = glass * (0.35 + smoothness * 0.35);
+  return clamp(openness * 0.55 + clarity * 0.65, 0, 1);
+}
+
+function splitShadowedLightIntensity(totalIntensity: number, targetTransmittance: number, shadowDarkness: number): {
+  primary: number;
+  transmission: number;
+} {
+  const total = Math.max(0, totalIntensity);
+  if (total <= 1e-6) {
+    return { primary: 0, transmission: 0 };
+  }
+  const darkness = clamp(shadowDarkness, 0, 0.98);
+  const effectiveTransmittance = clamp(targetTransmittance, darkness, 1);
+  const primary = clamp(total * ((effectiveTransmittance - darkness) / Math.max(1 - darkness, 1e-4)), 0, total);
+  return {
+    primary,
+    transmission: Math.max(0, total - primary),
+  };
 }
 
 function round3(value: number): number {
