@@ -1918,9 +1918,9 @@ export class SceneController {
     if (mat) {
       mat.backFaceCulling = false;
       mat.disableDepthWrite = true;
-      mat.depthFunction = 0;
-      mat.zOffset = -0.3;
-      mat.zOffsetUnits = -0.3;
+      mat.depthFunction = Constants.LEQUAL;
+      mat.zOffset = 0;
+      mat.zOffsetUnits = 0;
     }
   }
 
@@ -2024,17 +2024,23 @@ export class SceneController {
 
     const kind = plot.equation.kind;
     if (kind === 'parametric_curve') {
+      this.disposeImplicitSelectionHalo(plot.id);
       mesh.enableEdgesRendering(0.9, false);
       mesh.edgesColor = new Color4(0.8, 0.88, 1, 0.58);
       mesh.edgesWidth = 0.72;
       return;
     }
-    if (kind === 'implicit_surface') {
-      this.ensureImplicitSelectionHalo(plot.id, mesh);
+    const isTransparent = plot.material.opacity < 0.98 || plot.material.transmission > 0.05;
+    const useShellHalo = kind === 'implicit_surface' || (!isTransparent && (kind === 'parametric_surface' || kind === 'explicit_surface'));
+    if (useShellHalo) {
+      this.ensureImplicitSelectionHalo(plot.id, mesh, {
+        scale: kind === 'implicit_surface' ? 1.02 : 1.015,
+        alpha: kind === 'implicit_surface' ? 0.32 : 0.24,
+      });
       return;
     }
 
-    const isTransparent = plot.material.opacity < 0.98 || plot.material.transmission > 0.05;
+    this.disposeImplicitSelectionHalo(plot.id);
     if (isTransparent) {
       // Babylon's outline pass can darken transparent/glass surfaces; keep a subtle edge-only fallback there.
       mesh.enableEdgesRendering(0.92, false);
@@ -2095,12 +2101,17 @@ export class SceneController {
     this.implicitSelectionHalos.delete(plotId);
   }
 
-  private ensureImplicitSelectionHalo(plotId: string, source: Mesh): void {
+  private ensureImplicitSelectionHalo(
+    plotId: string,
+    source: Mesh,
+    options: { scale: number; alpha: number },
+  ): void {
     if (!this.scene) {
       return;
     }
+    const key = `${plotId}|${round3(options.scale)}|${round3(options.alpha)}`;
     const existing = this.implicitSelectionHalos.get(plotId);
-    if (existing && existing.parent === source) {
+    if (existing && existing.parent === source && existing.metadata?.haloKey === key) {
       existing.isVisible = source.isVisible;
       return;
     }
@@ -2113,18 +2124,18 @@ export class SceneController {
     halo.position.setAll(0);
     halo.rotationQuaternion = null;
     halo.rotation.setAll(0);
-    halo.scaling.setAll(1.02);
+    halo.scaling.setAll(options.scale);
     halo.isPickable = false;
     halo.receiveShadows = false;
     halo.renderOverlay = false;
     halo.renderOutline = false;
     halo.renderingGroupId = 2;
     halo.alphaIndex = 20_000 + stableAlphaIndex(plotId);
-    halo.metadata = { selectableId: null, selectableType: 'selectionHalo', sourceId: plotId };
+    halo.metadata = { selectableId: null, selectableType: 'selectionHalo', sourceId: plotId, haloKey: key };
     const haloMaterial = new StandardMaterial(`plot-${plotId}-selection-halo-mat`, this.scene);
     haloMaterial.disableLighting = true;
     haloMaterial.emissiveColor = new Color3(0.86, 0.93, 1);
-    haloMaterial.alpha = 0.32;
+    haloMaterial.alpha = options.alpha;
     haloMaterial.backFaceCulling = true;
     haloMaterial.cullBackFaces = false;
     haloMaterial.sideOrientation = (source.material as Material | null)?.sideOrientation ?? Material.ClockWiseSideOrientation;
