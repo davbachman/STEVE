@@ -211,6 +211,9 @@ export interface SerializedMesh {
   uvs?: Float32Array;
   lines?: Float32Array[];
   curvePath?: Float32Array;
+  topology?: {
+    isClosedManifold: boolean;
+  };
 }
 
 export interface ParseClassifyResult {

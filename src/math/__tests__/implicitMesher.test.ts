@@ -43,6 +43,7 @@ describe('implicit mesher', () => {
 
   it('produces a watertight high-quality sphere mesh (no boundary or non-manifold edges)', () => {
     const mesh = buildImplicitMeshFromScalarField(bounds, (x, y, z) => x * x + y * y + z * z, 'high', 9);
+    expect(mesh.topology?.isClosedManifold).toBe(true);
     expectClosedWatertight(mesh);
   });
 
@@ -88,6 +89,7 @@ describe('implicit mesher', () => {
       max: { x: 4, y: 4, z: 8 },
     };
     const mesh = buildImplicitMeshFromScalarField(cylinderBounds, (x, y, _z) => x * x + y * y, 'high', 9);
+    expect(mesh.topology?.isClosedManifold).toBe(false);
     const topo = edgeTopology(mesh);
     expect(topo.nonManifoldEdges).toBe(0);
 
@@ -124,6 +126,7 @@ describe('implicit mesher', () => {
     const mesh = buildImplicitMeshFromScalarField(invalid, (x, y, z) => x + y + z, 'draft', 0);
     expect(mesh.positions.length).toBe(0);
     expect(mesh.indices.length).toBe(0);
+    expect(mesh.topology?.isClosedManifold).toBe(false);
   });
 });
 

@@ -11,6 +11,7 @@ import {
   selectInteractiveReflectionSource,
   shouldPlotCastInteractiveShadows,
   shouldShowPlotWireframe,
+  shouldUseShellSelectionHalo,
 } from '../renderSnapshot';
 
 function idlePlotJob(meshVersion = 0): PlotJobStatus {
@@ -108,6 +109,15 @@ describe('renderSnapshot helpers', () => {
       castsInteractiveShadows: true,
       interactiveShadowMode: 'attenuated',
     });
+  });
+
+  it('uses shell selection halos only for implicit surfaces', () => {
+    const surface = createDefaultSurface('Selected Surface');
+    const implicit = createDefaultImplicit('Selected Implicit');
+
+    expect(shouldUseShellSelectionHalo(surface, { isClosedManifold: true })).toBe(false);
+    expect(shouldUseShellSelectionHalo(implicit, { isClosedManifold: false })).toBe(false);
+    expect(shouldUseShellSelectionHalo(implicit, { isClosedManifold: true })).toBe(true);
   });
 
   it('keeps fully transparent surfaces in the attenuated shadow path', () => {

@@ -6,6 +6,7 @@ import type {
   PlotObject,
   PointLightObject,
   SceneObject,
+  SerializedMesh,
 } from '../types/contracts';
 
 export const INTERACTIVE_RENDERABLE_OPACITY_EPSILON = 0.02;
@@ -85,6 +86,13 @@ export function plotSupportsWireframe(plot: PlotObject): boolean {
 
 export function shouldShowPlotWireframe(plot: PlotObject): boolean {
   return plot.visible && plotSupportsWireframe(plot) && Boolean(plot.material.wireframeVisible);
+}
+
+export function shouldUseShellSelectionHalo(
+  plot: PlotObject,
+  meshTopology?: SerializedMesh['topology'],
+): boolean {
+  return plot.equation.kind === 'implicit_surface' && meshTopology?.isClosedManifold === true;
 }
 
 export function classifyInteractiveShadowMode(plot: PlotObject): InteractiveShadowMode {

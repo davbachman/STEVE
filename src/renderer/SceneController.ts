@@ -51,6 +51,7 @@ import {
   INTERACTIVE_SHELL_RENDER_OPACITY_EPSILON,
   plotUsesTransparentShells,
   selectInteractiveReflectionSource,
+  shouldUseShellSelectionHalo,
   type RendererPlotSnapshot,
   type RendererSceneSnapshot,
 } from './renderSnapshot';
@@ -64,6 +65,7 @@ interface PlotVisual {
   wireframeLines: LinesMesh[];
   transparentBackShell: Mesh | null;
   geometryKey: string;
+  topology?: SerializedMesh['topology'];
   curveTube?: {
     path: Vector3[];
     baseRadius: number;
@@ -1043,6 +1045,7 @@ export class SceneController {
 
     let root: Mesh;
     const wireframeLines: LinesMesh[] = [];
+    let topology: PlotVisual['topology'];
     let curveTube: PlotVisual['curveTube'];
 
     if (compiled.kind === 'curve') {
@@ -1116,6 +1119,7 @@ export class SceneController {
         compiled.spec.quality,
         compiled.spec.isoValue,
       );
+      topology = meshData.topology;
       root = new Mesh(`plot-${plot.id}`, this.scene);
       const vd = new VertexData();
       vd.positions = Array.from(meshData.positions);
@@ -1137,6 +1141,7 @@ export class SceneController {
       wireframeLines,
       transparentBackShell: this.createTransparentBackShell(plot, root),
       geometryKey: buildGeometryKey(plot),
+      topology,
       curveTube,
     };
   }
@@ -1148,6 +1153,7 @@ export class SceneController {
 
     let root: Mesh;
     const wireframeLines: LinesMesh[] = [];
+    let topology: PlotVisual['topology'];
     let curveTube: PlotVisual['curveTube'];
 
     if (meshData.curvePath && meshData.curvePath.length >= 6) {
@@ -1175,6 +1181,7 @@ export class SceneController {
         root = MeshBuilder.CreateLines(`plot-${plot.id}`, { points: path, updatable: false }, this.scene) as unknown as Mesh;
       }
     } else {
+      topology = meshData.topology;
       root = new Mesh(`plot-${plot.id}`, this.scene);
       applySerializedMeshToBabylonMesh(root, meshData);
     }
@@ -1203,6 +1210,7 @@ export class SceneController {
       wireframeLines,
       transparentBackShell: this.createTransparentBackShell(plot, root),
       geometryKey: buildGeometryKey(plot),
+      topology,
       curveTube,
     };
   }
@@ -1461,7 +1469,7 @@ export class SceneController {
         updated.outlineWidth = visual.root.outlineWidth;
         updated.material = visual.root.material;
         if (obj.id === snapshot.selectedId) {
-          this.applyPlotSelectionHalo(updated, obj);
+          this.applyPlotSelectionHalo(updated, obj, visual);
         } else {
           this.clearPlotSelectionHalo(updated);
         }
@@ -1480,7 +1488,7 @@ export class SceneController {
     mesh.disableEdgesRendering();
   }
 
-  private applyPlotSelectionHalo(mesh: Mesh, plot: PlotObject): void {
+  private applyPlotSelectionHalo(mesh: Mesh, plot: PlotObject, visual?: PlotVisual): void {
     mesh.renderOverlay = false;
     mesh.overlayAlpha = 0;
     mesh.renderOutline = false;
@@ -1496,11 +1504,13 @@ export class SceneController {
       return;
     }
     const isTransparent = transparencyBlendFromOpacity(plot.material.opacity) > 0.08;
-    const useShellHalo = kind === 'implicit_surface' || (!isTransparent && (kind === 'parametric_surface' || kind === 'explicit_surface'));
+    // The scaled shell halo only reads as an outline on closed volumes. On open surface
+    // sheets and clipped implicits it turns into a one-sided translucent wash.
+    const useShellHalo = shouldUseShellSelectionHalo(plot, visual?.topology);
     if (useShellHalo) {
       this.ensureImplicitSelectionHalo(plot.id, mesh, {
-        scale: kind === 'implicit_surface' ? 1.02 : 1.015,
-        alpha: kind === 'implicit_surface' ? 0.32 : 0.24,
+        scale: 1.02,
+        alpha: 0.32,
       });
       return;
     }
@@ -1527,7 +1537,7 @@ export class SceneController {
       const selected = id === selectedId;
       const plot = plotsById.get(id);
       if (selected && plot) {
-        this.applyPlotSelectionHalo(visual.root, plot);
+        this.applyPlotSelectionHalo(visual.root, plot, visual);
       } else {
         this.disposeImplicitSelectionHalo(id);
         this.clearPlotSelectionHalo(visual.root);

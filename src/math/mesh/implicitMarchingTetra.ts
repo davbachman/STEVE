@@ -451,12 +451,16 @@ function finalizeImplicitMesh(ctx: MeshBuildContext): SerializedMesh {
 
   const normals = computeNumericGradientNormals(ctx, positions, leafMinSize);
   orientTrianglesByNormals(indices, positions, normals);
-  canonicalizeClosedMeshOrientation(indices, positions, normals);
+  const isClosedManifold = hasClosedManifoldTopology(indices);
+  canonicalizeClosedMeshOrientation(indices, positions, normals, isClosedManifold);
 
   return {
     positions: new Float32Array(positions),
     indices: new Uint32Array(indices),
     normals: new Float32Array(normals),
+    topology: {
+      isClosedManifold,
+    },
   };
 }
 
@@ -650,8 +654,13 @@ function orientTrianglesByNormals(indices: number[], positions: number[], normal
   }
 }
 
-function canonicalizeClosedMeshOrientation(indices: number[], positions: number[], normals: number[]): void {
-  if (!isClosedManifold(indices)) {
+function canonicalizeClosedMeshOrientation(
+  indices: number[],
+  positions: number[],
+  normals: number[],
+  isClosedManifold: boolean,
+): void {
+  if (!isClosedManifold) {
     return;
   }
 
@@ -674,7 +683,7 @@ function canonicalizeClosedMeshOrientation(indices: number[], positions: number[
   }
 }
 
-function isClosedManifold(indices: number[]): boolean {
+function hasClosedManifoldTopology(indices: number[]): boolean {
   const edges = new Map<string, number>();
   for (let i = 0; i < indices.length; i += 3) {
     const tri = [indices[i], indices[i + 1], indices[i + 2]];
@@ -775,6 +784,9 @@ function emptyMesh(): SerializedMesh {
     positions: new Float32Array(0),
     indices: new Uint32Array(0),
     normals: new Float32Array(0),
+    topology: {
+      isClosedManifold: false,
+    },
   };
 }
 
