@@ -16,7 +16,6 @@ import type { AbstractMesh, Material, Scene, WebGPUEngine } from '@babylonjs/cor
 import { TAARenderingPipeline } from '@babylonjs/core/PostProcesses/RenderPipeline/Pipelines/taaRenderingPipeline';
 import { CreateScreenshotUsingRenderTargetAsync } from '@babylonjs/core/Misc/screenshotTools';
 import type { RenderDiagnostics, RenderSettings } from '../types/contracts';
-import { useAppStore } from '../state/store';
 import type {
   PathTraceWorkerLight,
   PathTraceWorkerLineAccel,
@@ -29,6 +28,7 @@ import type {
   PathTraceWorkerTriangleBvhNode,
   PathTraceWorkerVec3,
 } from '../workers/pathTraceQualityWorkerContracts';
+import type { RendererSceneSnapshot } from './renderSnapshot';
 
 type ActiveQualityRenderer = RenderDiagnostics['qualityActiveRenderer'];
 
@@ -52,6 +52,12 @@ export interface QualityBackendProgress {
 export interface QualityBackendTickResult {
   shouldRender: boolean;
   progress: QualityBackendProgress;
+}
+
+export interface QualityBackendRuntimeContext {
+  getSnapshot: () => RendererSceneSnapshot | null;
+  setStatusMessage: (message: string | null) => void;
+  setRenderDiagnostics: (diagnostics: Partial<RenderDiagnostics>) => void;
 }
 
 interface HybridSurfaceMaterial {
@@ -398,6 +404,7 @@ class PathQualityBackendV1 implements QualityBackend {
     private readonly scene: Scene,
     private readonly camera: ArcRotateCamera,
     private readonly mode: ExperimentalQualityBackendMode = 'cpu_path',
+    private readonly runtimeContext: QualityBackendRuntimeContext,
   ) {}
 
   private backendLabel(): string {
@@ -792,7 +799,7 @@ class PathQualityBackendV1 implements QualityBackend {
     const message = `Quality Path worker offload unavailable for current scene (${reason}); using main-thread CPU tracing`;
     console.info(message);
     try {
-      useAppStore.getState().setStatusMessage(message);
+      this.runtimeContext.setStatusMessage(message);
     } catch {
       // Ignore status messaging errors; console diagnostics are sufficient fallback.
     }
@@ -832,7 +839,7 @@ class PathQualityBackendV1 implements QualityBackend {
       return;
     }
     try {
-      useAppStore.getState().setRenderDiagnostics({
+      this.runtimeContext.setRenderDiagnostics({
         qualityPathExecutionMode: this.cpuPathExecutionMode,
         qualityPathAlignmentStatus: this.cpuPathAlignmentProbeStatus,
         qualityPathAlignmentProbeCount: this.cpuPathAlignmentProbeCount,
@@ -1727,7 +1734,7 @@ class PathQualityBackendV1 implements QualityBackend {
             hitMismatches,
             maxPointError,
             maxDistanceError,
-            qualityResolutionScale: useAppStore.getState().render.qualityResolutionScale,
+            qualityResolutionScale: this.runtimeContext.getSnapshot()?.render.qualityResolutionScale ?? 1,
             hardwareScale: tracePixelContext.hardwareScale,
             viewportX: tracePixelContext.viewportX,
             viewportY: tracePixelContext.viewportY,
@@ -3318,17 +3325,23 @@ export class QualityBackendRouter {
   private readonly path: QualityBackend;
   private _activeRenderer: ActiveQualityRenderer = 'none';
 
-  constructor(engine: WebGPUEngine, scene: Scene, camera: ArcRotateCamera) {
+  constructor(
+    engine: WebGPUEngine,
+    scene: Scene,
+    camera: ArcRotateCamera,
+    runtimeContext: QualityBackendRuntimeContext,
+  ) {
     this.taaPreview = new TaaPreviewQualityBackend(scene, camera);
-    this.hybridGpuPreview = new PathQualityBackendV1(engine, scene, camera, 'hybrid_gpu_preview');
-    this.path = new PathQualityBackendV1(engine, scene, camera, 'cpu_path');
+    this.hybridGpuPreview = new PathQualityBackendV1(engine, scene, camera, 'hybrid_gpu_preview', runtimeContext);
+    this.path = new PathQualityBackendV1(engine, scene, camera, 'cpu_path', runtimeContext);
   }
 
   get activeRenderer(): ActiveQualityRenderer {
     return this._activeRenderer;
   }
 
-  sync(render: RenderSettings): QualityBackendSyncResult {
+  sync(snapshot: RendererSceneSnapshot): QualityBackendSyncResult {
+    const { render } = snapshot;
     if (render.mode !== 'quality') {
       this.disableAll();
       return { activeRenderer: 'none', fallbackReason: null, enabledJustNow: false };

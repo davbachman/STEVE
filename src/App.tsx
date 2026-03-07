@@ -35,6 +35,7 @@ export default function App() {
     if (
       testScene === 'shadow-regression'
       || testScene === 'point-shadow-regression'
+      || testScene === 'interactive-render-regression'
       || testScene === 'phase5b-path-mixed-geometry'
     ) {
       const builtIn = createBuiltInTestScene(testScene);

@@ -543,6 +543,11 @@ input[type='color'] {
   background: transparent;
 }
 
+.viewport-canvas:focus,
+.viewport-canvas:focus-visible {
+  outline: none;
+}
+
 .viewport-overlay {
   position: absolute;
   left: 0.75rem;

@@ -11,7 +11,11 @@ import {
 } from '../state/defaults';
 import { analyzeEquationText } from '../math/classifier';
 
-export type BuiltInTestSceneId = 'shadow-regression' | 'point-shadow-regression' | 'phase5b-path-mixed-geometry';
+export type BuiltInTestSceneId =
+  | 'shadow-regression'
+  | 'point-shadow-regression'
+  | 'interactive-render-regression'
+  | 'phase5b-path-mixed-geometry';
 
 export function createBuiltInTestScene(id: BuiltInTestSceneId): ProjectFileV1 {
   switch (id) {
@@ -19,6 +23,8 @@ export function createBuiltInTestScene(id: BuiltInTestSceneId): ProjectFileV1 {
       return createShadowRegressionScene();
     case 'point-shadow-regression':
       return createPointShadowRegressionScene();
+    case 'interactive-render-regression':
+      return createInteractiveRenderRegressionScene();
     case 'phase5b-path-mixed-geometry':
       return createPhase5BPathMixedGeometryScene();
     default:
@@ -198,6 +204,95 @@ function createPointShadowRegressionScene(): ProjectFileV1 {
   }
 
   return project;
+}
+
+function createInteractiveRenderRegressionScene(): ProjectFileV1 {
+  const blocker = createDefaultSurface('Regression Sheet');
+  blocker.transform.position = { x: -1.35, y: -0.8, z: 1.28 };
+  blocker.material = {
+    ...materialPresets['Tinted Glass'],
+    baseColor: '#7cccb2',
+    opacity: 1,
+    reflectiveness: 0.28,
+    roughness: 0.16,
+    wireframeVisible: false,
+  };
+  if (blocker.equation.kind === 'parametric_surface') {
+    blocker.equation.source = analyzeEquationText('(u, v, 0.22*sin(0.8*u)*cos(1.05*v))').source;
+    blocker.equation.domain = {
+      uMin: -1.9,
+      uMax: 1.9,
+      vMin: -2.6,
+      vMax: 2.6,
+      uSamples: 70,
+      vSamples: 92,
+    };
+  }
+
+  const receiver = createDefaultImplicit('Regression Receiver');
+  receiver.transform.position = { x: 2.2, y: 1.35, z: 1.65 };
+  receiver.material = {
+    ...materialPresets.Ceramic,
+    baseColor: '#efeae1',
+    roughness: 0.2,
+    reflectiveness: 0.08,
+  };
+  if (receiver.equation.kind === 'implicit_surface') {
+    receiver.equation.source = analyzeEquationText('x^2 + y^2 + (z-0.15)^2 = 1.55^2').source;
+    receiver.equation.quality = 'medium';
+    receiver.equation.bounds = {
+      min: { x: -2.2, y: -2.2, z: -2.0 },
+      max: { x: 2.2, y: 2.2, z: 2.6 },
+    };
+  }
+
+  const fill = createPointLight('Regression Fill', { x: -4.8, y: 3.6, z: 4.3 });
+  fill.color = '#9ed5ff';
+  fill.intensity = 8;
+  fill.range = 30;
+  fill.castShadows = false;
+
+  const scene = defaultSceneSettings();
+  scene.backgroundMode = 'gradient';
+  scene.gradientTopColor = '#d7dff2';
+  scene.gradientBottomColor = '#b6c2e4';
+  scene.backgroundColor = '#c7d0eb';
+  scene.groundPlaneVisible = false;
+  scene.gridVisible = false;
+  scene.axesVisible = false;
+  scene.ambient = { color: '#fff7ef', intensity: 0.05 };
+  scene.directional = {
+    direction: { x: -0.52, y: 0.18, z: -1.0 },
+    color: '#fff5eb',
+    intensity: 2.15,
+    castShadows: true,
+  };
+  scene.shadow = {
+    directionalShadowEnabled: true,
+    pointShadowMode: 'off',
+    pointShadowMaxLights: 1,
+    shadowMapResolution: 2048,
+    shadowSoftness: 0.52,
+  };
+  scene.defaultGraphBounds = {
+    min: { x: -8, y: -8, z: -4 },
+    max: { x: 8, y: 8, z: 8 },
+  };
+
+  const render = defaultRenderSettings();
+  render.mode = 'interactive';
+  render.toneMapping = 'aces';
+  render.exposure = 1.02;
+  render.interactiveQuality = 'quality';
+  render.showDiagnostics = false;
+
+  return {
+    schemaVersion: 1,
+    appVersion: APP_VERSION,
+    scene,
+    render,
+    objects: [blocker, receiver, fill],
+  };
 }
 
 function createPhase5BPathMixedGeometryScene(): ProjectFileV1 {
