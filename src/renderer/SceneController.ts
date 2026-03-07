@@ -50,6 +50,7 @@ import {
   createRendererSceneSnapshot,
   INTERACTIVE_SHELL_RENDER_OPACITY_EPSILON,
   plotUsesTransparentShells,
+  resolveDirectionalShadowFrustumSize,
   selectInteractiveReflectionSource,
   shouldUseTransparentBackShell,
   shouldUseShellSelectionHalo,
@@ -486,18 +487,11 @@ export class SceneController {
       const target = this.camera?.target ?? Vector3.ZeroReadOnly;
       this.directionalLight.position.copyFrom(target.subtract(dir.scale(24)));
     }
-    // Use a fixed frustum size in our z-up graphing space to avoid auto-fit misses.
+    // Keep the directional shadow frustum tight to actual receivers/casters instead of
+    // hidden helper extents, which wastes shadow texels and causes visible banding.
     const graphBounds = scene.defaultGraphBounds;
-    const graphSpanX = Math.abs(graphBounds.max.x - graphBounds.min.x);
-    const graphSpanY = Math.abs(graphBounds.max.y - graphBounds.min.y);
     const graphSpanZ = Math.abs(graphBounds.max.z - graphBounds.min.z);
-    const shadowFrustumSize = Math.max(
-      12,
-      scene.gridExtent * 2.4,
-      scene.groundPlaneSize * 2.4,
-      graphSpanX * 1.8,
-      graphSpanY * 1.8,
-    );
+    const shadowFrustumSize = resolveDirectionalShadowFrustumSize(scene);
     this.directionalLight.shadowFrustumSize = shadowFrustumSize;
     this.directionalLight.shadowMinZ = 0.1;
     this.directionalLight.shadowMaxZ = Math.max(40, graphSpanZ * 6, shadowFrustumSize * 2);
