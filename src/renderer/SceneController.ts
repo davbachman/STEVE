@@ -1336,7 +1336,11 @@ export class SceneController {
     const usesTransparentPipeline =
       options.renderSide !== 'both'
       || (isImplicitSurface && opacity < INTERACTIVE_SHELL_RENDER_OPACITY_EPSILON);
-    const usesTransparentSurfaceOptics = usesTransparentPipeline && options.renderSide !== 'both';
+    // Transparent shell passes already preserve specular/radiance over alpha. Closed implicit
+    // volumes also need that behavior; otherwise clear-glass highlights get washed out.
+    const preservesTransparentHighlights = usesTransparentPipeline
+      && (options.renderSide !== 'both' || isImplicitSurface);
+    const usesTransparentSurfaceOptics = options.renderSide !== 'both';
     const baseColor = color3(plot.material.baseColor);
     const diffuseRetention = clamp(1 - opticalOpenness * 0.2, 0.55, 1);
     const shellCompositedAlpha = options.renderSide === 'both'
@@ -1359,12 +1363,12 @@ export class SceneController {
     pbr.specularIntensity = 1;
     pbr.directIntensity = 1;
     pbr.environmentIntensity = options.reflectionTexture ? clamp(0.6 + reflectiveness * 0.8, 0.45, 1.8) : 0.35;
-    pbr.useRadianceOverAlpha = usesTransparentSurfaceOptics;
-    pbr.useAlphaFresnel = usesTransparentSurfaceOptics;
+    pbr.useRadianceOverAlpha = preservesTransparentHighlights;
+    pbr.useAlphaFresnel = preservesTransparentHighlights;
     pbr.useLinearAlphaFresnel = false;
-    pbr.useSpecularOverAlpha = usesTransparentSurfaceOptics;
+    pbr.useSpecularOverAlpha = preservesTransparentHighlights;
     pbr.reflectionTexture = options.reflectionTexture;
-    pbr.emissiveColor = options.reflectionTexture ? Color3.Black() : pbr.albedoColor.scale(usesTransparentSurfaceOptics ? 0.04 : 0.08);
+    pbr.emissiveColor = options.reflectionTexture ? Color3.Black() : pbr.albedoColor.scale(preservesTransparentHighlights ? 0.04 : 0.08);
     pbr.realTimeFiltering = false;
     pbr.sideOrientation = isImplicitSurface ? Material.ClockWiseSideOrientation : null;
     if (options.renderSide === 'front') {
