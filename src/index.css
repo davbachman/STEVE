@@ -390,17 +390,92 @@ input[type='color'] {
   gap: 0.45rem;
 }
 
+.equation-editor__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  min-width: 0;
+}
+
+.equation-editor__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.equation-editor__actions button {
+  padding: 0.24rem 0.55rem;
+  font-size: 0.8rem;
+  border-radius: 999px;
+}
+
+.equation-editor__actions button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.equation-editor__hint {
+  color: #8ea6c6;
+  font-size: 0.76rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .equation-editor .cm-editor {
   border: 1px solid #223049;
   border-radius: 10px;
   overflow: hidden;
   font-size: 0.9rem;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.equation-editor .cm-editor.cm-focused {
+  border-color: #4f88c6;
+  box-shadow:
+    0 0 0 1px rgba(104, 188, 255, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
 .equation-editor .cm-theme,
 .equation-editor .cm-content,
 .equation-editor .cm-scroller {
   background: #0b1322;
+}
+
+.equation-editor .cm-content {
+  padding: 0.55rem 0.7rem;
+  font-family: 'SFMono-Regular', 'SF Mono', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 0.95rem;
+}
+
+.equation-editor .cm-line {
+  padding: 0;
+}
+
+.equation-editor .cm-editor.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground,
+.equation-editor .cm-editor .cm-selectionBackground,
+.equation-editor .cm-editor .cm-content ::selection {
+  background-color: rgba(106, 196, 255, 0.48) !important;
+  border-radius: 4px;
+}
+
+.equation-editor .cm-editor .cm-selectionMatch {
+  background-color: rgba(255, 224, 122, 0.24) !important;
+  border-radius: 3px;
+  outline: 1px solid rgba(255, 224, 122, 0.24);
+}
+
+.equation-editor .cm-editor .cm-cursor,
+.equation-editor .cm-editor .cm-dropCursor {
+  border-left-color: #f2f8ff !important;
+}
+
+.equation-editor .cm-editor.cm-focused .cm-matchingBracket {
+  background-color: rgba(106, 196, 255, 0.2) !important;
+  outline: 1px solid rgba(106, 196, 255, 0.26);
 }
 
 .equation-editor__meta {
