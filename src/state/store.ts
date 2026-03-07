@@ -15,6 +15,7 @@ import type {
   UUID,
 } from '../types/contracts';
 import { analyzeEquationText } from '../math/classifier';
+import { syncEquationParameters } from '../math/parameters';
 import {
   APP_VERSION,
   createBlankPlot,
@@ -55,7 +56,7 @@ interface AppActions {
   setInspectorTab: (tab: AppState['ui']['inspectorTab']) => void;
   selectObject: (id: UUID | null) => void;
   setStatusMessage: (message: string | null) => void;
-  addPlot: (template?: 'explicit' | 'curve' | 'surface' | 'implicit') => void;
+  addPlot: (template?: 'curve' | 'surface' | 'implicit') => void;
   addPointLight: () => void;
   updatePlotEquationText: (id: UUID, rawText: string) => void;
   updatePlotSpec: (id: UUID, updater: (spec: EquationSpec) => EquationSpec) => void;
@@ -193,11 +194,13 @@ function applySnapshot(state: AppStateShape, snapshot: HistorySnapshot): AppStat
 function makeExplicitSpec(rawText: string): EquationSpec {
   const analyzed = analyzeEquationText(rawText);
   const source = analyzed.source;
+  const parameters = syncEquationParameters(analyzed.parameterNames);
   const domain = { uMin: -4, uMax: 4, vMin: -4, vMax: 4, uSamples: 80, vSamples: 80 };
   if (analyzed.inferredKind === 'parametric_curve') {
     return {
       kind: 'parametric_curve',
       source,
+      parameters,
       tDomain: { min: -8, max: 8, samples: 200 },
       tubeRadius: 0.05,
       renderAsTube: true,
@@ -207,6 +210,7 @@ function makeExplicitSpec(rawText: string): EquationSpec {
     return {
       kind: 'parametric_surface',
       source,
+      parameters,
       domain,
     };
   }
@@ -214,6 +218,7 @@ function makeExplicitSpec(rawText: string): EquationSpec {
     return {
       kind: 'explicit_surface',
       source,
+      parameters,
       solvedAxis: analyzed.explicitAxis ?? 'z',
       domainAxes: analyzed.explicitDomainAxes ?? ['x', 'y'],
       domain,
@@ -224,14 +229,15 @@ function makeExplicitSpec(rawText: string): EquationSpec {
     return {
       kind: 'implicit_surface',
       source,
+      parameters,
       bounds: structuredClone(defaultBounds),
-      isoValue: 0,
       quality: 'high',
     };
   }
   return {
     kind: 'explicit_surface',
     source,
+    parameters,
     solvedAxis: 'z',
     domainAxes: ['x', 'y'],
     domain,
@@ -243,6 +249,10 @@ function coerceEquationSpec(existing: EquationSpec, rawText: string, forcedKind?
   const analyzed = analyzeEquationText(rawText);
   const inferred = forcedKind ?? analyzed.inferredKind;
   const source = analyzed.source;
+  const nextParameters =
+    analyzed.inferredKind === 'unknown' && source.parseStatus !== 'ok'
+      ? existing.parameters.map((parameter) => ({ ...parameter }))
+      : syncEquationParameters(analyzed.parameterNames, existing.parameters);
 
   const keepSurfaceDomain = (spec: EquationSpec) =>
     spec.kind === 'parametric_surface' || spec.kind === 'explicit_surface' ? spec.domain : undefined;
@@ -251,6 +261,7 @@ function coerceEquationSpec(existing: EquationSpec, rawText: string, forcedKind?
     return {
       kind: 'parametric_curve',
       source,
+      parameters: nextParameters,
       tDomain: existing.kind === 'parametric_curve' ? existing.tDomain : { min: -8, max: 8, samples: 200 },
       tubeRadius: existing.kind === 'parametric_curve' ? existing.tubeRadius : 0.05,
       renderAsTube: existing.kind === 'parametric_curve' ? existing.renderAsTube : true,
@@ -261,6 +272,7 @@ function coerceEquationSpec(existing: EquationSpec, rawText: string, forcedKind?
     return {
       kind: 'parametric_surface',
       source,
+      parameters: nextParameters,
       domain: keepSurfaceDomain(existing) ?? { uMin: -4, uMax: 4, vMin: -4, vMax: 4, uSamples: 80, vSamples: 80 },
     };
   }
@@ -270,6 +282,7 @@ function coerceEquationSpec(existing: EquationSpec, rawText: string, forcedKind?
     return {
       kind: 'explicit_surface',
       source,
+      parameters: nextParameters,
       solvedAxis: analyzed.explicitAxis ?? (existing.kind === 'explicit_surface' ? existing.solvedAxis : 'z'),
       domainAxes: analyzed.explicitDomainAxes ?? (existing.kind === 'explicit_surface' ? existing.domainAxes : ['x', 'y']),
       domain: priorDomain ?? { uMin: -4, uMax: 4, vMin: -4, vMax: 4, uSamples: 80, vSamples: 80 },
@@ -281,13 +294,13 @@ function coerceEquationSpec(existing: EquationSpec, rawText: string, forcedKind?
     return {
       kind: 'implicit_surface',
       source,
+      parameters: nextParameters,
       bounds: existing.kind === 'implicit_surface' ? existing.bounds : structuredClone(defaultBounds),
-      isoValue: existing.kind === 'implicit_surface' ? existing.isoValue : 0,
       quality: existing.kind === 'implicit_surface' ? existing.quality : 'high',
     };
   }
 
-  return { ...existing, source };
+  return { ...existing, source, parameters: nextParameters };
 }
 
 function cloneWithNewId(object: SceneObject): SceneObject {
@@ -441,7 +454,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             ? createDefaultSurface(`Surface ${countPlots(state.objects) + 1}`)
             : template === 'implicit'
               ? createDefaultImplicit(`Implicit ${countPlots(state.objects) + 1}`)
-              : createBlankPlot(`Plot ${countPlots(state.objects) + 1}`);
+              : createBlankPlot(`Surface ${countPlots(state.objects) + 1}`);
       return {
         ...state,
         objects: [...state.objects, actualPlot],
@@ -718,7 +731,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         } catch {
           // use text as equation
         }
-        const newPlot = createBlankPlot(`Plot ${countPlots(state.objects) + 1}`);
+        const newPlot = createBlankPlot(`Surface ${countPlots(state.objects) + 1}`);
         newPlot.equation = makeExplicitSpec(trimmed);
         pasteFromObject(newPlot);
         return;
@@ -1018,7 +1031,7 @@ function normalizeSceneObjectImport(input: unknown, index: number): { object: Sc
 }
 
 function normalizePlotObjectImport(record: Record<string, unknown>, index: number): PlotObject {
-  const fallback = createBlankPlot(`Imported Plot ${index + 1}`);
+  const fallback = createBlankPlot(`Imported Surface ${index + 1}`);
   const transformInput = asRecord(record.transform);
   const materialInput = asRecord(record.material);
   const equationInput = asRecord(record.equation);
@@ -1082,6 +1095,7 @@ function normalizeEquationSpecImport(
     const tDomainInput = asRecord(equationInput.tDomain);
     return {
       ...base,
+      parameters: normalizeEquationParameters(equationInput.parameters, base.parameters),
       tDomain: normalizeDomain1D(tDomainInput, base.tDomain),
       tubeRadius: Math.max(0, asFiniteNumber(equationInput.tubeRadius) ?? base.tubeRadius),
       renderAsTube: asBoolean(equationInput.renderAsTube) ?? base.renderAsTube,
@@ -1091,6 +1105,7 @@ function normalizeEquationSpecImport(
   if (base.kind === 'parametric_surface') {
     return {
       ...base,
+      parameters: normalizeEquationParameters(equationInput.parameters, base.parameters),
       domain: normalizeDomain2D(asRecord(equationInput.domain), base.domain),
     };
   }
@@ -1098,6 +1113,7 @@ function normalizeEquationSpecImport(
   if (base.kind === 'explicit_surface') {
     return {
       ...base,
+      parameters: normalizeEquationParameters(equationInput.parameters, base.parameters),
       solvedAxis: asEnum(equationInput.solvedAxis, ['x', 'y', 'z']) ?? base.solvedAxis,
       domainAxes: normalizeExplicitDomainAxes(equationInput.domainAxes, base.domainAxes),
       domain: normalizeDomain2D(asRecord(equationInput.domain), base.domain),
@@ -1107,8 +1123,8 @@ function normalizeEquationSpecImport(
 
   return {
     ...base,
+    parameters: normalizeEquationParameters(equationInput.parameters, base.parameters),
     bounds: normalizeBounds3D(equationInput.bounds, base.bounds),
-    isoValue: asFiniteNumber(equationInput.isoValue) ?? base.isoValue,
     quality: asEnum(equationInput.quality, ['draft', 'medium', 'high']) ?? base.quality,
   };
 }
@@ -1179,6 +1195,38 @@ function normalizeExplicitDomainAxes(
   const b = asEnum(value[1], ['x', 'y', 'z']);
   if (!a || !b || a === b) return [...fallback];
   return [a, b];
+}
+
+function normalizeEquationParameters(
+  input: unknown,
+  fallback: PlotObject['equation']['parameters'],
+): PlotObject['equation']['parameters'] {
+  if (!Array.isArray(input)) return fallback.map((parameter) => ({ ...parameter }));
+  const inputByName = new Map<string, Record<string, unknown>>();
+  for (const item of input) {
+    const record = asRecord(item);
+    const name = asNonEmptyString(record?.name);
+    if (!record || !name) continue;
+    inputByName.set(name, record);
+  }
+  return fallback.map((parameter) => {
+    const record = inputByName.get(parameter.name);
+    if (!record) {
+      return { ...parameter };
+    }
+    const value = asFiniteNumber(record.value) ?? parameter.value;
+    const rawMin = asFiniteNumber(record.min);
+    const rawMax = asFiniteNumber(record.max);
+    const min = rawMin ?? Math.min(parameter.min, value);
+    const max = rawMax ?? Math.max(parameter.max, value);
+    return {
+      ...parameter,
+      value,
+      min: Math.min(min, max, value),
+      max: Math.max(min, max, value),
+      step: positiveFiniteNumber(record.step) ?? parameter.step,
+    };
+  });
 }
 
 function countPlots(objects: SceneObject[]): number {

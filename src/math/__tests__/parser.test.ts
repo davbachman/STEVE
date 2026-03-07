@@ -23,6 +23,20 @@ describe('math parser and classifier', () => {
     expect(result.explicitAxis).toBe('z');
   });
 
+  it('keeps supported kinds when extra constants are present', () => {
+    const curve = analyzeEquationText('(a*cos(t), a*sin(t), b*t)');
+    expect(curve.inferredKind).toBe('parametric_curve');
+    expect(curve.parameterNames).toEqual(['a', 'b']);
+
+    const surface = analyzeEquationText('z = a*sin(b*x) + c*cos(y)');
+    expect(surface.inferredKind).toBe('explicit_surface');
+    expect(surface.parameterNames).toEqual(['a', 'b', 'c']);
+
+    const implicit = analyzeEquationText('x^2 + y^2 + z^2 = r^2');
+    expect(implicit.inferredKind).toBe('implicit_surface');
+    expect(implicit.parameterNames).toEqual(['r']);
+  });
+
   it('classifies implicit sphere surface', () => {
     const result = analyzeEquationText('x^2 + y^2 + z^2 = 1');
     expect(result.inferredKind).toBe('implicit_surface');

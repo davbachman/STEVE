@@ -11,6 +11,7 @@ import {
   selectInteractiveReflectionSource,
   shouldPlotCastInteractiveShadows,
   shouldShowPlotWireframe,
+  shouldUseTransparentBackShell,
   shouldUseShellSelectionHalo,
 } from '../renderSnapshot';
 
@@ -118,6 +119,17 @@ describe('renderSnapshot helpers', () => {
     expect(shouldUseShellSelectionHalo(surface, { isClosedManifold: true })).toBe(false);
     expect(shouldUseShellSelectionHalo(implicit, { isClosedManifold: false })).toBe(false);
     expect(shouldUseShellSelectionHalo(implicit, { isClosedManifold: true })).toBe(true);
+  });
+
+  it('uses transparent back shells for open implicits but not closed ones', () => {
+    const surface = createDefaultSurface('Transparent Surface');
+    surface.material.opacity = 0.7;
+    const implicit = createDefaultImplicit('Open Implicit');
+    implicit.material.opacity = 0.7;
+
+    expect(shouldUseTransparentBackShell(surface)).toBe(true);
+    expect(shouldUseTransparentBackShell(implicit, { isClosedManifold: false })).toBe(true);
+    expect(shouldUseTransparentBackShell(implicit, { isClosedManifold: true })).toBe(false);
   });
 
   it('keeps fully transparent surfaces in the attenuated shadow path', () => {

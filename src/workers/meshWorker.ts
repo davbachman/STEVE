@@ -86,7 +86,6 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
           spec.bounds,
           (x, y, z) => compiled.fn(x, y, z),
           spec.quality,
-          spec.isoValue,
         );
         if (isCanceled(req.objectId)) return;
         postMesh(req.priority === 'preview' ? 'mesh_preview' : 'mesh_final', req.jobId, req.objectId, mesh);

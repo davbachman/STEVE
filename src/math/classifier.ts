@@ -23,6 +23,7 @@ export function analyzeEquationText(rawText: string): ParseClassifyResult {
         classification: { kind: 'unknown', label: 'Unknown' },
       },
       inferredKind: 'unknown',
+      parameterNames: [],
     };
   }
 
@@ -36,6 +37,7 @@ export function analyzeEquationText(rawText: string): ParseClassifyResult {
   return {
     source: { ...source, classification },
     inferredKind: classificationInfo.kind,
+    parameterNames: classificationInfo.parameterNames,
     explicitAxis: classificationInfo.explicitAxis,
     explicitDomainAxes: classificationInfo.explicitDomainAxes,
     warning: classificationInfo.warning,
@@ -53,21 +55,33 @@ function safeLatex(ast: Expression): string | undefined {
 function classifyAst(ast: Expression): {
   kind: ParseClassifyResult['inferredKind'];
   label: EquationClassification['label'];
+  parameterNames: string[];
   explicitAxis?: Axis;
   explicitDomainAxes?: [Axis, Axis];
   warning?: string;
 } {
+  const identifiers = nonConstantNames(collectIdentifiers(ast));
+
   if (ast.type === 'tuple' && ast.items.length === 3) {
-    const vars = nonConstantNames(collectIdentifiers(ast));
-    if (vars.size === 0 || isSubset(vars, ['t'])) {
-      return { kind: 'parametric_curve', label: 'Curve' };
+    const reservedVars = pickNames(identifiers, ['x', 'y', 'z', 't', 'u', 'v']);
+    if (reservedVars.size === 0 || isSubset(reservedVars, ['t'])) {
+      return {
+        kind: 'parametric_curve',
+        label: 'Curve',
+        parameterNames: orderedNames(excludeNames(identifiers, ['t'])),
+      };
     }
-    if (isSubset(vars, ['u', 'v'])) {
-      return { kind: 'parametric_surface', label: 'Surface' };
+    if (isSubset(reservedVars, ['u', 'v'])) {
+      return {
+        kind: 'parametric_surface',
+        label: 'Surface',
+        parameterNames: orderedNames(excludeNames(identifiers, ['u', 'v'])),
+      };
     }
     return {
       kind: 'unknown',
       label: 'Unknown',
+      parameterNames: [],
       warning: '3-tuple uses unsupported variable set. Use t or (u,v).',
     };
   }
@@ -76,25 +90,31 @@ function classifyAst(ast: Expression): {
     if (ast.left.type === 'identifier' && AXES.includes(ast.left.name as Axis)) {
       const axis = ast.left.name as Axis;
       const domainAxes = explicitAxesFor(axis);
-      const rhsVars = nonConstantNames(collectIdentifiers(ast.right));
+      const rhsVars = pickNames(nonConstantNames(collectIdentifiers(ast.right)), ['x', 'y', 'z', 't', 'u', 'v']);
       if (isSubset(rhsVars, domainAxes)) {
         return {
           kind: 'explicit_surface',
           label: 'Explicit->Parametric',
+          parameterNames: orderedNames(excludeNames(identifiers, [axis, ...domainAxes])),
           explicitAxis: axis,
           explicitDomainAxes: domainAxes,
         };
       }
     }
 
-    const vars = nonConstantNames(collectIdentifiers(ast));
+    const vars = pickNames(identifiers, AXES);
     if ([...vars].some((v) => AXES.includes(v as Axis))) {
-      return { kind: 'implicit_surface', label: 'Implicit' };
+      return {
+        kind: 'implicit_surface',
+        label: 'Implicit',
+        parameterNames: orderedNames(excludeNames(identifiers, AXES)),
+      };
     }
 
     return {
       kind: 'unknown',
       label: 'Unknown',
+      parameterNames: [],
       warning: 'Equation does not reference x/y/z for an implicit surface.',
     };
   }
@@ -102,6 +122,7 @@ function classifyAst(ast: Expression): {
   return {
     kind: 'unknown',
     label: 'Unknown',
+    parameterNames: [],
     warning: 'Expected a 3-tuple or equality expression.',
   };
 }
@@ -124,4 +145,30 @@ function isSubset(values: Set<string>, allowed: readonly string[]): boolean {
     }
   }
   return true;
+}
+
+function pickNames(values: Set<string>, allowed: readonly string[]): Set<string> {
+  const allowedSet = new Set(allowed);
+  const picked = new Set<string>();
+  for (const value of values) {
+    if (allowedSet.has(value)) {
+      picked.add(value);
+    }
+  }
+  return picked;
+}
+
+function excludeNames(values: Set<string>, disallowed: readonly string[]): Set<string> {
+  const disallowedSet = new Set(disallowed);
+  const picked = new Set<string>();
+  for (const value of values) {
+    if (!disallowedSet.has(value)) {
+      picked.add(value);
+    }
+  }
+  return picked;
+}
+
+function orderedNames(values: Set<string>): string[] {
+  return [...values].sort((a, b) => a.localeCompare(b));
 }

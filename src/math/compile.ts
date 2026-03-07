@@ -7,6 +7,7 @@ import type {
 } from '../types/contracts';
 import type { Expression } from './ast';
 import { compileNumericExpression, compileTuple3, normalizeEqualityToImplicit } from './evaluator';
+import { equationParameterContext } from './parameters';
 import { parseMath } from './parser';
 
 export interface CompiledCurve {
@@ -65,7 +66,8 @@ export function compilePlotObject(plot: PlotObject): CompiledPlot {
 
 function compileCurveFunction(_spec: ParametricCurveSpec, ast: Expression): (t: number) => [number, number, number] {
   const tuple = compileTuple3(ast);
-  return (t) => tuple({ t });
+  const parameterVars = equationParameterContext(_spec.parameters);
+  return (t) => tuple({ ...parameterVars, t });
 }
 
 function compileParametricSurfaceFunction(
@@ -73,7 +75,8 @@ function compileParametricSurfaceFunction(
   ast: Expression,
 ): (u: number, v: number) => [number, number, number] {
   const tuple = compileTuple3(ast);
-  return (u, v) => tuple({ u, v });
+  const parameterVars = equationParameterContext(_spec.parameters);
+  return (u, v) => tuple({ ...parameterVars, u, v });
 }
 
 function compileExplicitSurfaceFunction(
@@ -84,9 +87,11 @@ function compileExplicitSurfaceFunction(
     throw new Error('Explicit surface must be an equality');
   }
   const rhs = compileNumericExpression(ast.right);
+  const parameterVars = equationParameterContext(spec.parameters);
   return (u, v) => {
     const [a1, a2] = spec.domainAxes;
     const vars: Record<string, number> = {
+      ...parameterVars,
       [a1]: u,
       [a2]: v,
     };
@@ -103,10 +108,11 @@ function compileExplicitSurfaceFunction(
 }
 
 function compileImplicitSurfaceFunction(
-  _spec: ImplicitSurfaceSpec,
+  spec: ImplicitSurfaceSpec,
   ast: Expression,
 ): (x: number, y: number, z: number) => number {
   const normalized = normalizeEqualityToImplicit(ast);
   const scalar = compileNumericExpression(normalized);
-  return (x, y, z) => scalar({ x, y, z });
+  const parameterVars = equationParameterContext(spec.parameters);
+  return (x, y, z) => scalar({ ...parameterVars, x, y, z });
 }

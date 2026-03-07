@@ -51,6 +51,7 @@ import {
   INTERACTIVE_SHELL_RENDER_OPACITY_EPSILON,
   plotUsesTransparentShells,
   selectInteractiveReflectionSource,
+  shouldUseTransparentBackShell,
   shouldUseShellSelectionHalo,
   type RendererPlotSnapshot,
   type RendererSceneSnapshot,
@@ -1117,7 +1118,6 @@ export class SceneController {
         compiled.spec.bounds,
         (x, y, z) => compiled.fn(x, y, z),
         compiled.spec.quality,
-        compiled.spec.isoValue,
       );
       topology = meshData.topology;
       root = new Mesh(`plot-${plot.id}`, this.scene);
@@ -1139,7 +1139,7 @@ export class SceneController {
     return {
       root,
       wireframeLines,
-      transparentBackShell: this.createTransparentBackShell(plot, root),
+      transparentBackShell: this.createTransparentBackShell(plot, root, topology),
       geometryKey: buildGeometryKey(plot),
       topology,
       curveTube,
@@ -1208,15 +1208,23 @@ export class SceneController {
     return {
       root,
       wireframeLines,
-      transparentBackShell: this.createTransparentBackShell(plot, root),
+      transparentBackShell: this.createTransparentBackShell(plot, root, topology),
       geometryKey: buildGeometryKey(plot),
       topology,
       curveTube,
     };
   }
 
-  private createTransparentBackShell(plot: PlotObject, root: Mesh): Mesh | null {
-    if (plot.equation.kind !== 'parametric_surface' && plot.equation.kind !== 'explicit_surface') {
+  private createTransparentBackShell(
+    plot: PlotObject,
+    root: Mesh,
+    topology?: SerializedMesh['topology'],
+  ): Mesh | null {
+    if (
+      plot.equation.kind !== 'parametric_surface'
+      && plot.equation.kind !== 'explicit_surface'
+      && !(plot.equation.kind === 'implicit_surface' && topology?.isClosedManifold !== true)
+    ) {
       return null;
     }
     const shell = root.clone(`plot-${plot.id}-back-shell`, null, false);
@@ -1240,12 +1248,12 @@ export class SceneController {
       plot,
       isRenderable,
       showsWireframe,
-      usesTransparentShells,
       castsInteractiveShadows,
       interactiveShadowMode,
     } = plotSnapshot;
     const plotVisible = plot.visible && isRenderable;
     const shadowVisible = plot.visible && castsInteractiveShadows;
+    const usesTransparentBackShell = shouldUseTransparentBackShell(plot, visual.topology);
 
     visual.root.parent = this.plotRoot;
     visual.root.isVisible = plotVisible || shadowVisible;
@@ -1254,7 +1262,7 @@ export class SceneController {
     if (visual.transparentBackShell) {
       visual.transparentBackShell.parent = this.plotRoot;
       visual.transparentBackShell.position.copyFrom(vec3(plot.transform.position));
-      visual.transparentBackShell.isVisible = (plotVisible || shadowVisible) && usesTransparentShells;
+      visual.transparentBackShell.isVisible = (plotVisible || shadowVisible) && usesTransparentBackShell;
       visual.transparentBackShell.receiveShadows = false;
     }
 
@@ -1262,7 +1270,7 @@ export class SceneController {
 
     if (shadowVisible) {
       this.addInteractiveShadowCaster(visual.root);
-      if (interactiveShadowMode === 'attenuated' && usesTransparentShells && visual.transparentBackShell?.isVisible) {
+      if (interactiveShadowMode === 'attenuated' && usesTransparentBackShell && visual.transparentBackShell?.isVisible) {
         this.addInteractiveShadowCaster(visual.transparentBackShell);
       }
     }
@@ -1285,7 +1293,7 @@ export class SceneController {
 
   private applyPlotMaterial(plot: PlotObject, visual: PlotVisual): void {
     if (!this.scene) return;
-    const usesTransparentShells = plotUsesTransparentShells(plot);
+    const usesTransparentShells = shouldUseTransparentBackShell(plot, visual.topology);
     const reflectionTexture = this.resolvePlotReflectionTexture();
     const hasUsableReflectionTexture = this.isUsableReflectionTexture(reflectionTexture);
     this.applyInteractivePlotMaterialToMesh(plot, visual.root, {

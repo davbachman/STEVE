@@ -9,6 +9,7 @@ import type {
   SceneObject,
 } from '../types/contracts';
 import { analyzeEquationText } from '../math/classifier';
+import { syncEquationParameters } from '../math/parameters';
 
 export const APP_VERSION = '0.1.0-dev';
 
@@ -162,12 +163,17 @@ export const defaultRenderSettings = (): RenderSettings => ({
   showDiagnostics: false,
 });
 
-function analyzedSource(rawText: string) {
-  return analyzeEquationText(rawText).source;
+function analyzedEquation(rawText: string) {
+  const analyzed = analyzeEquationText(rawText);
+  return {
+    source: analyzed.source,
+    parameters: syncEquationParameters(analyzed.parameterNames),
+  };
 }
 
 export function createDefaultCurve(name = 'Curve'): PlotObject {
   const rawText = '(cos(t), sin(t), 0.2*t)';
+  const equationMeta = analyzedEquation(rawText);
   return {
     id: uuidv4(),
     name,
@@ -176,7 +182,7 @@ export function createDefaultCurve(name = 'Curve'): PlotObject {
     transform: { position: { x: 0, y: 0, z: 0 } },
     equation: {
       kind: 'parametric_curve',
-      source: analyzedSource(rawText),
+      ...equationMeta,
       tDomain: { min: -12, max: 12, samples: 220 },
       tubeRadius: 0.06,
       renderAsTube: true,
@@ -187,6 +193,7 @@ export function createDefaultCurve(name = 'Curve'): PlotObject {
 
 export function createDefaultSurface(name = 'Surface'): PlotObject {
   const rawText = '(u*cos(v), u*sin(v), 0.7*sin(2*u)+0.15*v)';
+  const equationMeta = analyzedEquation(rawText);
   return {
     id: uuidv4(),
     name,
@@ -195,7 +202,7 @@ export function createDefaultSurface(name = 'Surface'): PlotObject {
     transform: { position: { x: 0, y: 0, z: 0 } },
     equation: {
       kind: 'parametric_surface',
-      source: analyzedSource(rawText),
+      ...equationMeta,
       domain: { uMin: -2, uMax: 2, vMin: -3.14, vMax: 3.14, uSamples: 60, vSamples: 80 },
     },
     material: { ...materialPresets['Glossy Plastic'], baseColor: '#4ea1ff' },
@@ -204,6 +211,7 @@ export function createDefaultSurface(name = 'Surface'): PlotObject {
 
 export function createDefaultImplicit(name = 'Implicit'): PlotObject {
   const rawText = 'x^2 + y^2 + z^2 = 4';
+  const equationMeta = analyzedEquation(rawText);
   return {
     id: uuidv4(),
     name,
@@ -212,17 +220,17 @@ export function createDefaultImplicit(name = 'Implicit'): PlotObject {
     transform: { position: { x: 0, y: 0, z: 0 } },
     equation: {
       kind: 'implicit_surface',
-      source: analyzedSource(rawText),
+      ...equationMeta,
       bounds: structuredClone(defaultBounds),
-      isoValue: 0,
       quality: 'high',
     },
     material: { ...materialPresets['Glossy Plastic'] },
   };
 }
 
-export function createBlankPlot(name = 'Plot'): PlotObject {
+export function createBlankPlot(name = 'Surface'): PlotObject {
   const rawText = 'z = sin(x*y)';
+  const equationMeta = analyzedEquation(rawText);
   return {
     id: uuidv4(),
     name,
@@ -231,7 +239,7 @@ export function createBlankPlot(name = 'Plot'): PlotObject {
     transform: { position: { x: 0, y: 0, z: 0 } },
     equation: {
       kind: 'explicit_surface',
-      source: analyzedSource(rawText),
+      ...equationMeta,
       solvedAxis: 'z',
       domainAxes: ['x', 'y'],
       domain: { uMin: -4, uMax: 4, vMin: -4, vMax: 4, uSamples: 80, vSamples: 80 },

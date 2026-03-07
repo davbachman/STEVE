@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { updateEquationParameterValue } from '../../math/parameters';
 import { materialPresets } from '../../state/defaults';
 import { useAppStore } from '../../state/store';
 import type { PlotObject, PointLightObject } from '../../types/contracts';
@@ -42,19 +43,19 @@ function ObjectTab({ selected }: { selected: PlotObject | PointLightObject | nul
   const updatePlotSpec = useAppStore((s) => s.updatePlotSpec);
   const setObjectName = useAppStore((s) => s.setObjectName);
   const setObjectPosition = useAppStore((s) => s.setObjectPosition);
-  const [nameDraft, setNameDraft] = useState('');
-
-  useEffect(() => {
-    setNameDraft(selected?.name ?? '');
-  }, [selected?.id, selected?.name]);
+  const [nameDraftState, setNameDraftState] = useState<{ objectId: string | null; value: string }>({
+    objectId: null,
+    value: '',
+  });
 
   if (!selected) return <EmptyState text="Select a plot or light" />;
 
   const position = selected.type === 'plot' ? selected.transform.position : selected.position;
+  const nameDraft = nameDraftState.objectId === selected.id ? nameDraftState.value : selected.name;
   const commitName = () => {
     const next = nameDraft.trim();
     if (!next) {
-      setNameDraft(selected.name);
+      setNameDraftState({ objectId: selected.id, value: selected.name });
       return;
     }
     if (next !== selected.name) {
@@ -69,7 +70,7 @@ function ObjectTab({ selected }: { selected: PlotObject | PointLightObject | nul
         <input
           type="text"
           value={nameDraft}
-          onChange={(e) => setNameDraft(e.target.value)}
+          onChange={(e) => setNameDraftState({ objectId: selected.id, value: e.target.value })}
           onBlur={commitName}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
@@ -78,7 +79,7 @@ function ObjectTab({ selected }: { selected: PlotObject | PointLightObject | nul
               (e.currentTarget as HTMLInputElement).blur();
             } else if (e.key === 'Escape') {
               e.preventDefault();
-              setNameDraft(selected.name);
+              setNameDraftState({ objectId: selected.id, value: selected.name });
               (e.currentTarget as HTMLInputElement).blur();
             }
           }}
@@ -147,6 +148,7 @@ function ObjectTab({ selected }: { selected: PlotObject | PointLightObject | nul
         <SurfaceDomainEditor plot={selected} />
       ) : null}
       {selected.type === 'plot' && selected.equation.kind === 'implicit_surface' ? <ImplicitEditor plot={selected} /> : null}
+      {selected.type === 'plot' ? <EquationParameterEditor plot={selected} /> : null}
       {selected.type === 'point_light' ? <PointLightTabFields light={selected} /> : null}
     </div>
   );
@@ -397,14 +399,17 @@ function SurfaceDomainEditor({ plot }: { plot: PlotObject }) {
     return <></>;
   }
   const domain = plot.equation.domain;
+  const [firstAxisLabel, secondAxisLabel] = plot.equation.kind === 'explicit_surface'
+    ? plot.equation.domainAxes
+    : ['u', 'v'];
   return (
     <div className="control-grid">
-      <RangeField label="u min" min={-20} max={20} step={0.1} value={domain.uMin} onChange={(v) => updatePlotSpec(plot.id, (spec) => ((spec.kind === 'parametric_surface' || spec.kind === 'explicit_surface') ? { ...spec, domain: { ...spec.domain, uMin: v } } : spec))} />
-      <RangeField label="u max" min={-20} max={20} step={0.1} value={domain.uMax} onChange={(v) => updatePlotSpec(plot.id, (spec) => ((spec.kind === 'parametric_surface' || spec.kind === 'explicit_surface') ? { ...spec, domain: { ...spec.domain, uMax: v } } : spec))} />
-      <RangeField label="v min" min={-20} max={20} step={0.1} value={domain.vMin} onChange={(v) => updatePlotSpec(plot.id, (spec) => ((spec.kind === 'parametric_surface' || spec.kind === 'explicit_surface') ? { ...spec, domain: { ...spec.domain, vMin: v } } : spec))} />
-      <RangeField label="v max" min={-20} max={20} step={0.1} value={domain.vMax} onChange={(v) => updatePlotSpec(plot.id, (spec) => ((spec.kind === 'parametric_surface' || spec.kind === 'explicit_surface') ? { ...spec, domain: { ...spec.domain, vMax: v } } : spec))} />
-      <RangeField label="u samples" min={8} max={256} step={1} value={domain.uSamples} onChange={(v) => updatePlotSpec(plot.id, (spec) => ((spec.kind === 'parametric_surface' || spec.kind === 'explicit_surface') ? { ...spec, domain: { ...spec.domain, uSamples: Math.round(v) } } : spec))} />
-      <RangeField label="v samples" min={8} max={256} step={1} value={domain.vSamples} onChange={(v) => updatePlotSpec(plot.id, (spec) => ((spec.kind === 'parametric_surface' || spec.kind === 'explicit_surface') ? { ...spec, domain: { ...spec.domain, vSamples: Math.round(v) } } : spec))} />
+      <RangeField label={`${firstAxisLabel} min`} min={-20} max={20} step={0.1} value={domain.uMin} onChange={(v) => updatePlotSpec(plot.id, (spec) => ((spec.kind === 'parametric_surface' || spec.kind === 'explicit_surface') ? { ...spec, domain: { ...spec.domain, uMin: v } } : spec))} />
+      <RangeField label={`${firstAxisLabel} max`} min={-20} max={20} step={0.1} value={domain.uMax} onChange={(v) => updatePlotSpec(plot.id, (spec) => ((spec.kind === 'parametric_surface' || spec.kind === 'explicit_surface') ? { ...spec, domain: { ...spec.domain, uMax: v } } : spec))} />
+      <RangeField label={`${secondAxisLabel} min`} min={-20} max={20} step={0.1} value={domain.vMin} onChange={(v) => updatePlotSpec(plot.id, (spec) => ((spec.kind === 'parametric_surface' || spec.kind === 'explicit_surface') ? { ...spec, domain: { ...spec.domain, vMin: v } } : spec))} />
+      <RangeField label={`${secondAxisLabel} max`} min={-20} max={20} step={0.1} value={domain.vMax} onChange={(v) => updatePlotSpec(plot.id, (spec) => ((spec.kind === 'parametric_surface' || spec.kind === 'explicit_surface') ? { ...spec, domain: { ...spec.domain, vMax: v } } : spec))} />
+      <RangeField label={`${firstAxisLabel} samples`} min={8} max={256} step={1} value={domain.uSamples} onChange={(v) => updatePlotSpec(plot.id, (spec) => ((spec.kind === 'parametric_surface' || spec.kind === 'explicit_surface') ? { ...spec, domain: { ...spec.domain, uSamples: Math.round(v) } } : spec))} />
+      <RangeField label={`${secondAxisLabel} samples`} min={8} max={256} step={1} value={domain.vSamples} onChange={(v) => updatePlotSpec(plot.id, (spec) => ((spec.kind === 'parametric_surface' || spec.kind === 'explicit_surface') ? { ...spec, domain: { ...spec.domain, vSamples: Math.round(v) } } : spec))} />
     </div>
   );
 }
@@ -425,7 +430,6 @@ function ImplicitEditor({ plot }: { plot: PlotObject }) {
           <option value="high">High</option>
         </select>
       </label>
-      <RangeField label="Iso Value" min={-5} max={5} step={0.01} value={spec.isoValue} onChange={(v) => updatePlotSpec(plot.id, (s) => (s.kind === 'implicit_surface' ? { ...s, isoValue: v } : s))} />
       <BoundsEditor objectId={plot.id} />
       {!boundsInfo.valid ? (
         <div className="inspector-note">
@@ -437,9 +441,35 @@ function ImplicitEditor({ plot }: { plot: PlotObject }) {
           Large implicit bounds volume ({boundsInfo.volume.toFixed(0)} units^3). `Medium/High` quality may take longer; use smaller bounds for faster preview/refine.
         </div>
       ) : null}
-      <div className="inspector-note">
-        Implicit meshing uses a uniform-grid marching-cubes path with topology cleanup and numeric-gradient normals. Face-ambiguous cells fall back to a deterministic tetra path for crack resistance.
-      </div>
+    </div>
+  );
+}
+
+function EquationParameterEditor({ plot }: { plot: PlotObject }) {
+  const updatePlotSpec = useAppStore((s) => s.updatePlotSpec);
+  if (plot.equation.parameters.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="inspector-section">
+      <h3>Constants</h3>
+      {plot.equation.parameters.map((parameter) => (
+        <RangeField
+          key={parameter.name}
+          label={parameter.name}
+          min={parameter.min}
+          max={parameter.max}
+          step={parameter.step}
+          value={parameter.value}
+          onChange={(value) =>
+            updatePlotSpec(plot.id, (spec) => ({
+              ...spec,
+              parameters: updateEquationParameterValue(spec.parameters, parameter.name, value),
+            }))
+          }
+        />
+      ))}
     </div>
   );
 }

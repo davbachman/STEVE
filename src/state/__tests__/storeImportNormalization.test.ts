@@ -65,4 +65,59 @@ describe('project import normalization', () => {
     useAppStore.getState().replaceProject(project as never);
     expect(useAppStore.getState().ui.statusMessage).toContain('schema version inferred as 1');
   });
+
+  it('preserves imported parameter values for detected constants', () => {
+    const project = baseProject({
+      objects: [
+        {
+          ...createBlankPlot('Parameterized Plot'),
+          equation: {
+            kind: 'explicit_surface',
+            source: { rawText: 'z = a*sin(x)' },
+            parameters: [
+              { name: 'a', value: 3, min: -6, max: 6, step: 0.25 },
+              { name: 'unused', value: 9, min: 0, max: 10, step: 1 },
+            ],
+          },
+        },
+      ],
+    });
+
+    useAppStore.getState().replaceProject(project as never);
+    const state = useAppStore.getState();
+    const plot = state.objects[0];
+    expect(plot?.type).toBe('plot');
+    if (plot?.type !== 'plot') {
+      throw new Error('Expected imported plot');
+    }
+    expect(plot.equation.parameters).toEqual([
+      { name: 'a', value: 3, min: -6, max: 6, step: 0.25 },
+    ]);
+  });
+
+  it('drops legacy implicit iso values during import', () => {
+    const project = baseProject({
+      objects: [
+        {
+          ...createBlankPlot('Imported Implicit'),
+          equation: {
+            kind: 'implicit_surface',
+            source: { rawText: 'x^2 + y^2 + z^2 = 4' },
+            isoValue: 2,
+            quality: 'medium',
+          },
+        },
+      ],
+    });
+
+    useAppStore.getState().replaceProject(project as never);
+    const state = useAppStore.getState();
+    const plot = state.objects[0];
+    expect(plot?.type).toBe('plot');
+    if (plot?.type !== 'plot' || plot.equation.kind !== 'implicit_surface') {
+      throw new Error('Expected imported implicit plot');
+    }
+    expect('isoValue' in plot.equation).toBe(false);
+    expect(plot.equation.quality).toBe('medium');
+  });
 });

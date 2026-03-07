@@ -119,6 +119,18 @@ export function plotUsesTransparentShells(plot: PlotObject): boolean {
     && (plot.equation.kind === 'parametric_surface' || plot.equation.kind === 'explicit_surface');
 }
 
+export function shouldUseTransparentBackShell(
+  plot: PlotObject,
+  meshTopology?: SerializedMesh['topology'],
+): boolean {
+  if (plotUsesTransparentShells(plot)) {
+    return true;
+  }
+  return plot.equation.kind === 'implicit_surface'
+    && clamp01(plot.material.opacity) < INTERACTIVE_SHELL_RENDER_OPACITY_EPSILON
+    && meshTopology?.isClosedManifold !== true;
+}
+
 export function selectInteractiveReflectionSource(
   options: ReflectionSourceOptions,
 ): InteractiveReflectionSource {

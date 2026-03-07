@@ -64,6 +64,19 @@ export interface EquationSource {
   classification?: EquationClassification;
 }
 
+export interface EquationParameter {
+  name: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+}
+
+export interface BaseEquationSpec {
+  source: EquationSource;
+  parameters: EquationParameter[];
+}
+
 export interface MaterialParams {
   baseColor: string;
   opacity: number;
@@ -74,34 +87,29 @@ export interface MaterialParams {
   wireframeCellSize?: number;
 }
 
-export interface ParametricCurveSpec {
+export interface ParametricCurveSpec extends BaseEquationSpec {
   kind: 'parametric_curve';
-  source: EquationSource;
   tDomain: Domain1D;
   tubeRadius: number;
   renderAsTube: boolean;
 }
 
-export interface ParametricSurfaceSpec {
+export interface ParametricSurfaceSpec extends BaseEquationSpec {
   kind: 'parametric_surface';
-  source: EquationSource;
   domain: Domain2D;
 }
 
-export interface ExplicitSurfaceSpec {
+export interface ExplicitSurfaceSpec extends BaseEquationSpec {
   kind: 'explicit_surface';
-  source: EquationSource;
   solvedAxis: Axis;
   domainAxes: [Axis, Axis];
   domain: Domain2D;
   compileAsParametric: true;
 }
 
-export interface ImplicitSurfaceSpec {
+export interface ImplicitSurfaceSpec extends BaseEquationSpec {
   kind: 'implicit_surface';
-  source: EquationSource;
   bounds: Bounds3D;
-  isoValue: number;
   quality: 'draft' | 'medium' | 'high';
 }
 
@@ -219,6 +227,7 @@ export interface SerializedMesh {
 export interface ParseClassifyResult {
   source: EquationSource;
   inferredKind: EquationObjectKind | 'unknown';
+  parameterNames: string[];
   explicitAxis?: Axis;
   explicitDomainAxes?: [Axis, Axis];
   warning?: string;
