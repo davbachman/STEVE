@@ -1,0 +1,56 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - button "New" [ref=e6] [cursor=pointer]
+      - button "Save" [ref=e7] [cursor=pointer]
+      - button "Open" [ref=e8] [cursor=pointer]
+      - button "Export PNG" [ref=e9] [cursor=pointer]
+    - generic [ref=e11]:
+      - text: Interactive Quality
+      - combobox "Interactive Quality" [ref=e12]:
+        - option "Performance"
+        - option "Balanced" [selected]
+        - option "Quality"
+    - generic [ref=e13]:
+      - button "Hide left panel" [pressed] [ref=e14] [cursor=pointer]:
+        - img [ref=e15]
+      - button "Hide right panel" [pressed] [ref=e18] [cursor=pointer]:
+        - img [ref=e19]
+  - region "Selected equation editor" [ref=e22]
+  - generic [ref=e25]:
+    - complementary [ref=e26]:
+      - generic [ref=e27]:
+        - heading "Create" [level=2] [ref=e28]
+        - generic [ref=e29]:
+          - button "+ Curve" [ref=e30] [cursor=pointer]
+          - button "+ Surface" [ref=e31] [cursor=pointer]
+          - button "+ Equation" [ref=e32] [cursor=pointer]
+          - button "+ Light" [ref=e33] [cursor=pointer]
+      - generic [ref=e34]:
+        - generic [ref=e35]:
+          - button "▧ Ribbon Surface" [ref=e36] [cursor=pointer]:
+            - generic [ref=e37]: ▧
+            - generic [ref=e38]: Ribbon Surface
+          - generic "Show object" [ref=e39]:
+            - checkbox "Show Ribbon Surface" [checked] [ref=e40]
+        - generic [ref=e41]:
+          - button "∿ Helix" [ref=e42] [cursor=pointer]:
+            - generic [ref=e43]: ∿
+            - generic [ref=e44]: Helix
+          - generic "Show object" [ref=e45]:
+            - checkbox "Show Helix" [checked] [ref=e46]
+        - generic [ref=e47]:
+          - button "● Warm Fill" [ref=e48] [cursor=pointer]:
+            - generic [ref=e49]: ●
+            - generic [ref=e50]: Warm Fill
+          - generic "Show light icon" [ref=e51]:
+            - checkbox "Show icon for Warm Fill" [checked] [ref=e52]
+    - main [ref=e53]
+    - complementary [ref=e56]:
+      - generic [ref=e57]:
+        - button "Object" [ref=e58] [cursor=pointer]
+        - button "Material" [ref=e59] [cursor=pointer]
+        - button "Lighting" [ref=e60] [cursor=pointer]
+        - button "Scene" [ref=e61] [cursor=pointer]
+        - button "Render" [ref=e62] [cursor=pointer]
+      - generic [ref=e64]: Select a plot or light
