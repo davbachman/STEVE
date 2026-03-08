@@ -44,9 +44,9 @@ export function ObjectListPanel() {
               <span className="object-card__icon">{objectIcon(obj)}</span>
               <span className="object-card__name">{obj.name}</span>
             </button>
-            <label className="object-card__toggle" title={obj.type === 'point_light' ? 'Show light icon' : 'Show object'}>
+            <label className="object-card__toggle" title={obj.type === 'point_light' ? 'Show light gizmo' : 'Show object'}>
               <input
-                aria-label={obj.type === 'point_light' ? `Show icon for ${obj.name}` : `Show ${obj.name}`}
+                aria-label={obj.type === 'point_light' ? `Show gizmo for ${obj.name}` : `Show ${obj.name}`}
                 type="checkbox"
                 checked={obj.visible}
                 onChange={(e) => setObjectVisibility(obj.id, e.target.checked)}

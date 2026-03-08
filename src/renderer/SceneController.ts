@@ -1,103 +1,148 @@
-import {
-  ArcRotateCamera,
-  BaseTexture,
-  Color3,
-  Color4,
-  Constants,
-  DirectionalLight,
-  HemisphericLight,
-  ImageProcessingConfiguration,
-  LinesMesh,
-  Matrix,
-  Material,
-  Mesh,
-  MeshBuilder,
-  PBRMaterial,
-  PointLight,
-  PointerEventTypes,
-  RawCubeTexture,
-  Scene,
-  ShadowGenerator,
-  SphericalPolynomial,
-  StandardMaterial,
-  TransformNode,
-  Vector3,
-  VertexData,
-  WebGPUEngine,
-  type Nullable,
-  type Observer,
-  type PointerInfo,
-} from '@babylonjs/core';
-import { GridMaterial } from '@babylonjs/materials/grid';
-import { CreateScreenshotUsingRenderTargetAsync } from '@babylonjs/core/Misc/screenshotTools';
+import { mat3, mat4, vec3, vec4 } from 'gl-matrix';
 import type { AppState } from '../state/store';
 import { useAppStore } from '../state/store';
 import type {
-  InteractiveReflectionSource,
-  PlotJobStatus,
   PlotObject,
-  RenderDiagnostics,
-  RenderSettings,
+  PointLightObject,
   SceneObject,
-  SerializedMesh,
 } from '../types/contracts';
-import { compilePlotObject } from '../math/compile';
-import { buildImplicitMeshFromScalarField } from '../math/mesh/implicitMarchingTetra';
-import { buildSurfaceMesh, sampleCurve } from '../math/mesh/parametric';
-import { getRuntimePlotMesh } from '../workers/runtimeMeshCache';
-import { QualityBackendRouter } from './qualityBackends';
 import {
+  classifyInteractiveShadowMode,
   createRendererSceneSnapshot,
-  INTERACTIVE_SHELL_RENDER_OPACITY_EPSILON,
-  plotUsesTransparentShells,
   resolveDirectionalShadowFrustumSize,
-  selectInteractiveReflectionSource,
-  shouldUseTransparentBackShell,
-  shouldUseShellSelectionHalo,
-  type RendererPlotSnapshot,
+  resolveInteractivePointShadowBudget,
+  type RendererCameraLike,
   type RendererSceneSnapshot,
 } from './renderSnapshot';
+import {
+  shouldPointLightContribute,
+  shouldRenderPointLightGizmo,
+} from './pointLightVisibility';
+import { shadowVisibilityGlsl } from './shadowVisibility';
+import {
+  buildPlotGeometry,
+  intersectRayWithPlotGeometry,
+  type PlotGeometry,
+} from './plotGeometry';
 
 export interface ViewportApi {
   exportPng: (filename?: string) => Promise<void>;
 }
 
+interface GpuMeshBuffers {
+  vao: WebGLVertexArrayObject | null;
+  indexBuffer: WebGLBuffer | null;
+  indexCount: number;
+  boundaryLines: GpuLineBuffer | null;
+  featureLines: GpuLineBuffer | null;
+  wireLines: GpuLineBuffer[];
+}
+
+interface GpuLineBuffer {
+  vao: WebGLVertexArrayObject | null;
+  vertexBuffer: WebGLBuffer | null;
+  vertexCount: number;
+  primitive: number;
+}
+
 interface PlotVisual {
-  root: Mesh;
-  wireframeLines: LinesMesh[];
-  transparentBackShell: Mesh | null;
-  geometryKey: string;
-  topology?: SerializedMesh['topology'];
-  curveTube?: {
-    path: Vector3[];
-    baseRadius: number;
-    referenceCameraRadius: number;
-    currentRadius: number;
-  };
+  plotId: string;
+  geometry: PlotGeometry;
+  buffers: GpuMeshBuffers;
+  meshVersion: number;
 }
 
 interface PointLightVisual {
-  light: PointLight;
-  gizmo: Mesh;
-  pickShell: Mesh;
-  halo: Mesh;
-  starLines: LinesMesh[];
-  shadow: ShadowGenerator | null;
-  shadowEnabled: boolean;
+  light: PointLightObject;
+}
+
+interface ShadowResources {
+  directionalFramebuffer: WebGLFramebuffer | null;
+  directionalDepthTexture: WebGLTexture | null;
+  directionalTransFramebuffer: WebGLFramebuffer | null;
+  directionalTransDepthTexture: WebGLTexture | null;
+  directionalTransColorTexture: WebGLTexture | null;
+  pointFramebuffer: WebGLFramebuffer | null;
+  pointTransFramebuffer: WebGLFramebuffer | null;
+  pointDepthCubemaps: Array<WebGLTexture | null>;
+  pointTransDepthCubemaps: Array<WebGLTexture | null>;
+  pointTransColorCubemaps: Array<WebGLTexture | null>;
+  size: number;
+}
+
+interface ActivePointShadowLight {
+  light: PointLightObject;
+  lightIndex: number;
+  shadowSlot: number;
+}
+
+interface RenderTargets {
+  width: number;
+  height: number;
+  sceneFramebuffer: WebGLFramebuffer | null;
+  sceneColor: WebGLTexture | null;
+  sceneDepth: WebGLTexture | null;
+  oitFramebuffer: WebGLFramebuffer | null;
+  oitAccum: WebGLTexture | null;
+  oitReveal: WebGLTexture | null;
+  maskFramebuffer: WebGLFramebuffer | null;
+  maskTexture: WebGLTexture | null;
+  maskDepth: WebGLTexture | null;
+}
+
+interface ProbeResources {
+  cubemap: WebGLTexture | null;
+  framebuffer: WebGLFramebuffer | null;
+  depthRenderbuffer: WebGLRenderbuffer | null;
+  size: number;
+  frameCounter: number;
+  refreshCount: number;
+  center: vec3;
+}
+
+interface ProbeUsage {
+  refreshed: boolean;
+  useProbe: boolean;
+}
+
+interface SimpleMeshBuffer {
+  vao: WebGLVertexArrayObject | null;
+  indexBuffer: WebGLBuffer | null;
+  indexCount: number;
+}
+
+interface RenderPrograms {
+  mesh: ProgramBundle;
+  transparentAccum: ProgramBundle;
+  transparentReveal: ProgramBundle;
+  shadow: ProgramBundle;
+  transShadow: ProgramBundle;
+  pointShadow: ProgramBundle;
+  pointTransShadow: ProgramBundle;
+  line: ProgramBundle;
+  gizmo: ProgramBundle;
+  mask: ProgramBundle;
+  composite: ProgramBundle;
+  outline: ProgramBundle;
+}
+
+interface ProgramBundle {
+  program: WebGLProgram;
+  uniforms: Record<string, WebGLUniformLocation | null>;
 }
 
 type DragState =
   | {
       objectId: string;
       mode: 'xy';
-      startPosition: Vector3;
+      startPosition: vec3;
       planeZ: number;
-      startPoint: Vector3;
+      startPoint: vec3;
     }
   | {
       objectId: string;
       mode: 'z';
-      startPosition: Vector3;
+      startPosition: vec3;
       fixedX: number;
       fixedY: number;
       zOffset: number;
@@ -105,1677 +150,1492 @@ type DragState =
       startClientY: number;
     };
 
-const FIXED_INTERACTIVE_IOR = 1.45;
+const MAX_POINT_LIGHTS = 4;
+const MAX_POINT_SHADOW_LIGHTS = 3;
+const PROBE_REFRESH_INTERVAL = 18;
+const DEFAULT_PROBE_SIZE = 96;
+const ENVIRONMENT_CUBEMAP_SIZE = 48;
+const FULLSCREEN_TRIANGLE_VERTICES = new Float32Array([-1, -1, 3, -1, -1, 3]);
+const BASE_FRAGMENT_TEXTURE_UNITS = 5;
+const POINT_SHADOW_TEXTURE_UNIT_BASE = BASE_FRAGMENT_TEXTURE_UNITS;
+const POINT_SHADOW_TEXTURE_UNIT_STRIDE = 3;
+const POINT_SHADOW_NEAR = 0.05;
+const POINT_SHADOW_FACE_VECTORS: Array<{ target: vec3; up: vec3 }> = [
+  { target: vec3.fromValues(1, 0, 0), up: vec3.fromValues(0, -1, 0) },
+  { target: vec3.fromValues(-1, 0, 0), up: vec3.fromValues(0, -1, 0) },
+  { target: vec3.fromValues(0, 1, 0), up: vec3.fromValues(0, 0, 1) },
+  { target: vec3.fromValues(0, -1, 0), up: vec3.fromValues(0, 0, -1) },
+  { target: vec3.fromValues(0, 0, 1), up: vec3.fromValues(0, -1, 0) },
+  { target: vec3.fromValues(0, 0, -1), up: vec3.fromValues(0, -1, 0) },
+];
 
 export class SceneController {
-  private engine: WebGPUEngine | null = null;
-  private scene: Scene | null = null;
-  private camera: ArcRotateCamera | null = null;
-  private ambientLight: HemisphericLight | null = null;
-  private directionalLight: DirectionalLight | null = null;
-  private directionalShadow: ShadowGenerator | null = null;
-  private plotRoot: TransformNode | null = null;
-  private lightRoot: TransformNode | null = null;
-  private groundMesh: Mesh | null = null;
-  private gridMesh: Mesh | null = null;
-  private xyGridLines: LinesMesh[] = [];
-  private xyGridKey = '';
-  private axesMeshes: LinesMesh[] = [];
-  private environmentFallbackTexture: BaseTexture | null = null;
-  private environmentFallbackKey = '';
-  private interactiveReflectionFallbackKind: RenderDiagnostics['interactiveReflectionFallbackKind'] = 'none';
-  private interactiveReflectionFallbackEverUsable = false;
-  private interactiveReflectionPath: RenderDiagnostics['interactiveReflectionPath'] = 'none';
-  private interactiveReflectionFallbackReason: string | null = null;
-  private interactiveReflectionLastRefreshReason: string | null = null;
-  private interactiveReflectionProbeRefreshCount = 0;
-  private interactiveReflectionSource: InteractiveReflectionSource = 'none';
-  private interactiveReflectionTexture: Nullable<BaseTexture> = null;
-  private shadowAlphaRestore = new WeakMap<Mesh, number>();
-  private shadowAlphaHookedGenerators = new WeakSet<ShadowGenerator>();
-  private latestSnapshot: RendererSceneSnapshot | null = null;
+  private gl: WebGL2RenderingContext | null = null;
+  private supportsFloatColorBuffers = false;
+  private maxFragmentTextureUnits = 0;
+  private renderPrograms: RenderPrograms | null = null;
+  private renderTargets: RenderTargets = emptyRenderTargets();
+  private shadowResources: ShadowResources = emptyShadowResources();
+  private probeResources: ProbeResources = emptyProbeResources();
+  private fullscreenVao: WebGLVertexArrayObject | null = null;
+  private fullscreenBuffer: WebGLBuffer | null = null;
+  private groundMesh: SimpleMeshBuffer | null = null;
+  private environmentCubemap: WebGLTexture | null = null;
+  private environmentKey = '';
   private plotVisuals = new Map<string, PlotVisual>();
   private pointLightVisuals = new Map<string, PointLightVisual>();
-  private pointerObserver: Nullable<Observer<PointerInfo>> = null;
+  private latestSnapshot: RendererSceneSnapshot | null = null;
+  private disposed = false;
+  private animationFrame = 0;
+  private pointerDownListener?: (event: PointerEvent) => void;
+  private pointerMoveListener?: (event: PointerEvent) => void;
+  private pointerUpListener?: (event: PointerEvent) => void;
+  private wheelListener?: (event: WheelEvent) => void;
+  private resizeListener?: () => void;
   private dragState: DragState | null = null;
   private cameraDrag: { mode: 'orbit' | 'pan'; pointerId: number; lastX: number; lastY: number } | null = null;
-  private lastQualitySignature = '';
-  private lastQualityCameraSignature = '';
-  private qualityBackends: QualityBackendRouter | null = null;
-  private implicitSelectionHalos = new Map<string, Mesh>();
-  private qualityActiveRenderer: RenderDiagnostics['qualityActiveRenderer'] = 'none';
-  private qualityFallbackReason: string | null = null;
-  private qualityLastResetReason: string | null = null;
-  private qualitySamplesPerSecond = 0;
-  private qualityPerfWindowStartMs = 0;
-  private qualityPerfWindowStartSamples = 0;
-  private lastQualityStatusMessageKey = '';
-  private qualityPreviewOverlayCanvas: HTMLCanvasElement | null = null;
-  private qualityPreviewOverlayCtx: CanvasRenderingContext2D | null = null;
-  private baseHardwareScalingLevel = 1;
-  private lastAppliedHardwareScalingLevel = Number.NaN;
-  private meshHashCache = new Map<string, string>();
-  private disposed = false;
-  private renderLoopFailed = false;
-  private engineInitialized = false;
-  private pointShadowCapability: 'unknown' | 'available' | 'unavailable' = 'unknown';
-  private lastCurveTubeCameraRadius = Number.NaN;
-  private readonly debugInstanceId = Math.random().toString(36).slice(2, 10);
+  private lastFrameTime = 0;
+  private frameTimeMs = 16.67;
+  private fps = 60;
+  private readonly camera = {
+    alpha: -Math.PI / 3,
+    beta: 1.1,
+    radius: 20,
+    target: vec3.fromValues(0, 0, 1.5),
+    upVector: vec3.fromValues(0, 0, 1),
+    minZ: 0.05,
+    maxZ: 400,
+    fov: Math.PI / 4,
+    mode: 0,
+    lowerRadiusLimit: 1,
+    upperRadiusLimit: 200,
+  };
+  private readonly viewMatrix = mat4.create();
+  private readonly projectionMatrix = mat4.create();
+  private readonly lightViewProjection = mat4.create();
+  private readonly shadowViewMatrix = mat4.create();
+  private readonly shadowProjectionMatrix = mat4.create();
+  private readonly pointShadowViewMatrix = mat4.create();
+  private readonly pointShadowProjectionMatrix = mat4.create();
+  private readonly pointShadowViewProjection = mat4.create();
+  private readonly probeViewMatrix = mat4.create();
+  private readonly probeProjectionMatrix = mat4.create();
+  private readonly emptyProbeCenter = vec3.fromValues(0, 0, 0);
+  private currentProbeOwnerId: string | null = null;
+  private currentProbeSceneKey = '';
 
   constructor(private readonly canvas: HTMLCanvasElement) {}
 
   async init(): Promise<void> {
-    this.disposed = false;
-    if (!(navigator as Navigator & { gpu?: GPU }).gpu) {
-      throw new Error('WebGPU is not available in this browser');
-    }
-
-    this.engine = new WebGPUEngine(this.canvas, {
+    const gl = this.canvas.getContext('webgl2', {
+      alpha: true,
       antialias: true,
-      adaptToDeviceRatio: true,
-      stencil: true,
+      depth: true,
+      stencil: false,
+      premultipliedAlpha: false,
     });
-    await this.engine.initAsync();
-    this.engineInitialized = true;
-    this.baseHardwareScalingLevel = this.engine.getHardwareScalingLevel();
-    this.lastAppliedHardwareScalingLevel = this.baseHardwareScalingLevel;
-    if (this.disposed) {
-      this.safeDisposeEngine();
-      throw new Error('Viewport initialization was canceled');
+    if (!gl) {
+      throw new Error('WebGL2 is not available in this browser');
     }
-
-    this.scene = new Scene(this.engine);
-    this.scene.clearColor = new Color4(0, 0, 0, 0);
-    this.scene.shadowsEnabled = true;
-    this.scene.texturesEnabled = true;
-    this.scene.probesEnabled = true;
-    this.scene.renderTargetsEnabled = true;
-    // Preserve depth across later rendering groups so overlays (wireframe/selection halos)
-    // can respect occlusion from already rendered geometry.
-    this.scene.setRenderingAutoClearDepthStencil(1, false);
-    this.scene.setRenderingAutoClearDepthStencil(2, false);
-    this.scene.setRenderingAutoClearDepthStencil(3, false);
-    this.scene.setRenderingAutoClearDepthStencil(4, false);
-
-    this.plotRoot = new TransformNode('plots-root', this.scene);
-    this.lightRoot = new TransformNode('lights-root', this.scene);
-
-    this.camera = new ArcRotateCamera('camera', -Math.PI / 3, 1.1, 20, new Vector3(0, 0, 1.5), this.scene);
-    this.camera.upVector = new Vector3(0, 0, 1);
-    this.camera.lowerRadiusLimit = 1;
-    this.camera.upperRadiusLimit = 200;
-    this.camera.wheelPrecision = 50;
-    this.camera.attachControl(this.canvas, false);
-    if (this.camera.inputs.attached.pointers) {
-      const pointerInput = this.camera.inputs.attached.pointers as unknown as {
-        buttons?: number[];
-        panningMouseButton?: number;
-      };
-      pointerInput.buttons = [];
-      pointerInput.panningMouseButton = -1;
-    }
+    this.supportsFloatColorBuffers = Boolean(gl.getExtension('EXT_color_buffer_float'));
+    this.maxFragmentTextureUnits = gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS);
+    this.gl = gl;
+    this.canvas.tabIndex = 0;
     this.canvas.style.outline = 'none';
+    gl.enable(gl.DEPTH_TEST);
+    gl.enable(gl.CULL_FACE);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-    this.ambientLight = new HemisphericLight('ambient-hemi', new Vector3(0, 0, 1), this.scene);
-    this.ambientLight.intensity = 0.35;
-    this.ambientLight.diffuse = Color3.White();
-    this.ambientLight.specular = Color3.White().scale(0.15);
-    this.ambientLight.groundColor = new Color3(0.08, 0.08, 0.1);
-
-    this.directionalLight = new DirectionalLight('sun', new Vector3(-0.6, -0.4, -1).normalize(), this.scene);
-    this.directionalLight.position = new Vector3(10, 10, 18);
-    this.directionalLight.autoCalcShadowZBounds = true;
-    this.directionalLight.shadowMinZ = 0.1;
-    this.directionalLight.shadowMaxZ = 200;
-    this.ensureDirectionalShadowGenerator(2048, 0.6);
-
-    this.createGroundAndGrid();
-    this.createAxes(6);
+    this.renderPrograms = createPrograms(gl);
+    this.createFullscreenResources(gl);
     this.attachInputHandlers();
+    this.resizeViewport();
     this.exposeDebugHandles();
-
-    this.canvas.addEventListener('contextmenu', (event) => event.preventDefault());
-
-    this.engine.runRenderLoop(() => {
-      if (this.renderLoopFailed || this.disposed) {
-        return;
-      }
-      try {
-        const shouldRender = this.tickQualityMode();
-        if (!shouldRender) {
-          return;
-        }
-        this.syncCurveTubePixelWidth();
-        this.scene?.render();
-        this.handleQualityFrameRendered();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unknown Babylon render error';
-        this.renderLoopFailed = true;
-        useAppStore.getState().setStatusMessage(`Render loop error: ${message}`);
-        this.engine?.stopRenderLoop();
-        console.error('Scene render loop failed', error);
-      }
+    this.animationFrame = window.requestAnimationFrame(this.renderFrame);
+    useAppStore.getState().setRenderDiagnostics({
+      backend: 'webgl2',
+      webglReady: true,
     });
-
-    window.addEventListener('resize', this.handleResize);
-    useAppStore.getState().setRenderDiagnostics({ webgpuReady: true });
+    if (!this.supportsFloatColorBuffers) {
+      useAppStore.getState().setStatusMessage('WebGL2 float color buffers unavailable; using compatibility fallback');
+    }
   }
 
   dispose(): void {
     this.disposed = true;
-    this.engine?.stopRenderLoop();
-    window.removeEventListener('resize', this.handleResize);
-    this.pointerObserver && this.scene?.onPointerObservable.remove(this.pointerObserver);
-    this.pointerObserver = null;
-    this.disposeQualityPipeline();
-    this.qualityPreviewOverlayCanvas?.remove();
-    this.qualityPreviewOverlayCanvas = null;
-    this.qualityPreviewOverlayCtx = null;
-    for (const halo of this.implicitSelectionHalos.values()) {
-      halo.material?.dispose(false, true);
-      halo.dispose(false, true);
+    if (this.animationFrame) {
+      cancelAnimationFrame(this.animationFrame);
     }
-    this.implicitSelectionHalos.clear();
-    if (this.scene?.environmentTexture && this.scene.environmentTexture === this.environmentFallbackTexture) {
-      this.scene.environmentTexture = null;
+    if (this.pointerDownListener) {
+      this.canvas.removeEventListener('pointerdown', this.pointerDownListener);
     }
-    this.environmentFallbackTexture?.dispose();
-    this.environmentFallbackTexture = null;
-    this.interactiveReflectionFallbackKind = 'none';
-    this.interactiveReflectionFallbackEverUsable = false;
-    for (const visual of this.plotVisuals.values()) {
-      visual.root.dispose(false, true);
-      visual.wireframeLines.forEach((line) => line.dispose(false, true));
-      visual.transparentBackShell?.dispose(false, true);
+    if (this.pointerMoveListener) {
+      window.removeEventListener('pointermove', this.pointerMoveListener);
+    }
+    if (this.pointerUpListener) {
+      window.removeEventListener('pointerup', this.pointerUpListener);
+    }
+    if (this.wheelListener) {
+      this.canvas.removeEventListener('wheel', this.wheelListener);
+    }
+    if (this.resizeListener) {
+      window.removeEventListener('resize', this.resizeListener);
+    }
+    const gl = this.gl;
+    if (gl) {
+      for (const visual of this.plotVisuals.values()) {
+        this.disposePlotBuffers(visual.buffers);
+      }
+      this.deleteRenderTargets(gl);
+      this.deleteShadowResources(gl);
+      this.deleteProbeResources(gl);
+      deleteTexture(gl, this.environmentCubemap);
+      if (this.groundMesh) {
+        deleteVertexArray(gl, this.groundMesh.vao);
+        deleteBuffer(gl, this.groundMesh.indexBuffer);
+      }
+      deleteBuffer(gl, this.fullscreenBuffer);
+      deleteVertexArray(gl, this.fullscreenVao);
+      if (this.renderPrograms) {
+        deleteProgramBundle(gl, this.renderPrograms.mesh);
+        deleteProgramBundle(gl, this.renderPrograms.transparentAccum);
+        deleteProgramBundle(gl, this.renderPrograms.transparentReveal);
+        deleteProgramBundle(gl, this.renderPrograms.shadow);
+        deleteProgramBundle(gl, this.renderPrograms.transShadow);
+        deleteProgramBundle(gl, this.renderPrograms.pointShadow);
+        deleteProgramBundle(gl, this.renderPrograms.pointTransShadow);
+        deleteProgramBundle(gl, this.renderPrograms.line);
+        deleteProgramBundle(gl, this.renderPrograms.gizmo);
+        deleteProgramBundle(gl, this.renderPrograms.mask);
+        deleteProgramBundle(gl, this.renderPrograms.composite);
+        deleteProgramBundle(gl, this.renderPrograms.outline);
+      }
     }
     this.plotVisuals.clear();
-    for (const visual of this.pointLightVisuals.values()) {
-      visual.shadow?.dispose();
-      visual.pickShell.dispose(false, true);
-      visual.halo.dispose(false, true);
-      visual.starLines.forEach((line) => line.dispose(false, true));
-      visual.gizmo.dispose(false, true);
-      visual.light.dispose();
-    }
     this.pointLightVisuals.clear();
-    this.axesMeshes.forEach((m) => m.dispose(false, true));
-    this.axesMeshes = [];
-    this.xyGridLines.forEach((m) => m.dispose(false, true));
-    this.xyGridLines = [];
-    this.xyGridKey = '';
-    this.gridMesh?.dispose(false, true);
-    this.groundMesh?.dispose(false, true);
-    this.plotRoot?.dispose();
-    this.lightRoot?.dispose();
-    this.ambientLight?.dispose();
-    try {
-      this.scene?.dispose();
-    } catch (error) {
-      console.warn('Scene dispose failed', error);
+    if (typeof window !== 'undefined') {
+      delete (window as Window & { __plotRenderSceneController?: unknown }).__plotRenderSceneController;
     }
-    this.safeDisposeEngine();
-    this.scene = null;
-    this.engine = null;
-    this.engineInitialized = false;
-    this.lastAppliedHardwareScalingLevel = Number.NaN;
-    this.interactiveReflectionPath = 'none';
-    this.interactiveReflectionFallbackReason = null;
-    this.interactiveReflectionLastRefreshReason = null;
-    this.interactiveReflectionProbeRefreshCount = 0;
-    this.interactiveReflectionSource = 'none';
-    this.interactiveReflectionTexture = null;
-    this.interactiveReflectionFallbackKind = 'none';
-    this.interactiveReflectionFallbackEverUsable = false;
-    this.latestSnapshot = null;
-    this.lastCurveTubeCameraRadius = Number.NaN;
-    this.clearDebugHandles();
-    useAppStore.getState().setRenderDiagnostics({ webgpuReady: false });
-  }
-
-  private exposeDebugHandles(): void {
-    if (typeof window === 'undefined' || !import.meta.env.DEV) {
-      return;
-    }
-    const w = window as Window & {
-      __plotRenderSceneController?: SceneController;
-      __plotRenderScene?: Scene | null;
-      __plotRenderControllerId?: string;
-    };
-    w.__plotRenderSceneController = this;
-    w.__plotRenderScene = this.scene;
-    w.__plotRenderControllerId = this.debugInstanceId;
-  }
-
-  private clearDebugHandles(): void {
-    if (typeof window === 'undefined' || !import.meta.env.DEV) {
-      return;
-    }
-    const w = window as Window & {
-      __plotRenderSceneController?: SceneController;
-      __plotRenderScene?: Scene | null;
-      __plotRenderControllerId?: string;
-    };
-    if (w.__plotRenderSceneController === this) {
-      w.__plotRenderSceneController = undefined;
-    }
-    if (w.__plotRenderScene) {
-      w.__plotRenderScene = null;
-    }
-    if (w.__plotRenderControllerId === this.debugInstanceId) {
-      w.__plotRenderControllerId = undefined;
-    }
+    this.gl = null;
+    this.renderPrograms = null;
   }
 
   getApi(): ViewportApi {
     return {
-      exportPng: async (filename = '3dplot.png') => {
-        if (!this.canvas) return;
-        const waitResult = await this.waitForQualityReadyForExport(20_000);
-        const { render } = useAppStore.getState();
-        let exportCanvas =
-          render.mode === 'quality' ? (this.qualityBackends?.getActiveBackendExportCanvas() ?? this.canvas) : this.canvas;
-        if (exportCanvas !== this.canvas && canvasLooksBlank(exportCanvas)) {
-          exportCanvas = this.canvas;
-        }
-        if (exportCanvas === this.canvas && this.engine && this.camera) {
-          await exportScenePngViaRenderTarget(this.engine, this.camera, this.canvas, filename);
-        } else {
-          await exportCanvasPng(exportCanvas, filename);
-        }
-        if (render.mode === 'quality') {
-          if (waitResult === 'timeout') {
-            useAppStore.getState().setStatusMessage(
-              `Exported PNG before quality accumulation finished (${render.qualityCurrentSamples}/${render.qualitySamplesTarget} samples)`,
-            );
-          } else if (
-            waitResult === 'skipped'
-            && render.qualityEarlyExportBehavior === 'immediate'
-            && render.qualityCurrentSamples < render.qualitySamplesTarget
-          ) {
-            useAppStore.getState().setStatusMessage(
-              `Exported quality PNG early (${render.qualityCurrentSamples}/${render.qualitySamplesTarget} samples)`,
-            );
-          } else {
-            useAppStore.getState().setStatusMessage(`Exported quality PNG (${render.qualityCurrentSamples} samples)`);
-          }
-        } else {
-          useAppStore.getState().setStatusMessage('Exported PNG');
-        }
+      exportPng: async (filename = buildPngFileName()) => {
+        await exportCanvasPng(this.canvas, filename);
+        useAppStore.getState().setStatusMessage('Exported PNG');
       },
     };
   }
 
   resizeViewport(): void {
-    this.handleResize();
+    const gl = this.gl;
+    if (!gl) {
+      return;
+    }
+    const width = Math.max(1, Math.floor(this.canvas.clientWidth * window.devicePixelRatio));
+    const height = Math.max(1, Math.floor(this.canvas.clientHeight * window.devicePixelRatio));
+    if (this.canvas.width !== width || this.canvas.height !== height) {
+      this.canvas.width = width;
+      this.canvas.height = height;
+    }
+    gl.viewport(0, 0, width, height);
+    this.ensureRenderTargets(width, height);
   }
 
   sync(state: Pick<AppState, 'scene' | 'render' | 'objects' | 'selectedId' | 'plotJobs'>): void {
-    if (!this.scene || !this.camera || !this.directionalLight) {
+    if (!this.gl) {
       return;
     }
-
-    const snapshot = createRendererSceneSnapshot(state, this.camera);
+    const snapshot = createRendererSceneSnapshot(state, this.getCameraSnapshot());
     this.latestSnapshot = snapshot;
-
-    this.syncSceneSettings(snapshot);
-    this.syncLights(snapshot);
-    this.syncInteractiveReflectionSetup(snapshot);
+    this.syncBackground(snapshot);
+    this.syncPointLights(snapshot.objects);
     this.syncPlots(snapshot);
-    this.syncInteractiveReflectionProbe(snapshot);
-    this.syncSelection(snapshot.selectedId, snapshot.objects);
-
-    this.syncQualityRenderer(snapshot);
-
-    const sceneSignature = JSON.stringify({
-      objects: state.objects,
-      scene: state.scene,
-      render: {
-        mode: state.render.mode,
-        toneMapping: state.render.toneMapping,
-        exposure: state.render.exposure,
-        denoise: state.render.denoise,
-        qualityRenderer: state.render.qualityRenderer,
-        qualitySamplesTarget: state.render.qualitySamplesTarget,
-        qualityResolutionScale: state.render.qualityResolutionScale,
-        qualityMaxBounces: state.render.qualityMaxBounces,
-        qualityClampFireflies: state.render.qualityClampFireflies,
-      },
-      plotMeshVersions: state.objects
-        .filter((o): o is PlotObject => o.type === 'plot')
-        .map((o) => [o.id, state.plotJobs[o.id]?.meshVersion ?? 0]),
-    });
-    if (sceneSignature !== this.lastQualitySignature) {
-      this.resetQualityAccumulation({
-        resetHistory: state.render.mode === 'quality',
-        reason: 'scene_or_render_change',
-      });
-      this.lastQualitySignature = sceneSignature;
-    }
-
-    this.syncRenderDiagnostics(snapshot);
   }
 
-  private syncSceneSettings(
-    snapshot: RendererSceneSnapshot,
-  ): void {
-    if (!this.scene || !this.directionalLight || !this.groundMesh || !this.gridMesh) {
+  private readonly renderFrame = (timestamp: number) => {
+    if (this.disposed || !this.gl || !this.renderPrograms) {
       return;
     }
-    const { scene, render } = snapshot;
-    this.ensureDirectionalShadowGenerator(
-      clamp(Math.round(scene.shadow.shadowMapResolution), 256, 4096),
-      clamp01(scene.shadow.shadowSoftness),
-    );
-
-    if (this.ambientLight) {
-      const ambientColor = color3(scene.ambient.color);
-      this.ambientLight.intensity = scene.ambient.intensity;
-      this.ambientLight.diffuse = ambientColor;
-      this.ambientLight.specular = ambientColor.scale(0.15);
-      this.ambientLight.groundColor = ambientColor.scale(0.08);
-      this.ambientLight.setEnabled(scene.ambient.intensity > 0);
+    if (this.lastFrameTime > 0) {
+      const dt = Math.max(1, timestamp - this.lastFrameTime);
+      this.frameTimeMs = this.frameTimeMs * 0.85 + dt * 0.15;
+      this.fps = this.fps * 0.85 + (1000 / dt) * 0.15;
     }
+    this.lastFrameTime = timestamp;
 
-    const directionalColor = color3(scene.directional.color);
-    this.directionalLight.diffuse = directionalColor;
-    this.directionalLight.specular = directionalColor;
-    const dir = vec3(scene.directional.direction);
-    if (dir.lengthSquared() > 1e-8) {
-      dir.normalize();
-      this.directionalLight.direction.copyFrom(dir);
-      // Keep shadow/light position aligned with the direction vector relative to camera target.
-      const target = this.camera?.target ?? Vector3.ZeroReadOnly;
-      this.directionalLight.position.copyFrom(target.subtract(dir.scale(24)));
-    }
-    // Keep the directional shadow frustum tight to actual receivers/casters instead of
-    // hidden helper extents, which wastes shadow texels and causes visible banding.
-    const graphBounds = scene.defaultGraphBounds;
-    const graphSpanZ = Math.abs(graphBounds.max.z - graphBounds.min.z);
-    const shadowFrustumSize = resolveDirectionalShadowFrustumSize(scene);
-    this.directionalLight.shadowFrustumSize = shadowFrustumSize;
-    this.directionalLight.shadowMinZ = 0.1;
-    this.directionalLight.shadowMaxZ = Math.max(40, graphSpanZ * 6, shadowFrustumSize * 2);
-    this.directionalLight.shadowOrthoScale = 0.2;
-    const directionalShadowsActive = scene.directional.castShadows && scene.shadow.directionalShadowEnabled;
-    this.directionalLight.intensity = scene.directional.intensity;
-    this.directionalLight.setEnabled(scene.directional.intensity > 0 || scene.directional.castShadows);
-    this.directionalLight.shadowEnabled = directionalShadowsActive;
-    if (this.directionalShadow) {
-      const shadowMap = this.directionalShadow.getShadowMap();
-      if (shadowMap) {
-        shadowMap.refreshRate = directionalShadowsActive ? 1 : 0;
-      }
-    }
+    this.updateCameraMatrices();
+    this.renderScene();
+    this.animationFrame = window.requestAnimationFrame(this.renderFrame);
+  };
 
-    const clear = scene.backgroundMode === 'solid' ? scene.backgroundColor : scene.gradientBottomColor;
-    this.scene.clearColor = Color4.FromColor3(color3(clear), 0);
-    this.canvas.style.background =
-      scene.backgroundMode === 'solid'
-        ? scene.backgroundColor
-        : `linear-gradient(${scene.gradientTopColor}, ${scene.gradientBottomColor})`;
-    const ipc = this.scene.imageProcessingConfiguration;
-    ipc.isEnabled = true;
-    ipc.exposure = clamp(render.exposure, 0.01, 10);
-    ipc.toneMappingEnabled = render.toneMapping !== 'none';
-    ipc.toneMappingType =
-      render.toneMapping === 'aces'
-        ? ImageProcessingConfiguration.TONEMAPPING_ACES
-        : ImageProcessingConfiguration.TONEMAPPING_STANDARD;
-
-    this.groundMesh.isVisible = scene.groundPlaneVisible;
-    this.groundMesh.receiveShadows = directionalShadowsActive;
-    // Babylon ground geometry is created in local XZ; in our z-up app that means
-    // we rotate it into XY and scale X/Z to keep it square.
-    this.groundMesh.scaling = new Vector3(scene.groundPlaneSize, 1, scene.groundPlaneSize);
-    // GridMaterial on a rotated ground is unreliable for an XY grid in this z-up scene.
-    // We render explicit XY grid line meshes instead and keep this mesh hidden.
-    this.gridMesh.isVisible = false;
-    this.gridMesh.scaling = new Vector3(scene.gridExtent, 1, scene.gridExtent);
-    this.syncXYGridLines(snapshot);
-    const groundMaterial = this.groundMesh.material;
-    if (groundMaterial instanceof PBRMaterial) {
-      groundMaterial.albedoColor = color3(scene.groundPlaneColor);
-      groundMaterial.roughness = clamp01(scene.groundPlaneRoughness);
-      groundMaterial.metallic = scene.groundPlaneReflective ? 0.05 : 0;
-      groundMaterial.reflectionTexture = scene.groundPlaneReflective
-        ? (this.scene.environmentTexture ?? null)
-        : null;
-      if (groundMaterial.reflectionTexture) {
-        groundMaterial.reflectionTexture.level = scene.groundPlaneReflective ? 0.6 : 0;
-      }
+  private renderScene(): void {
+    const gl = this.gl!;
+    const snapshot = this.latestSnapshot;
+    const programs = this.renderPrograms!;
+    if (!snapshot) {
+      clearDefaultFramebuffer(gl, [0, 0, 0, 0]);
+      return;
     }
-
-    const gridMaterial = this.gridMesh.material;
-    if (gridMaterial instanceof GridMaterial) {
-      // Keep grid readable when the ground plane is hidden.
-      gridMaterial.mainColor = scene.groundPlaneVisible
-        ? color3(scene.groundPlaneColor)
-        : new Color3(0.08, 0.1, 0.14);
-      gridMaterial.lineColor = scene.groundPlaneVisible
-        ? new Color3(0.15, 0.2, 0.3)
-        : new Color3(0.72, 0.8, 0.95);
-      gridMaterial.gridRatio = Math.max(0.05, scene.gridSpacing);
-      gridMaterial.opacity = clamp01(scene.gridLineOpacity);
-      gridMaterial.majorUnitFrequency = 5;
-      gridMaterial.minorUnitVisibility = scene.groundPlaneVisible ? 0.3 : 0.45;
-    }
-
-    const axesVisible = scene.axesVisible;
-    if (this.axesMeshes.length === 0 || Math.abs(this.axesMeshes[0].getBoundingInfo().boundingBox.extendSize.x - scene.axesLength / 2) > 1e-6) {
-      this.createAxes(scene.axesLength);
-    }
-    this.axesMeshes.forEach((m) => {
-      m.isVisible = axesVisible;
-    });
+    this.ensureRenderTargets(this.canvas.width, this.canvas.height);
+    this.ensureShadowResources(snapshot.scene.shadow.shadowMapResolution);
+    this.ensureEnvironmentCubemap(snapshot);
+    this.probeResources.frameCounter += 1;
+    const pointLights = this.collectRenderablePointLights(snapshot);
+    const pointShadowLights = this.collectActivePointShadowLights(snapshot, pointLights);
+    this.renderDirectionalShadowMaps(snapshot);
+    this.renderPointShadowMaps(snapshot, pointShadowLights);
+    this.renderOpaqueScene(snapshot, pointLights, pointShadowLights);
+    this.renderTransparentScene(snapshot, pointLights, pointShadowLights);
+    this.renderSceneAxes(snapshot);
+    this.compositeScene(snapshot);
+    this.renderSelectionMask(snapshot);
+    this.renderSelectionOutline();
+    this.renderSelectedFeatureEdges(snapshot);
+    this.renderOverlayLines(snapshot);
+    this.renderPointLightGizmos(snapshot, programs.gizmo);
+    this.syncRenderDiagnostics(snapshot, pointShadowLights);
   }
 
-  private syncLights(
-    snapshot: RendererSceneSnapshot,
-  ): void {
-    if (!this.scene) return;
+  private syncBackground(snapshot: RendererSceneSnapshot): void {
+    const scene = snapshot.scene;
+    this.canvas.style.background = scene.backgroundMode === 'solid'
+      ? scene.backgroundColor
+      : `linear-gradient(${scene.gradientTopColor}, ${scene.gradientBottomColor})`;
+  }
 
-    const { scene, render, pointLights, selectedId } = snapshot;
-    const pointLightObjects = pointLights.map((entry) => entry.light);
-    const seen = new Set<string>();
-    const shadowSettings = scene.shadow;
-    const allowPointShadows =
-      shadowSettings.pointShadowMode === 'on'
-      || (shadowSettings.pointShadowMode === 'auto' && render.interactiveQuality !== 'performance');
-    const pointShadowLimit = allowPointShadows ? clamp(Math.round(shadowSettings.pointShadowMaxLights), 0, 4) : 0;
-    const pointShadowCandidates = pointLightObjects
-      .filter((light) => light.castShadows && light.intensity > 0)
-      .sort((a, b) => {
-        if (a.id === selectedId) return -1;
-        if (b.id === selectedId) return 1;
-        return b.intensity - a.intensity;
-      })
-      .slice(0, pointShadowLimit);
-    const pointShadowIds = new Set(pointShadowCandidates.map((light) => light.id));
-
-    pointLightObjects.forEach((lightObj) => {
-      seen.add(lightObj.id);
-      let visual = this.pointLightVisuals.get(lightObj.id);
-      if (!visual) {
-        const light = new PointLight(`point-${lightObj.id}`, vec3(lightObj.position), this.scene!);
-        const gizmo = MeshBuilder.CreateSphere(`gizmo-${lightObj.id}`, { diameter: 0.16, segments: 12 }, this.scene!);
-        gizmo.parent = this.lightRoot;
-        gizmo.metadata = { selectableId: lightObj.id, selectableType: 'point_light' };
-        gizmo.isPickable = true;
-        const mat = new StandardMaterial(`gizmo-mat-${lightObj.id}`, this.scene!);
-        mat.emissiveColor = new Color3(1, 0.8, 0.4);
-        mat.specularColor = Color3.Black();
-        mat.disableLighting = true;
-        gizmo.material = mat;
-
-        const pickShell = MeshBuilder.CreateSphere(`gizmo-pick-${lightObj.id}`, { diameter: 1.1, segments: 6 }, this.scene!);
-        pickShell.parent = gizmo;
-        pickShell.metadata = { selectableId: lightObj.id, selectableType: 'point_light' };
-        pickShell.isPickable = true;
-        pickShell.visibility = 0.001;
-        pickShell.renderingGroupId = 2;
-        const pickMat = new StandardMaterial(`gizmo-pick-mat-${lightObj.id}`, this.scene!);
-        pickMat.alpha = 0;
-        pickMat.disableLighting = true;
-        pickMat.specularColor = Color3.Black();
-        pickShell.material = pickMat;
-
-        const halo = MeshBuilder.CreateSphere(`gizmo-halo-${lightObj.id}`, { diameter: 0.38, segments: 8 }, this.scene!);
-        halo.parent = gizmo;
-        halo.isPickable = false;
-        halo.renderingGroupId = 1;
-        const haloMat = new StandardMaterial(`gizmo-halo-mat-${lightObj.id}`, this.scene!);
-        haloMat.emissiveColor = new Color3(1, 0.8, 0.4);
-        haloMat.specularColor = Color3.Black();
-        haloMat.alpha = 0.28;
-        haloMat.wireframe = true;
-        haloMat.disableLighting = true;
-        halo.material = haloMat;
-
-        const starColor = new Color3(1, 0.8, 0.4);
-        const starLines: LinesMesh[] = [];
-        const lineSegments: Vector3[][] = [
-          [new Vector3(-0.34, 0, 0), new Vector3(0.34, 0, 0)],
-          [new Vector3(0, -0.34, 0), new Vector3(0, 0.34, 0)],
-          [new Vector3(0, 0, -0.34), new Vector3(0, 0, 0.34)],
-        ];
-        lineSegments.forEach((points, idx) => {
-          const line = MeshBuilder.CreateLines(`gizmo-star-${lightObj.id}-${idx}`, { points }, this.scene!);
-          line.parent = gizmo;
-          line.isPickable = false;
-          line.color = starColor.clone();
-          line.alpha = 0.9;
-          starLines.push(line);
-        });
-
-        visual = {
-          light,
-          gizmo,
-          pickShell,
-          halo,
-          starLines,
-          shadow: null,
-          shadowEnabled: false,
-        };
-        this.pointLightVisuals.set(lightObj.id, visual);
-      }
-
-      // Light visibility only controls viewport gizmos. Emission remains active.
-      visual.gizmo.isVisible = lightObj.visible;
-      visual.pickShell.isVisible = lightObj.visible;
-      visual.halo.isVisible = lightObj.visible;
-      visual.starLines.forEach((line) => {
-        line.isVisible = lightObj.visible;
-      });
-      visual.light.position.copyFrom(vec3(lightObj.position));
-      visual.gizmo.position.copyFrom(vec3(lightObj.position));
-      const pointLightColor = color3(lightObj.color);
-      visual.light.diffuse = pointLightColor;
-      visual.light.specular = pointLightColor;
-      visual.light.range = lightObj.range;
-      visual.light.shadowMinZ = 0.1;
-      visual.light.shadowMaxZ = Math.max(2, lightObj.range);
-      const coreMat = visual.gizmo.material as StandardMaterial | null;
-      if (coreMat) {
-        coreMat.emissiveColor = color3(lightObj.color).scale(0.9).add(new Color3(0.1, 0.1, 0.1));
-      }
-      const haloMat = visual.halo.material as StandardMaterial | null;
-      if (haloMat) {
-        haloMat.emissiveColor = color3(lightObj.color);
-      }
-      visual.starLines.forEach((line) => {
-        line.color = color3(lightObj.color);
-      });
-
-      const shouldUseShadow =
-        pointShadowIds.has(lightObj.id)
-        && shadowSettings.pointShadowMode !== 'off'
-        && this.pointShadowCapability !== 'unavailable';
-
-      if (shouldUseShadow && !visual.shadow) {
-        try {
-          visual.shadow = new ShadowGenerator(
-            clamp(Math.round(shadowSettings.shadowMapResolution), 256, 4096),
-            visual.light,
-          );
-          this.configureShadowGenerator(visual.shadow, clamp01(shadowSettings.shadowSoftness));
-          this.pointShadowCapability = 'available';
-        } catch (error) {
-          this.pointShadowCapability = 'unavailable';
-          visual.shadow?.dispose();
-          visual.shadow = null;
-          useAppStore.getState().setStatusMessage('Point-light shadows unavailable on this WebGPU/browser configuration');
-          console.warn('Point-light shadow generator creation failed', error);
-        }
-      }
-      if (shouldUseShadow && visual.shadow) {
-        const desiredSize = clamp(Math.round(shadowSettings.shadowMapResolution), 256, 4096);
-        const currentSize = visual.shadow.getShadowMap()?.getSize()?.width;
-        if (currentSize !== desiredSize) {
-          visual.shadow.dispose();
-          visual.shadow = new ShadowGenerator(desiredSize, visual.light);
-        }
-      }
-      if (!shouldUseShadow && visual.shadow) {
-        visual.shadow.dispose();
-        visual.shadow = null;
-      }
-      if (visual.shadow) {
-        const map = visual.shadow.getShadowMap();
-        if (map) {
-          map.refreshRate = shouldUseShadow ? 1 : 0;
-          map.renderList = map.renderList ?? [];
-          map.renderList.length = 0;
-        }
-        this.configureShadowGenerator(visual.shadow, clamp01(shadowSettings.shadowSoftness));
-      }
-      visual.light.intensity = lightObj.intensity;
-      visual.light.setEnabled(lightObj.intensity > 0);
-      visual.light.shadowEnabled = Boolean(visual.shadow && shouldUseShadow);
-      visual.shadowEnabled = Boolean(visual.shadow && shouldUseShadow);
-    });
-
-    for (const [id, visual] of this.pointLightVisuals.entries()) {
-      if (!seen.has(id)) {
-        visual.shadow?.dispose();
-        visual.pickShell.dispose(false, true);
-        visual.halo.dispose(false, true);
-        visual.starLines.forEach((line) => line.dispose(false, true));
-        visual.gizmo.dispose(false, true);
-        visual.light.dispose();
-        this.pointLightVisuals.delete(id);
+  private syncPointLights(objects: ReadonlyArray<SceneObject>): void {
+    this.pointLightVisuals.clear();
+    for (const object of objects) {
+      if (object.type === 'point_light') {
+        this.pointLightVisuals.set(object.id, { light: object });
       }
     }
   }
 
-  private syncPlots(
+  private collectRenderablePointLights(snapshot: RendererSceneSnapshot): PointLightObject[] {
+    return snapshot.pointLights
+      .map((entry) => entry.light)
+      .filter((light) => shouldPointLightContribute(light))
+      .slice(0, MAX_POINT_LIGHTS);
+  }
+
+  private collectActivePointShadowLights(
     snapshot: RendererSceneSnapshot,
-  ): void {
-    if (!this.scene) return;
-    const { scene, plotJobs, plots } = snapshot;
-    const seen = new Set<string>();
-    const directionalShadowsActive = Boolean(
-      this.directionalShadow && scene.directional.castShadows && scene.shadow.directionalShadowEnabled,
+    pointLights: ReadonlyArray<PointLightObject>,
+  ): ActivePointShadowLight[] {
+    const supportedShadowLights = Math.min(MAX_POINT_SHADOW_LIGHTS, this.supportedPointShadowLightCount());
+    const requestedLights = Math.min(
+      supportedShadowLights,
+      resolveInteractivePointShadowBudget(
+        snapshot.scene.shadow.pointShadowMode,
+        snapshot.scene.shadow.pointShadowMaxLights,
+        snapshot.render.interactiveQuality,
+      ),
     );
-    if (this.directionalShadow) {
-      const shadowMap = this.directionalShadow.getShadowMap();
-      if (shadowMap) {
-        shadowMap.renderList = shadowMap.renderList ?? [];
-        shadowMap.renderList.length = 0;
-      }
+    if (requestedLights <= 0) {
+      return [];
     }
-    for (const pointLight of this.pointLightVisuals.values()) {
-      if (pointLight.shadow) {
-        const map = pointLight.shadow.getShadowMap();
-        if (map) {
-          map.renderList = map.renderList ?? [];
-          map.renderList.length = 0;
-        }
-      }
-    }
-
-    for (const plotSnapshot of plots) {
-      const { plot } = plotSnapshot;
-      seen.add(plot.id);
-      const geometryKey = buildGeometryKey(plot, plotSnapshot.meshVersion);
-      const oldHash = this.meshHashCache.get(plot.id);
-
-      let visual = this.plotVisuals.get(plot.id);
-      const runtimeMesh = getRuntimePlotMesh(plot.id);
-      const waitingForWorkerMesh = Boolean(
-        !runtimeMesh
-        && visual
-        && plot.equation.source.parseStatus === 'ok'
-        && isWorkerMeshPending(plotJobs[plot.id]),
-      );
-      if (waitingForWorkerMesh && oldHash !== geometryKey && visual) {
-        // Keep the previous mesh on screen until preview/final worker output arrives.
-        this.syncPlotVisualState(visual, plotSnapshot, directionalShadowsActive);
+    const activeLights: ActivePointShadowLight[] = [];
+    for (let index = 0; index < pointLights.length; index += 1) {
+      const light = pointLights[index];
+      if (!light.castShadows) {
         continue;
       }
-      if (!visual || oldHash !== geometryKey) {
-        this.disposeImplicitSelectionHalo(plot.id);
-        visual?.wireframeLines.forEach((line) => line.dispose(false, true));
-        visual?.transparentBackShell?.dispose(false, true);
-        visual?.root.dispose(false, true);
-        try {
-          visual = this.buildPlotVisual(plot);
-          this.plotVisuals.set(plot.id, visual);
-          this.meshHashCache.set(plot.id, geometryKey);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Plot compile error';
-          useAppStore.getState().setStatusMessage(message);
+      activeLights.push({
+        light,
+        lightIndex: index,
+        shadowSlot: activeLights.length,
+      });
+      if (activeLights.length >= requestedLights) {
+        break;
+      }
+    }
+    return activeLights;
+  }
+
+  private supportedPointShadowLightCount(): number {
+    const availableUnits = Math.max(0, this.maxFragmentTextureUnits - BASE_FRAGMENT_TEXTURE_UNITS);
+    return Math.max(0, Math.min(MAX_POINT_SHADOW_LIGHTS, Math.floor(availableUnits / POINT_SHADOW_TEXTURE_UNIT_STRIDE)));
+  }
+
+  private directionalShadowsEnabled(scene: RendererSceneSnapshot['scene']): boolean {
+    return scene.shadow.directionalShadowEnabled && scene.directional.castShadows;
+  }
+
+  private syncPlots(snapshot: RendererSceneSnapshot): void {
+    const seen = new Set<string>();
+    for (const plotSnapshot of snapshot.plots) {
+      const { plot, meshVersion } = plotSnapshot;
+      seen.add(plot.id);
+      const existing = this.plotVisuals.get(plot.id);
+      if (!existing || existing.meshVersion !== meshVersion) {
+        if (existing) {
+          this.disposePlotBuffers(existing.buffers);
+        }
+        const geometry = buildPlotGeometry(plot);
+        const buffers = this.createPlotBuffers(geometry);
+        this.plotVisuals.set(plot.id, {
+          plotId: plot.id,
+          geometry,
+          buffers,
+          meshVersion,
+        });
+      }
+    }
+    for (const [plotId, visual] of this.plotVisuals.entries()) {
+      if (!seen.has(plotId)) {
+        this.disposePlotBuffers(visual.buffers);
+        this.plotVisuals.delete(plotId);
+      }
+    }
+  }
+
+  private createPlotBuffers(geometry: PlotGeometry): GpuMeshBuffers {
+    const gl = this.gl!;
+    const vao = gl.createVertexArray();
+    const positionBuffer = gl.createBuffer();
+    const normalBuffer = gl.createBuffer();
+    const indexBuffer = gl.createBuffer();
+    if (!vao || !positionBuffer || !normalBuffer || !indexBuffer) {
+      throw new Error('Failed to allocate mesh buffers');
+    }
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, geometry.positions, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, normalBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, geometry.normals, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, geometry.indices, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    gl.deleteBuffer(positionBuffer);
+    gl.deleteBuffer(normalBuffer);
+    return {
+      vao,
+      indexBuffer,
+      indexCount: geometry.indices.length,
+      boundaryLines: createLineBuffer(gl, geometry.boundaryEdges, gl.LINES),
+      featureLines: createLineBuffer(gl, geometry.featureEdges, gl.LINES),
+      wireLines: geometry.wireLines.map((line) => createLineBuffer(gl, line, gl.LINE_STRIP)).filter((line): line is GpuLineBuffer => !!line),
+    };
+  }
+
+  private disposePlotBuffers(buffers: GpuMeshBuffers): void {
+    const gl = this.gl;
+    if (!gl) {
+      return;
+    }
+    deleteVertexArray(gl, buffers.vao);
+    deleteBuffer(gl, buffers.indexBuffer);
+    deleteLineBuffer(gl, buffers.boundaryLines);
+    deleteLineBuffer(gl, buffers.featureLines);
+    buffers.wireLines.forEach((line) => deleteLineBuffer(gl, line));
+  }
+
+  private renderDirectionalShadowMaps(snapshot: RendererSceneSnapshot): void {
+    const gl = this.gl!;
+    const scene = snapshot.scene;
+    if (!this.directionalShadowsEnabled(scene)) {
+      return;
+    }
+    const shadow = this.shadowResources;
+    const shadowSize = shadow.size;
+    const lightDirection = normalizeVec3(scene.directional.direction, { x: -0.6, y: -0.4, z: -1 });
+    const cameraTarget = this.camera.target;
+    const lightDistance = 24;
+    const lightPosition = vec3.fromValues(
+      cameraTarget[0] - lightDirection.x * lightDistance,
+      cameraTarget[1] - lightDirection.y * lightDistance,
+      cameraTarget[2] - lightDirection.z * lightDistance,
+    );
+    mat4.lookAt(this.shadowViewMatrix, lightPosition, cameraTarget, vec3.fromValues(0, 0, 1));
+    const frustumSize = resolveDirectionalShadowFrustumSize(scene);
+    mat4.ortho(
+      this.shadowProjectionMatrix,
+      -frustumSize,
+      frustumSize,
+      -frustumSize,
+      frustumSize,
+      0.1,
+      Math.max(60, frustumSize * 4),
+    );
+    mat4.multiply(this.lightViewProjection, this.shadowProjectionMatrix, this.shadowViewMatrix);
+
+    gl.viewport(0, 0, shadowSize, shadowSize);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, shadow.directionalFramebuffer);
+    gl.colorMask(false, false, false, false);
+    gl.clearDepth(1);
+    gl.clear(gl.DEPTH_BUFFER_BIT);
+    gl.disable(gl.CULL_FACE);
+    gl.useProgram(this.renderPrograms!.shadow.program);
+    for (const plotSnapshot of snapshot.plots) {
+      if (classifyInteractiveShadowMode(plotSnapshot.plot) === 'none') {
+        continue;
+      }
+      const opacity = clamp01(plotSnapshot.plot.material.opacity);
+      if (opacity < 0.999) {
+        continue;
+      }
+      this.drawShadowMeshWithMatrix(plotSnapshot.plot, this.renderPrograms!.shadow, this.lightViewProjection);
+    }
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, shadow.directionalTransFramebuffer);
+    gl.colorMask(true, true, true, true);
+    gl.clearColor(1, 1, 1, 1);
+    gl.clearDepth(1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.useProgram(this.renderPrograms!.transShadow.program);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ZERO, gl.SRC_COLOR);
+    gl.blendEquation(gl.FUNC_ADD);
+    gl.disable(gl.CULL_FACE);
+    for (const plotSnapshot of snapshot.plots) {
+      const opacity = clamp01(plotSnapshot.plot.material.opacity);
+      if (opacity >= 0.999 || !plotSnapshot.plot.visible) {
+        continue;
+      }
+      this.drawTransparentShadowMeshWithMatrix(plotSnapshot.plot, this.renderPrograms!.transShadow, this.lightViewProjection);
+    }
+    gl.disable(gl.BLEND);
+    gl.enable(gl.CULL_FACE);
+    gl.cullFace(gl.BACK);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+  }
+
+  private renderPointShadowMaps(
+    snapshot: RendererSceneSnapshot,
+    pointShadowLights: ReadonlyArray<ActivePointShadowLight>,
+  ): void {
+    const gl = this.gl!;
+    const shadow = this.shadowResources;
+    if (pointShadowLights.length === 0 || !shadow.pointFramebuffer || !shadow.pointTransFramebuffer) {
+      return;
+    }
+
+    gl.viewport(0, 0, shadow.size, shadow.size);
+    gl.disable(gl.CULL_FACE);
+    for (const activeLight of pointShadowLights) {
+      const shadowRange = Math.max(activeLight.light.range, POINT_SHADOW_NEAR + 0.01);
+      const lightPosition = vec3.fromValues(
+        activeLight.light.position.x,
+        activeLight.light.position.y,
+        activeLight.light.position.z,
+      );
+      mat4.perspective(this.pointShadowProjectionMatrix, Math.PI / 2, 1, POINT_SHADOW_NEAR, shadowRange);
+
+      gl.useProgram(this.renderPrograms!.pointShadow.program);
+      gl.uniform3f(
+        this.renderPrograms!.pointShadow.uniforms.u_lightPosition,
+        activeLight.light.position.x,
+        activeLight.light.position.y,
+        activeLight.light.position.z,
+      );
+      gl.uniform1f(this.renderPrograms!.pointShadow.uniforms.u_lightFar, shadowRange);
+      gl.colorMask(false, false, false, false);
+
+      for (let face = 0; face < POINT_SHADOW_FACE_VECTORS.length; face += 1) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, shadow.pointFramebuffer);
+        gl.framebufferTexture2D(
+          gl.FRAMEBUFFER,
+          gl.DEPTH_ATTACHMENT,
+          gl.TEXTURE_CUBE_MAP_POSITIVE_X + face,
+          shadow.pointDepthCubemaps[activeLight.shadowSlot],
+          0,
+        );
+        gl.drawBuffers([gl.NONE]);
+        gl.clearDepth(1);
+        gl.clear(gl.DEPTH_BUFFER_BIT);
+        const faceTarget = vec3.add(vec3.create(), lightPosition, POINT_SHADOW_FACE_VECTORS[face].target);
+        mat4.lookAt(this.pointShadowViewMatrix, lightPosition, faceTarget, POINT_SHADOW_FACE_VECTORS[face].up);
+        mat4.multiply(this.pointShadowViewProjection, this.pointShadowProjectionMatrix, this.pointShadowViewMatrix);
+        for (const plotSnapshot of snapshot.plots) {
+          if (classifyInteractiveShadowMode(plotSnapshot.plot) !== 'solid') {
+            continue;
+          }
+          this.drawPointShadowMesh(
+            plotSnapshot.plot,
+            this.renderPrograms!.pointShadow,
+            this.pointShadowViewProjection,
+            activeLight.light,
+            shadowRange,
+          );
+        }
+      }
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, shadow.pointTransFramebuffer);
+      gl.useProgram(this.renderPrograms!.pointTransShadow.program);
+      gl.uniform3f(
+        this.renderPrograms!.pointTransShadow.uniforms.u_lightPosition,
+        activeLight.light.position.x,
+        activeLight.light.position.y,
+        activeLight.light.position.z,
+      );
+      gl.uniform1f(this.renderPrograms!.pointTransShadow.uniforms.u_lightFar, shadowRange);
+      gl.colorMask(true, true, true, true);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ZERO, gl.SRC_COLOR);
+      gl.blendEquation(gl.FUNC_ADD);
+
+      for (let face = 0; face < POINT_SHADOW_FACE_VECTORS.length; face += 1) {
+        gl.framebufferTexture2D(
+          gl.FRAMEBUFFER,
+          gl.COLOR_ATTACHMENT0,
+          gl.TEXTURE_CUBE_MAP_POSITIVE_X + face,
+          shadow.pointTransColorCubemaps[activeLight.shadowSlot],
+          0,
+        );
+        gl.framebufferTexture2D(
+          gl.FRAMEBUFFER,
+          gl.DEPTH_ATTACHMENT,
+          gl.TEXTURE_CUBE_MAP_POSITIVE_X + face,
+          shadow.pointTransDepthCubemaps[activeLight.shadowSlot],
+          0,
+        );
+        gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+        gl.clearColor(1, 1, 1, 1);
+        gl.clearDepth(1);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+        const faceTarget = vec3.add(vec3.create(), lightPosition, POINT_SHADOW_FACE_VECTORS[face].target);
+        mat4.lookAt(this.pointShadowViewMatrix, lightPosition, faceTarget, POINT_SHADOW_FACE_VECTORS[face].up);
+        mat4.multiply(this.pointShadowViewProjection, this.pointShadowProjectionMatrix, this.pointShadowViewMatrix);
+        for (const plotSnapshot of snapshot.plots) {
+          if (classifyInteractiveShadowMode(plotSnapshot.plot) !== 'attenuated') {
+            continue;
+          }
+          this.drawPointTransparentShadowMesh(
+            plotSnapshot.plot,
+            this.renderPrograms!.pointTransShadow,
+            this.pointShadowViewProjection,
+            activeLight.light,
+            shadowRange,
+          );
+        }
+      }
+      gl.disable(gl.BLEND);
+    }
+
+    gl.enable(gl.CULL_FACE);
+    gl.cullFace(gl.BACK);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+  }
+
+  private drawShadowMeshWithMatrix(plot: PlotObject, program: ProgramBundle, lightMatrix: mat4): void {
+    const gl = this.gl!;
+    const visual = this.plotVisuals.get(plot.id);
+    if (!visual || !visual.buffers.vao || visual.buffers.indexCount <= 0) {
+      return;
+    }
+    const model = mat4.fromTranslation(mat4.create(), vec3.fromValues(
+      plot.transform.position.x,
+      plot.transform.position.y,
+      plot.transform.position.z,
+    ));
+    gl.uniformMatrix4fv(program.uniforms.u_model, false, model);
+    gl.uniformMatrix4fv(program.uniforms.u_lightMatrix, false, lightMatrix);
+    gl.bindVertexArray(visual.buffers.vao);
+    gl.drawElements(gl.TRIANGLES, visual.buffers.indexCount, gl.UNSIGNED_INT, 0);
+    gl.bindVertexArray(null);
+  }
+
+  private drawTransparentShadowMeshWithMatrix(plot: PlotObject, program: ProgramBundle, lightMatrix: mat4): void {
+    const gl = this.gl!;
+    const visual = this.plotVisuals.get(plot.id);
+    if (!visual || !visual.buffers.vao || visual.buffers.indexCount <= 0) {
+      return;
+    }
+    const model = mat4.fromTranslation(mat4.create(), vec3.fromValues(
+      plot.transform.position.x,
+      plot.transform.position.y,
+      plot.transform.position.z,
+    ));
+    gl.uniformMatrix4fv(program.uniforms.u_model, false, model);
+    gl.uniformMatrix4fv(program.uniforms.u_lightMatrix, false, lightMatrix);
+    gl.uniform3fv(program.uniforms.u_baseColor, hexToRgb(plot.material.baseColor));
+    gl.uniform1f(program.uniforms.u_opacity, clamp01(plot.material.opacity));
+    gl.bindVertexArray(visual.buffers.vao);
+    gl.drawElements(gl.TRIANGLES, visual.buffers.indexCount, gl.UNSIGNED_INT, 0);
+    gl.bindVertexArray(null);
+  }
+
+  private drawPointShadowMesh(
+    plot: PlotObject,
+    program: ProgramBundle,
+    lightMatrix: mat4,
+    light: PointLightObject,
+    lightFar: number,
+  ): void {
+    const gl = this.gl!;
+    const visual = this.plotVisuals.get(plot.id);
+    if (!visual || !visual.buffers.vao || visual.buffers.indexCount <= 0) {
+      return;
+    }
+    const model = mat4.fromTranslation(mat4.create(), vec3.fromValues(
+      plot.transform.position.x,
+      plot.transform.position.y,
+      plot.transform.position.z,
+    ));
+    gl.uniformMatrix4fv(program.uniforms.u_model, false, model);
+    gl.uniformMatrix4fv(program.uniforms.u_lightMatrix, false, lightMatrix);
+    gl.uniform3f(program.uniforms.u_lightPosition, light.position.x, light.position.y, light.position.z);
+    gl.uniform1f(program.uniforms.u_lightFar, lightFar);
+    gl.bindVertexArray(visual.buffers.vao);
+    gl.drawElements(gl.TRIANGLES, visual.buffers.indexCount, gl.UNSIGNED_INT, 0);
+    gl.bindVertexArray(null);
+  }
+
+  private drawPointTransparentShadowMesh(
+    plot: PlotObject,
+    program: ProgramBundle,
+    lightMatrix: mat4,
+    light: PointLightObject,
+    lightFar: number,
+  ): void {
+    const gl = this.gl!;
+    const visual = this.plotVisuals.get(plot.id);
+    if (!visual || !visual.buffers.vao || visual.buffers.indexCount <= 0) {
+      return;
+    }
+    const model = mat4.fromTranslation(mat4.create(), vec3.fromValues(
+      plot.transform.position.x,
+      plot.transform.position.y,
+      plot.transform.position.z,
+    ));
+    gl.uniformMatrix4fv(program.uniforms.u_model, false, model);
+    gl.uniformMatrix4fv(program.uniforms.u_lightMatrix, false, lightMatrix);
+    gl.uniform3f(program.uniforms.u_lightPosition, light.position.x, light.position.y, light.position.z);
+    gl.uniform1f(program.uniforms.u_lightFar, lightFar);
+    gl.uniform3fv(program.uniforms.u_baseColor, hexToRgb(plot.material.baseColor));
+    gl.uniform1f(program.uniforms.u_opacity, clamp01(plot.material.opacity));
+    gl.bindVertexArray(visual.buffers.vao);
+    gl.drawElements(gl.TRIANGLES, visual.buffers.indexCount, gl.UNSIGNED_INT, 0);
+    gl.bindVertexArray(null);
+  }
+
+  private renderOpaqueScene(
+    snapshot: RendererSceneSnapshot,
+    pointLights: ReadonlyArray<PointLightObject>,
+    pointShadowLights: ReadonlyArray<ActivePointShadowLight>,
+  ): void {
+    const gl = this.gl!;
+    const targets = this.renderTargets;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, targets.sceneFramebuffer);
+    gl.viewport(0, 0, targets.width, targets.height);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clearDepth(1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    this.bindOpaqueMeshPass(snapshot, pointLights, pointShadowLights);
+    for (const plotSnapshot of snapshot.plots) {
+      const opacity = clamp01(plotSnapshot.plot.material.opacity);
+      if (!plotSnapshot.plot.visible || opacity < 0.999) {
+        continue;
+      }
+      const probeUsage = this.prepareProbeForPlot(snapshot, plotSnapshot.plot);
+      if (probeUsage.refreshed) {
+        this.bindOpaqueMeshPass(snapshot, pointLights, pointShadowLights);
+      }
+      this.drawShadedMesh(plotSnapshot.plot, this.renderPrograms!.mesh, false, probeUsage.useProbe);
+    }
+    if (snapshot.scene.groundPlaneVisible) {
+      gl.enable(gl.CULL_FACE);
+      gl.cullFace(gl.BACK);
+      this.drawGroundPlane(snapshot.scene, this.renderPrograms!.mesh, false, false);
+    }
+    if (snapshot.scene.gridVisible) {
+      this.drawSceneGrid(snapshot.scene);
+    }
+    for (const plotSnapshot of snapshot.plots) {
+      const opacity = clamp01(plotSnapshot.plot.material.opacity);
+      if (!plotSnapshot.showsWireframe || opacity < 0.999) {
+        continue;
+      }
+      this.drawPlotWireframe(plotSnapshot.plot, gl.LEQUAL);
+    }
+    gl.disable(gl.BLEND);
+    gl.depthMask(true);
+    gl.depthFunc(gl.LESS);
+
+    if (!this.supportsFloatColorBuffers) {
+      this.bindTransparentMeshPass(snapshot, pointLights, pointShadowLights);
+      for (const plotSnapshot of snapshot.plots) {
+        const opacity = clamp01(plotSnapshot.plot.material.opacity);
+        if (!plotSnapshot.plot.visible || opacity >= 0.999 || opacity <= 0.001) {
           continue;
         }
-      }
-
-      this.syncPlotVisualState(visual, plotSnapshot, directionalShadowsActive);
-    }
-
-    for (const [id, visual] of this.plotVisuals.entries()) {
-      if (!seen.has(id)) {
-        this.disposeImplicitSelectionHalo(id);
-        visual.wireframeLines.forEach((line) => line.dispose(false, true));
-        visual.transparentBackShell?.dispose(false, true);
-        visual.root.dispose(false, true);
-        this.plotVisuals.delete(id);
-        this.meshHashCache.delete(id);
-      }
-    }
-
-    if (this.groundMesh) {
-      this.groundMesh.receiveShadows = scene.groundPlaneVisible && (directionalShadowsActive || this.hasAnyPointLightShadowsEnabled());
-    }
-  }
-
-  private syncInteractiveReflectionSetup(snapshot: RendererSceneSnapshot): void {
-    if (!this.scene) {
-      return;
-    }
-    const { plots, scene } = snapshot;
-    this.scene.probesEnabled = false;
-    this.scene.texturesEnabled = true;
-    this.interactiveReflectionLastRefreshReason = null;
-    this.interactiveReflectionProbeRefreshCount = 0;
-
-    this.ensureEnvironmentFallbackTexture(scene);
-
-    const hasReflectivePlot = plots.some(
-      ({ plot, isRenderable }) => isRenderable && plot.visible && (plot.material.reflectiveness > 0.08 || plot.material.roughness < 0.25),
-    );
-    if (!hasReflectivePlot) {
-      this.applyInteractiveReflectionSource('none', null, null, null);
-      return;
-    }
-
-    const externalEnvironmentTexture = this.scene.environmentTexture;
-    const externalEnvironmentUsable = Boolean(
-      externalEnvironmentTexture
-      && externalEnvironmentTexture !== this.environmentFallbackTexture
-      && this.isUsableReflectionTexture(externalEnvironmentTexture),
-    );
-    const fallbackEnvironmentUsable = this.isUsableReflectionTexture(this.environmentFallbackTexture);
-    const source = selectInteractiveReflectionSource({
-      externalEnvironmentUsable,
-      fallbackEnvironmentUsable,
-    });
-
-    if (source === 'external_env' && externalEnvironmentTexture) {
-      this.applyInteractiveReflectionSource(source, externalEnvironmentTexture, null, externalEnvironmentTexture);
-      return;
-    }
-    if (source === 'fallback_ready' && this.environmentFallbackTexture) {
-      this.applyInteractiveReflectionSource(source, this.environmentFallbackTexture, null, this.environmentFallbackTexture);
-      return;
-    }
-    this.applyInteractiveReflectionSource('none', null, 'Environment fallback unavailable', null);
-  }
-
-  private syncInteractiveReflectionProbe(_snapshot: RendererSceneSnapshot): void {
-    // Live scene probes are intentionally disabled in the correctness-first rewrite.
-  }
-
-  private ensureEnvironmentFallbackTexture(sceneSettings: AppState['scene']): void {
-    if (!this.scene) {
-      return;
-    }
-    const topBase = sceneSettings.backgroundMode === 'gradient'
-      ? color3(sceneSettings.gradientTopColor)
-      : color3(sceneSettings.backgroundColor);
-    const bottomBase = sceneSettings.backgroundMode === 'gradient'
-      ? color3(sceneSettings.gradientBottomColor)
-      : color3(sceneSettings.backgroundColor);
-    const groundBase = color3(sceneSettings.groundPlaneColor);
-    const ambientTint = color3(sceneSettings.ambient.color).scale(clamp(sceneSettings.ambient.intensity * 0.2, 0, 0.3));
-    const sunTint = color3(sceneSettings.directional.color).scale(clamp(sceneSettings.directional.intensity * 0.12, 0, 0.35));
-    const horizonColor = mixColor(mixColor(topBase, bottomBase, 0.5), ambientTint, 0.4);
-    const upColor = mixColor(topBase, sunTint, 0.35);
-    const downColor = mixColor(bottomBase.scale(0.55), groundBase.scale(0.92), 0.6);
-    const sideColor = mixColor(horizonColor, mixColor(upColor, downColor, 0.5), 0.18);
-    const faceSize = 4;
-    const fallbackKey = [
-      sceneSettings.backgroundMode,
-      sceneSettings.backgroundColor,
-      sceneSettings.gradientTopColor,
-      sceneSettings.gradientBottomColor,
-      sceneSettings.groundPlaneColor,
-      sceneSettings.ambient.color,
-      sceneSettings.ambient.intensity.toFixed(4),
-      sceneSettings.directional.color,
-      sceneSettings.directional.intensity.toFixed(4),
-    ].join('|');
-
-    if (this.environmentFallbackTexture && this.environmentFallbackKey === fallbackKey) {
-      return;
-    }
-
-    const previousFallback = this.environmentFallbackTexture;
-    const sceneWasUsingFallback = this.scene.environmentTexture === previousFallback;
-    try {
-      const faceColors = [
-        mixColor(sideColor, sunTint, 0.04),
-        mixColor(sideColor, ambientTint, 0.08),
-        mixColor(sideColor, upColor, 0.04),
-        mixColor(sideColor, downColor, 0.05),
-        mixColor(upColor, horizonColor, 0.22),
-        mixColor(downColor, horizonColor, 0.18),
-      ];
-      const faceData = faceColors.map((color) => makeSolidCubeFaceBytes(color, faceSize));
-      const fallbackTexture = new RawCubeTexture(
-        this.scene,
-        faceData,
-        faceSize,
-        Constants.TEXTUREFORMAT_RGBA,
-        Constants.TEXTURETYPE_UNSIGNED_BYTE,
-        false,
-        false,
-        Constants.TEXTURE_BILINEAR_SAMPLINGMODE,
-      );
-      fallbackTexture.name = 'interactive-env-fallback';
-      fallbackTexture.gammaSpace = false;
-      fallbackTexture.level = 1;
-      fallbackTexture.sphericalPolynomial = new SphericalPolynomial();
-      this.environmentFallbackTexture = fallbackTexture;
-      this.environmentFallbackKey = fallbackKey;
-      this.interactiveReflectionFallbackKind = 'raw_cube';
-      this.interactiveReflectionFallbackEverUsable = this.isUsableReflectionTexture(fallbackTexture);
-      if (sceneWasUsingFallback) {
-        this.scene.environmentTexture = fallbackTexture;
-      }
-      previousFallback?.dispose();
-    } catch (error) {
-      if (sceneWasUsingFallback && this.scene.environmentTexture === previousFallback) {
-        this.scene.environmentTexture = null;
-      }
-      previousFallback?.dispose();
-      this.environmentFallbackTexture = null;
-      this.environmentFallbackKey = '';
-      this.interactiveReflectionFallbackKind = 'none';
-      console.warn('Interactive environment fallback texture creation failed', error);
-    }
-  }
-
-  private rebindPlotMaterialsFromStateObjects(objects: SceneObject[]): void {
-    for (const obj of objects) {
-      if (obj.type !== 'plot') continue;
-      const visual = this.plotVisuals.get(obj.id);
-      if (!visual) continue;
-      this.applyPlotMaterial(obj, visual);
-    }
-  }
-
-  private applyInteractiveReflectionSource(
-    source: InteractiveReflectionSource,
-    reflectionTexture: Nullable<BaseTexture>,
-    reason: string | null,
-    sceneEnvironmentTexture: Nullable<BaseTexture>,
-  ): boolean {
-    if (!this.scene) {
-      this.interactiveReflectionSource = 'none';
-      this.interactiveReflectionTexture = null;
-      this.interactiveReflectionPath = 'none';
-      this.interactiveReflectionFallbackReason = reason ?? 'Environment fallback unavailable';
-      return false;
-    }
-    const nextPath: RenderDiagnostics['interactiveReflectionPath'] =
-      source === 'probe_ready' ? 'probe' : source === 'none' ? 'none' : 'environment_fallback';
-    const nextReason =
-      nextPath === 'probe'
-        ? null
-        : reason ?? (nextPath === 'none' ? 'Environment fallback unavailable' : null);
-    const sourceChanged = this.interactiveReflectionSource !== source;
-    const textureChanged = this.interactiveReflectionTexture !== reflectionTexture;
-    if (this.scene.environmentTexture !== sceneEnvironmentTexture) {
-      this.scene.environmentTexture = sceneEnvironmentTexture;
-    }
-    this.interactiveReflectionSource = source;
-    this.interactiveReflectionTexture = reflectionTexture;
-    this.interactiveReflectionPath = nextPath;
-    this.interactiveReflectionFallbackReason = nextReason;
-    if (sourceChanged || textureChanged) {
-      this.rebindPlotMaterialsFromStateObjects([...(this.latestSnapshot?.objects ?? [])]);
-    }
-    return source !== 'none';
-  }
-
-  private isUsableReflectionTexture(texture: Nullable<BaseTexture>): boolean {
-    if (!texture) {
-      return false;
-    }
-    if (texture.isReady()) {
-      return true;
-    }
-    const internal = texture.getInternalTexture();
-    if (!internal) {
-      return false;
-    }
-    return !((internal as { isDisposed?: boolean }).isDisposed ?? false);
-  }
-
-  private resolvePlotReflectionTexture(): Nullable<BaseTexture> {
-    const sceneEnvironmentTexture = this.scene?.environmentTexture ?? null;
-    if (
-      sceneEnvironmentTexture
-      && this.isUsableReflectionTexture(sceneEnvironmentTexture)
-    ) {
-      return sceneEnvironmentTexture;
-    }
-    const fallback = this.environmentFallbackTexture ?? null;
-    if (this.isUsableReflectionTexture(fallback)) {
-      return fallback;
-    }
-    return null;
-  }
-
-  private buildPlotVisual(plot: PlotObject): PlotVisual {
-    if (!this.scene) {
-      throw new Error('Scene not initialized');
-    }
-
-    const runtimeMesh = getRuntimePlotMesh(plot.id);
-    if (runtimeMesh) {
-      return this.buildPlotVisualFromSerialized(plot, runtimeMesh);
-    }
-
-    const compiled = compilePlotObject(plot);
-
-    let root: Mesh;
-    const wireframeLines: LinesMesh[] = [];
-    let topology: PlotVisual['topology'];
-    let curveTube: PlotVisual['curveTube'];
-
-    if (compiled.kind === 'curve') {
-      const sample = sampleCurve(
-        compiled.spec.tDomain.min,
-        compiled.spec.tDomain.max,
-        compiled.spec.tDomain.samples,
-        (t) => compiled.fn(t),
-      );
-      const path = sample.points.map((p) => new Vector3(p.x, p.y, p.z));
-      if (compiled.spec.renderAsTube) {
-        const referenceCameraRadius = Math.max(0.1, this.camera?.radius ?? 20);
-        root = MeshBuilder.CreateTube(`plot-${plot.id}`, {
-          path,
-          radius: compiled.spec.tubeRadius,
-          tessellation: 12,
-          cap: Mesh.CAP_ALL,
-          updatable: true,
-        }, this.scene);
-        curveTube = {
-          path,
-          baseRadius: compiled.spec.tubeRadius,
-          referenceCameraRadius,
-          currentRadius: compiled.spec.tubeRadius,
-        };
-      } else {
-        root = MeshBuilder.CreateLines(`plot-${plot.id}`, { points: path, updatable: false }, this.scene) as unknown as Mesh;
-      }
-    } else if (compiled.kind === 'surface') {
-      const meshData = buildSurfaceMesh(
-        compiled.spec.domain,
-        (u, v) => compiled.fn(u, v),
-        plot.material.wireframeCellSize ?? 4,
-      );
-      root = new Mesh(`plot-${plot.id}`, this.scene);
-      const vd = new VertexData();
-      vd.positions = Array.from(meshData.positions);
-      vd.indices = Array.from(meshData.indices);
-      if (meshData.normals) {
-        vd.normals = Array.from(meshData.normals);
-      }
-      if (meshData.uvs) {
-        vd.uvs = Array.from(meshData.uvs);
-      }
-      vd.applyToMesh(root);
-
-      if (meshData.lines) {
-        meshData.lines.forEach((coords, idx) => {
-          const points: Vector3[] = [];
-          for (let i = 0; i < coords.length; i += 3) {
-            const x = coords[i];
-            const y = coords[i + 1];
-            const z = coords[i + 2];
-            if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
-              points.push(new Vector3(x, y, z));
-            }
-          }
-          if (points.length >= 2) {
-            const line = MeshBuilder.CreateLines(`plot-${plot.id}-wire-${idx}`, { points, useVertexAlpha: true }, this.scene);
-            line.parent = this.plotRoot;
-            line.isPickable = false;
-            this.configurePlotWireframeLine(line, plot);
-            wireframeLines.push(line);
-          }
-        });
-      }
-    } else {
-      const meshData = buildImplicitMeshFromScalarField(
-        compiled.spec.bounds,
-        (x, y, z) => compiled.fn(x, y, z),
-        compiled.spec.quality,
-      );
-      topology = meshData.topology;
-      root = new Mesh(`plot-${plot.id}`, this.scene);
-      const vd = new VertexData();
-      vd.positions = Array.from(meshData.positions);
-      vd.indices = Array.from(meshData.indices);
-      if (meshData.normals) {
-        vd.normals = Array.from(meshData.normals);
-      }
-      vd.applyToMesh(root);
-    }
-
-    root.metadata = { selectableId: plot.id, selectableType: 'plot' };
-    root.isPickable = true;
-    root.parent = this.plotRoot;
-    root.receiveShadows = true;
-    root.renderOverlay = false;
-
-    return {
-      root,
-      wireframeLines,
-      transparentBackShell: this.createTransparentBackShell(plot, root, topology),
-      geometryKey: buildGeometryKey(plot),
-      topology,
-      curveTube,
-    };
-  }
-
-  private buildPlotVisualFromSerialized(plot: PlotObject, meshData: SerializedMesh): PlotVisual {
-    if (!this.scene) {
-      throw new Error('Scene not initialized');
-    }
-
-    let root: Mesh;
-    const wireframeLines: LinesMesh[] = [];
-    let topology: PlotVisual['topology'];
-    let curveTube: PlotVisual['curveTube'];
-
-    if (meshData.curvePath && meshData.curvePath.length >= 6) {
-      const path = floatArrayToVector3Path(meshData.curvePath);
-      if (plot.equation.kind === 'parametric_curve' && plot.equation.renderAsTube) {
-        const referenceCameraRadius = Math.max(0.1, this.camera?.radius ?? 20);
-        root = MeshBuilder.CreateTube(
-          `plot-${plot.id}`,
-          {
-            path,
-            radius: plot.equation.tubeRadius,
-            tessellation: 12,
-            cap: Mesh.CAP_ALL,
-            updatable: true,
-          },
-          this.scene,
-        );
-        curveTube = {
-          path,
-          baseRadius: plot.equation.tubeRadius,
-          referenceCameraRadius,
-          currentRadius: plot.equation.tubeRadius,
-        };
-      } else {
-        root = MeshBuilder.CreateLines(`plot-${plot.id}`, { points: path, updatable: false }, this.scene) as unknown as Mesh;
-      }
-    } else {
-      topology = meshData.topology;
-      root = new Mesh(`plot-${plot.id}`, this.scene);
-      applySerializedMeshToBabylonMesh(root, meshData);
-    }
-
-    if (meshData.lines) {
-      meshData.lines.forEach((coords, idx) => {
-        const points = floatArrayToVector3Path(coords);
-        if (points.length >= 2) {
-          const line = MeshBuilder.CreateLines(`plot-${plot.id}-wire-${idx}`, { points, useVertexAlpha: true }, this.scene);
-          line.parent = this.plotRoot;
-          line.isPickable = false;
-          this.configurePlotWireframeLine(line, plot);
-          wireframeLines.push(line);
+        const probeUsage = this.prepareProbeForPlot(snapshot, plotSnapshot.plot);
+        if (probeUsage.refreshed) {
+          this.bindTransparentMeshPass(snapshot, pointLights, pointShadowLights);
         }
-      });
+        this.drawShadedMesh(plotSnapshot.plot, this.renderPrograms!.mesh, true, probeUsage.useProbe);
+      }
+      if (snapshot.scene.groundPlaneVisible && snapshot.scene.groundPlaneReflective) {
+        this.drawGroundPlane(snapshot.scene, this.renderPrograms!.mesh, true, false);
+      }
+      gl.disable(gl.BLEND);
+      gl.depthMask(true);
     }
-
-    root.metadata = { selectableId: plot.id, selectableType: 'plot' };
-    root.isPickable = true;
-    root.parent = this.plotRoot;
-    root.receiveShadows = true;
-    root.renderOverlay = false;
-
-    return {
-      root,
-      wireframeLines,
-      transparentBackShell: this.createTransparentBackShell(plot, root, topology),
-      geometryKey: buildGeometryKey(plot),
-      topology,
-      curveTube,
-    };
   }
 
-  private createTransparentBackShell(
-    plot: PlotObject,
-    root: Mesh,
-    topology?: SerializedMesh['topology'],
-  ): Mesh | null {
-    if (
-      plot.equation.kind !== 'parametric_surface'
-      && plot.equation.kind !== 'explicit_surface'
-      && !(plot.equation.kind === 'implicit_surface' && topology?.isClosedManifold !== true)
-    ) {
-      return null;
-    }
-    const shell = root.clone(`plot-${plot.id}-back-shell`, null, false);
-    if (!(shell instanceof Mesh)) {
-      return null;
-    }
-    shell.parent = this.plotRoot;
-    shell.isPickable = false;
-    shell.receiveShadows = false;
-    shell.renderOverlay = false;
-    shell.metadata = { selectableId: null, selectableType: 'plot_back_shell', sourceId: plot.id };
-    return shell;
-  }
-
-  private syncPlotVisualState(
-    visual: PlotVisual,
-    plotSnapshot: RendererPlotSnapshot,
-    directionalShadowsActive: boolean,
+  private renderTransparentScene(
+    snapshot: RendererSceneSnapshot,
+    pointLights: ReadonlyArray<PointLightObject>,
+    pointShadowLights: ReadonlyArray<ActivePointShadowLight>,
   ): void {
-    const {
-      plot,
-      isRenderable,
-      showsWireframe,
-      castsInteractiveShadows,
-      interactiveShadowMode,
-    } = plotSnapshot;
-    const plotVisible = plot.visible && isRenderable;
-    const shadowVisible = plot.visible && castsInteractiveShadows;
-    const usesTransparentBackShell = shouldUseTransparentBackShell(plot, visual.topology);
-
-    visual.root.parent = this.plotRoot;
-    visual.root.isVisible = plotVisible || shadowVisible;
-    visual.root.position.copyFrom(vec3(plot.transform.position));
-    visual.root.receiveShadows = directionalShadowsActive || this.hasAnyPointLightShadowsEnabled();
-    if (visual.transparentBackShell) {
-      visual.transparentBackShell.parent = this.plotRoot;
-      visual.transparentBackShell.position.copyFrom(vec3(plot.transform.position));
-      visual.transparentBackShell.isVisible = (plotVisible || shadowVisible) && usesTransparentBackShell;
-      visual.transparentBackShell.receiveShadows = false;
-    }
-
-    this.applyPlotMaterial(plot, visual);
-
-    if (shadowVisible) {
-      this.addInteractiveShadowCaster(visual.root);
-      if (interactiveShadowMode === 'attenuated' && usesTransparentBackShell && visual.transparentBackShell?.isVisible) {
-        this.addInteractiveShadowCaster(visual.transparentBackShell);
+    const gl = this.gl!;
+    this.bindTransparentMeshPass(snapshot, pointLights, pointShadowLights);
+    const cameraPosition = this.getCameraPosition();
+    const transparentPlots = snapshot.plots
+      .filter(({ plot }) => {
+        const opacity = clamp01(plot.material.opacity);
+        return plot.visible && opacity > 0.001 && opacity < 0.999;
+      })
+      .sort((a, b) => transparentSortDistance(b.plot, cameraPosition) - transparentSortDistance(a.plot, cameraPosition));
+    for (const plotSnapshot of transparentPlots) {
+      const probeUsage = this.prepareProbeForPlot(snapshot, plotSnapshot.plot);
+      if (probeUsage.refreshed) {
+        this.bindTransparentMeshPass(snapshot, pointLights, pointShadowLights);
       }
+      this.drawShadedMesh(plotSnapshot.plot, this.renderPrograms!.mesh, true, probeUsage.useProbe);
+    }
+    if (snapshot.scene.groundPlaneVisible && snapshot.scene.groundPlaneReflective) {
+      this.drawGroundPlane(snapshot.scene, this.renderPrograms!.mesh, true, false);
     }
 
-    for (const wire of visual.wireframeLines) {
-      wire.isVisible = showsWireframe && plotVisible;
-      wire.position.copyFrom(vec3(plot.transform.position));
-      this.configurePlotWireframeLine(wire, plot);
-    }
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+    gl.enable(gl.CULL_FACE);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
-  private addInteractiveShadowCaster(mesh: Mesh): void {
-    this.directionalShadow?.addShadowCaster(mesh, true);
-    for (const pointLight of this.pointLightVisuals.values()) {
-      if (pointLight.shadowEnabled) {
-        pointLight.shadow?.addShadowCaster(mesh, true);
-      }
-    }
+  private compositeScene(snapshot: RendererSceneSnapshot): void {
+    const gl = this.gl!;
+    const targets = this.renderTargets;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, targets.width, targets.height);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.CULL_FACE);
+    gl.useProgram(this.renderPrograms!.composite.program);
+    gl.bindVertexArray(this.fullscreenVao);
+    bindTexture(gl, targets.sceneColor, 0, gl.TEXTURE_2D);
+    bindTexture(gl, targets.oitAccum, 1, gl.TEXTURE_2D);
+    bindTexture(gl, targets.oitReveal, 2, gl.TEXTURE_2D);
+    gl.uniform1i(this.renderPrograms!.composite.uniforms.u_sceneColor, 0);
+    gl.uniform1i(this.renderPrograms!.composite.uniforms.u_accum, 1);
+    gl.uniform1i(this.renderPrograms!.composite.uniforms.u_reveal, 2);
+    gl.uniform1i(this.renderPrograms!.composite.uniforms.u_toneMapping, toneMappingMode(snapshot.render.toneMapping));
+    gl.uniform1f(this.renderPrograms!.composite.uniforms.u_exposure, clamp(snapshot.render.exposure, 0.01, 5));
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
   }
 
-  private applyPlotMaterial(plot: PlotObject, visual: PlotVisual): void {
-    if (!this.scene) return;
-    const usesTransparentShells = shouldUseTransparentBackShell(plot, visual.topology);
-    const reflectionTexture = this.resolvePlotReflectionTexture();
-    const hasUsableReflectionTexture = this.isUsableReflectionTexture(reflectionTexture);
-    this.applyInteractivePlotMaterialToMesh(plot, visual.root, {
-      renderSide: usesTransparentShells ? 'front' : 'both',
-      reflectionTexture: hasUsableReflectionTexture ? reflectionTexture : null,
-    });
-    if (visual.transparentBackShell) {
-      if (usesTransparentShells) {
-        this.applyInteractivePlotMaterialToMesh(plot, visual.transparentBackShell, {
-          renderSide: 'back',
-          reflectionTexture: hasUsableReflectionTexture ? reflectionTexture : null,
-        });
-      } else {
-        visual.transparentBackShell.isVisible = false;
-      }
+  private renderSelectionMask(snapshot: RendererSceneSnapshot): void {
+    const gl = this.gl!;
+    const selected = snapshot.selectedId ? snapshot.objects.find((object) => object.id === snapshot.selectedId) : null;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.renderTargets.maskFramebuffer);
+    gl.viewport(0, 0, this.renderTargets.width, this.renderTargets.height);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clearDepth(1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    if (!selected || selected.type !== 'plot') {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      return;
     }
+    const visual = this.plotVisuals.get(selected.id);
+    if (!visual || !visual.buffers.vao) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      return;
+    }
+    gl.enable(gl.DEPTH_TEST);
+    gl.disable(gl.CULL_FACE);
+    gl.depthMask(true);
+    gl.depthFunc(gl.LESS);
+    gl.useProgram(this.renderPrograms!.mask.program);
+    const model = mat4.fromTranslation(mat4.create(), vec3.fromValues(
+      selected.transform.position.x,
+      selected.transform.position.y,
+      selected.transform.position.z,
+    ));
+    gl.uniformMatrix4fv(this.renderPrograms!.mask.uniforms.u_model, false, model);
+    gl.uniformMatrix4fv(this.renderPrograms!.mask.uniforms.u_view, false, this.viewMatrix);
+    gl.uniformMatrix4fv(this.renderPrograms!.mask.uniforms.u_projection, false, this.projectionMatrix);
+    gl.bindVertexArray(visual.buffers.vao);
+    gl.drawElements(gl.TRIANGLES, visual.buffers.indexCount, gl.UNSIGNED_INT, 0);
+    gl.bindVertexArray(null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
-  private applyInteractivePlotMaterialToMesh(
-    plot: PlotObject,
-    mesh: Mesh,
-    options: { renderSide: 'both' | 'front' | 'back'; reflectionTexture: Nullable<BaseTexture> },
-  ): void {
-    const scene = this.scene;
-    if (!scene) {
-      return;
-    }
-    let material = mesh.material;
-    if (!(material instanceof PBRMaterial)) {
-      const suffix = options.renderSide === 'both' ? '' : `-${options.renderSide}`;
-      material = new PBRMaterial(`mat-${plot.id}${suffix}`, scene);
-      mesh.material = material;
-    }
-    const pbr = material as PBRMaterial;
-    const reflectiveness = clamp01(plot.material.reflectiveness);
-    const roughness = clamp(plot.material.roughness, 0.02, 1);
-    const opacity = clamp01(plot.material.opacity);
-    const opticalOpenness = clamp01(1 - opacity);
-    const isImplicitSurface = plot.equation.kind === 'implicit_surface';
-    const usesTransparentPipeline =
-      options.renderSide !== 'both'
-      || (isImplicitSurface && opacity < INTERACTIVE_SHELL_RENDER_OPACITY_EPSILON);
-    // Transparent shell passes already preserve specular/radiance over alpha. Closed implicit
-    // volumes also need that behavior; otherwise clear-glass highlights get washed out.
-    const preservesTransparentHighlights = usesTransparentPipeline
-      && (options.renderSide !== 'both' || isImplicitSurface);
-    const usesTransparentSurfaceOptics = options.renderSide !== 'both';
-    const baseColor = color3(plot.material.baseColor);
-    const diffuseRetention = clamp(1 - opticalOpenness * 0.2, 0.55, 1);
-    const shellCompositedAlpha = options.renderSide === 'both'
-      ? opacity
-      : resolveShellLayerAlpha(opacity);
-    const shadowAlpha = usesTransparentPipeline
-      ? resolveInteractiveShadowAlpha(opacity, options.renderSide)
-      : 1;
-    pbr.albedoColor = mixColor(baseColor, Color3.White(), opticalOpenness * 0.08).scale(diffuseRetention);
-    pbr.metallic = clamp(reflectiveness * (usesTransparentSurfaceOptics ? 0.18 : 0.32), 0, 1);
-    pbr.roughness = roughness;
-    pbr.alpha = usesTransparentPipeline ? clamp(shellCompositedAlpha, 0, 1) : 1;
-    pbr.transparencyMode = usesTransparentPipeline ? PBRMaterial.PBRMATERIAL_ALPHABLEND : PBRMaterial.PBRMATERIAL_OPAQUE;
-    pbr.indexOfRefraction = FIXED_INTERACTIVE_IOR;
-    pbr.subSurface.isRefractionEnabled = false;
-    pbr.subSurface.isTranslucencyEnabled = false;
-    pbr.subSurface.refractionIntensity = 0;
-    pbr.subSurface.indexOfRefraction = FIXED_INTERACTIVE_IOR;
-    pbr.metallicF0Factor = clamp(0.65 + reflectiveness * 0.9, 0.65, 1.8);
-    pbr.specularIntensity = 1;
-    pbr.directIntensity = 1;
-    pbr.environmentIntensity = options.reflectionTexture ? clamp(0.6 + reflectiveness * 0.8, 0.45, 1.8) : 0.35;
-    pbr.useRadianceOverAlpha = preservesTransparentHighlights;
-    pbr.useAlphaFresnel = preservesTransparentHighlights;
-    pbr.useLinearAlphaFresnel = false;
-    pbr.useSpecularOverAlpha = preservesTransparentHighlights;
-    pbr.reflectionTexture = options.reflectionTexture;
-    pbr.emissiveColor = options.reflectionTexture ? Color3.Black() : pbr.albedoColor.scale(preservesTransparentHighlights ? 0.04 : 0.08);
-    pbr.realTimeFiltering = false;
-    pbr.sideOrientation = isImplicitSurface ? Material.ClockWiseSideOrientation : null;
-    if (options.renderSide === 'front') {
-      pbr.backFaceCulling = true;
-      pbr.cullBackFaces = true;
-      pbr.separateCullingPass = false;
-      pbr.twoSidedLighting = false;
-    } else if (options.renderSide === 'back') {
-      pbr.backFaceCulling = true;
-      pbr.cullBackFaces = false;
-      pbr.separateCullingPass = false;
-      pbr.twoSidedLighting = false;
-    } else if (isImplicitSurface && usesTransparentPipeline) {
-      pbr.backFaceCulling = true;
-      pbr.cullBackFaces = true;
-      pbr.separateCullingPass = false;
-      pbr.twoSidedLighting = false;
-    } else {
-      pbr.backFaceCulling = false;
-      pbr.cullBackFaces = true;
-      pbr.separateCullingPass = false;
-      pbr.twoSidedLighting = true;
-    }
-    pbr.enableSpecularAntiAliasing = true;
-    pbr.forceDepthWrite = !usesTransparentPipeline;
-    pbr.needDepthPrePass = false;
-    mesh.renderingGroupId = usesTransparentPipeline ? 1 : 0;
-    mesh.alphaIndex = usesTransparentPipeline
-      ? stableAlphaIndex(plot.id) * 2 + (options.renderSide === 'front' ? 1 : 0)
-      : 0;
-    mesh.isPickable = options.renderSide !== 'back';
-    mesh.metadata = {
-      ...(mesh.metadata ?? {}),
-      interactiveShadowAlpha: shadowAlpha,
-    };
+  private renderSelectionOutline(): void {
+    const gl = this.gl!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, this.renderTargets.width, this.renderTargets.height);
+    gl.disable(gl.DEPTH_TEST);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.useProgram(this.renderPrograms!.outline.program);
+    gl.bindVertexArray(this.fullscreenVao);
+    bindTexture(gl, this.renderTargets.maskTexture, 0, gl.TEXTURE_2D);
+    bindTexture(gl, this.renderTargets.maskDepth, 1, gl.TEXTURE_2D);
+    bindTexture(gl, this.renderTargets.sceneDepth, 2, gl.TEXTURE_2D);
+    gl.uniform1i(this.renderPrograms!.outline.uniforms.u_mask, 0);
+    gl.uniform1i(this.renderPrograms!.outline.uniforms.u_maskDepth, 1);
+    gl.uniform1i(this.renderPrograms!.outline.uniforms.u_sceneDepth, 2);
+    gl.uniform2f(this.renderPrograms!.outline.uniforms.u_texelSize, 1 / Math.max(1, this.renderTargets.width), 1 / Math.max(1, this.renderTargets.height));
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+    gl.disable(gl.BLEND);
   }
 
-  private configurePlotWireframeLine(line: LinesMesh, plot: PlotObject): void {
-    const opacity = clamp01(plot.material.opacity);
-    const isTransparent =
-      plot.equation.kind === 'implicit_surface'
-        ? opacity < INTERACTIVE_SHELL_RENDER_OPACITY_EPSILON
-        : plotUsesTransparentShells(plot);
-    line.color = new Color3(0.95, 0.98, 1);
-    line.alpha = isTransparent ? 0.82 : 0.92;
-    line.visibility = 1;
-    line.renderingGroupId = isTransparent ? 2 : 1;
-    line.alphaIndex = 10_000 + stableAlphaIndex(plot.id);
-    const mat = line.material;
-    if (mat) {
-      mat.backFaceCulling = false;
-      mat.disableDepthWrite = true;
-      mat.depthFunction = Constants.LEQUAL;
+  private renderSelectedFeatureEdges(snapshot: RendererSceneSnapshot): void {
+    const selected = snapshot.selectedId ? snapshot.objects.find((object) => object.id === snapshot.selectedId) : null;
+    if (!selected || selected.type !== 'plot') {
+      return;
     }
+    const visual = this.plotVisuals.get(selected.id);
+    if (!visual) {
+      return;
+    }
+    const gl = this.gl!;
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.enable(gl.DEPTH_TEST);
+    gl.disable(gl.CULL_FACE);
+    gl.useProgram(this.renderPrograms!.line.program);
+    this.setLineProgramFrameUniforms();
+    const model = mat4.fromTranslation(mat4.create(), vec3.fromValues(
+      selected.transform.position.x,
+      selected.transform.position.y,
+      selected.transform.position.z,
+    ));
+    gl.uniformMatrix4fv(this.renderPrograms!.line.uniforms.u_model, false, model);
+    this.setLineScreenOffset(0, 0);
+    gl.uniform4f(this.renderPrograms!.line.uniforms.u_color, 0.86, 0.93, 1.0, 0.72);
+    if (visual.buffers.boundaryLines) {
+      drawLineBuffer(gl, visual.buffers.boundaryLines);
+    }
+    gl.disable(gl.BLEND);
   }
 
-  private syncCurveTubePixelWidth(): void {
-    if (!this.scene || !this.camera) {
+  private renderSceneAxes(snapshot: RendererSceneSnapshot): void {
+    if (!snapshot.scene.axesVisible) {
       return;
     }
-    const cameraRadius = this.camera.radius;
-    if (!Number.isFinite(cameraRadius)) {
+    const gl = this.gl!;
+    const axes = buildAxesLines(snapshot.scene.axesLength);
+    const buffer = createLineBuffer(gl, axes.positions, gl.LINES);
+    if (!buffer) {
       return;
     }
-    if (Math.abs(cameraRadius - this.lastCurveTubeCameraRadius) <= 1e-4) {
-      return;
-    }
-    this.lastCurveTubeCameraRadius = cameraRadius;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.renderTargets.sceneFramebuffer);
+    gl.viewport(0, 0, this.renderTargets.width, this.renderTargets.height);
+    gl.useProgram(this.renderPrograms!.line.program);
+    this.setLineProgramFrameUniforms();
+    gl.uniformMatrix4fv(this.renderPrograms!.line.uniforms.u_model, false, mat4.create());
+    this.setLineScreenOffset(0, 0);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthMask(false);
+    gl.depthFunc(gl.LEQUAL);
+    gl.disable(gl.CULL_FACE);
+    drawColoredAxes(gl, this.renderPrograms!.line, buffer);
+    gl.depthMask(true);
+    gl.depthFunc(gl.LESS);
+    gl.disable(gl.BLEND);
+    deleteLineBuffer(gl, buffer);
+  }
 
-    const snapshot = this.latestSnapshot;
-    if (!snapshot) {
-      return;
-    }
-    for (const obj of snapshot.objects) {
-      if (obj.type !== 'plot' || obj.equation.kind !== 'parametric_curve' || !obj.equation.renderAsTube) {
+  private renderOverlayLines(snapshot: RendererSceneSnapshot): void {
+    const gl = this.gl!;
+    gl.useProgram(this.renderPrograms!.line.program);
+    this.setLineProgramFrameUniforms();
+    this.setLineScreenOffset(0, 0);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.enable(gl.DEPTH_TEST);
+    gl.disable(gl.CULL_FACE);
+    for (const plotSnapshot of snapshot.plots) {
+      if (!plotSnapshot.showsWireframe) {
         continue;
       }
-      const visual = this.plotVisuals.get(obj.id);
-      if (!visual?.curveTube) {
+      const opacity = clamp01(plotSnapshot.plot.material.opacity);
+      if (opacity >= 0.999) {
         continue;
       }
-      const tube = visual.curveTube;
-      const referenceRadius = Math.max(0.1, tube.referenceCameraRadius);
-      const desiredRadius = Math.max(0.0002, obj.equation.tubeRadius * (cameraRadius / referenceRadius));
-      const delta = Math.abs(desiredRadius - tube.currentRadius);
-      if (delta <= Math.max(0.00005, tube.currentRadius * 0.03)) {
-        continue;
-      }
-
-      const updated = MeshBuilder.CreateTube(
-        `plot-${obj.id}`,
-        {
-          path: tube.path,
-          radius: desiredRadius,
-          tessellation: 12,
-          cap: Mesh.CAP_ALL,
-          instance: visual.root,
-        },
-        this.scene,
-      );
-
-      if (updated !== visual.root) {
-        updated.metadata = visual.root.metadata;
-        updated.isPickable = visual.root.isPickable;
-        updated.parent = visual.root.parent;
-        updated.receiveShadows = visual.root.receiveShadows;
-        updated.renderOverlay = visual.root.renderOverlay;
-        updated.renderOutline = visual.root.renderOutline;
-        updated.outlineColor = visual.root.outlineColor.clone();
-        updated.outlineWidth = visual.root.outlineWidth;
-        updated.material = visual.root.material;
-        if (obj.id === snapshot.selectedId) {
-          this.applyPlotSelectionHalo(updated, obj, visual);
-        } else {
-          this.clearPlotSelectionHalo(updated);
-        }
-        visual.root.dispose(false, true);
-        visual.root = updated;
-      }
-      tube.currentRadius = desiredRadius;
+      this.drawPlotWireframe(plotSnapshot.plot, gl.LEQUAL);
     }
+    gl.disable(gl.BLEND);
   }
 
-  private clearPlotSelectionHalo(mesh: Mesh): void {
-    mesh.renderOverlay = false;
-    mesh.overlayAlpha = 0;
-    mesh.renderOutline = false;
-    mesh.outlineWidth = 0;
-    mesh.disableEdgesRendering();
-  }
-
-  private applyPlotSelectionHalo(mesh: Mesh, plot: PlotObject, visual?: PlotVisual): void {
-    mesh.renderOverlay = false;
-    mesh.overlayAlpha = 0;
-    mesh.renderOutline = false;
-    mesh.outlineWidth = 0;
-    mesh.disableEdgesRendering();
-
-    const kind = plot.equation.kind;
-    if (kind === 'parametric_curve') {
-      this.disposeImplicitSelectionHalo(plot.id);
-      mesh.enableEdgesRendering(0.9, false);
-      mesh.edgesColor = new Color4(0.8, 0.88, 1, 0.58);
-      mesh.edgesWidth = 0.72;
-      return;
-    }
-    const isTransparent = transparencyBlendFromOpacity(plot.material.opacity) > 0.08;
-    // The scaled shell halo only reads as an outline on closed volumes. On open surface
-    // sheets and clipped implicits it turns into a one-sided translucent wash.
-    const useShellHalo = shouldUseShellSelectionHalo(plot, visual?.topology);
-    if (useShellHalo) {
-      this.ensureImplicitSelectionHalo(plot.id, mesh, {
-        scale: 1.02,
-        alpha: 0.32,
-      });
-      return;
-    }
-
-    this.disposeImplicitSelectionHalo(plot.id);
-    if (isTransparent) {
-      // Babylon's outline pass can darken transparent/glass surfaces; keep a subtle edge-only fallback there.
-      mesh.enableEdgesRendering(0.92, false);
-      mesh.edgesColor = new Color4(0.82, 0.9, 1, 0.62);
-      mesh.edgesWidth = 0.9;
-      return;
-    }
-
-    mesh.renderOutline = true;
-    mesh.outlineColor = new Color3(0.88, 0.95, 1);
-    mesh.outlineWidth = 0.015;
-  }
-
-  private syncSelection(selectedId: string | null, objects: ReadonlyArray<SceneObject>): void {
-    const plotsById = new Map(
-      objects.filter((object): object is PlotObject => object.type === 'plot').map((plot) => [plot.id, plot]),
+  private setLineProgramFrameUniforms(): void {
+    const gl = this.gl!;
+    gl.uniformMatrix4fv(this.renderPrograms!.line.uniforms.u_view, false, this.viewMatrix);
+    gl.uniformMatrix4fv(this.renderPrograms!.line.uniforms.u_projection, false, this.projectionMatrix);
+    gl.uniform2f(
+      this.renderPrograms!.line.uniforms.u_viewport,
+      Math.max(1, this.canvas.width),
+      Math.max(1, this.canvas.height),
     );
-    for (const [id, visual] of this.plotVisuals.entries()) {
-      const selected = id === selectedId;
-      const plot = plotsById.get(id);
-      if (selected && plot) {
-        this.applyPlotSelectionHalo(visual.root, plot, visual);
-      } else {
-        this.disposeImplicitSelectionHalo(id);
-        this.clearPlotSelectionHalo(visual.root);
-      }
-    }
-    for (const [id, visual] of this.pointLightVisuals.entries()) {
-      const mat = visual.gizmo.material as StandardMaterial | null;
-      const haloMat = visual.halo.material as StandardMaterial | null;
-      const selected = id === selectedId;
-      const accent = selected ? new Color3(1, 0.95, 0.3) : new Color3(1, 0.75, 0.35);
-      if (mat) {
-        mat.emissiveColor = accent;
-      }
-      if (haloMat) {
-        haloMat.emissiveColor = accent;
-        haloMat.alpha = selected ? 0.45 : 0.28;
-      }
-      visual.starLines.forEach((line) => {
-        line.color = accent;
-        line.alpha = selected ? 1 : 0.9;
-      });
-      const distance = this.camera ? Vector3.Distance(this.camera.position, visual.gizmo.position) : 10;
-      const baseScale = clamp(distance * 0.03, 0.75, 3.5);
-      const selectedScale = selected ? 1.25 : 1;
-      visual.gizmo.scaling.setAll(baseScale * selectedScale);
-    }
   }
 
-  private disposeImplicitSelectionHalo(plotId: string): void {
-    const halo = this.implicitSelectionHalos.get(plotId);
-    if (!halo) {
+  private setLineScreenOffset(x: number, y: number): void {
+    this.gl!.uniform2f(this.renderPrograms!.line.uniforms.u_screenOffset, x, y);
+  }
+
+  private drawPlotWireframe(plot: PlotObject, depthFunc: number): void {
+    const gl = this.gl!;
+    const visual = this.plotVisuals.get(plot.id);
+    if (!visual || visual.buffers.wireLines.length === 0) {
       return;
     }
-    halo.material?.dispose(false, true);
-    halo.dispose(false, true);
-    this.implicitSelectionHalos.delete(plotId);
+    gl.useProgram(this.renderPrograms!.line.program);
+    this.setLineProgramFrameUniforms();
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthMask(false);
+    gl.depthFunc(depthFunc);
+    gl.disable(gl.CULL_FACE);
+    const model = mat4.fromTranslation(mat4.create(), vec3.fromValues(
+      plot.transform.position.x,
+      plot.transform.position.y,
+      plot.transform.position.z,
+    ));
+    gl.uniformMatrix4fv(this.renderPrograms!.line.uniforms.u_model, false, model);
+    gl.uniform4f(this.renderPrograms!.line.uniforms.u_color, 0, 0, 0, 0.22);
+    for (const [offsetX, offsetY] of [[-0.9, 0], [0.9, 0], [0, -0.9], [0, 0.9]] as const) {
+      this.setLineScreenOffset(offsetX, offsetY);
+      visual.buffers.wireLines.forEach((line) => drawLineBuffer(gl, line));
+    }
+    this.setLineScreenOffset(0, 0);
+    gl.uniform4f(this.renderPrograms!.line.uniforms.u_color, 0, 0, 0, 0.84);
+    visual.buffers.wireLines.forEach((line) => drawLineBuffer(gl, line));
+    gl.depthMask(true);
+    gl.depthFunc(gl.LESS);
   }
 
-  private ensureImplicitSelectionHalo(
-    plotId: string,
-    source: Mesh,
-    options: { scale: number; alpha: number },
+  private drawSceneGrid(scene: RendererSceneSnapshot['scene']): void {
+    const gl = this.gl!;
+    const grid = buildGridLines(scene.gridExtent, scene.gridSpacing);
+    const buffer = createLineBuffer(gl, grid.positions, gl.LINES);
+    if (!buffer) {
+      return;
+    }
+    gl.useProgram(this.renderPrograms!.line.program);
+    this.setLineProgramFrameUniforms();
+    gl.uniformMatrix4fv(this.renderPrograms!.line.uniforms.u_model, false, mat4.create());
+    this.setLineScreenOffset(0, 0);
+    gl.uniform4f(this.renderPrograms!.line.uniforms.u_color, 0.72, 0.8, 0.95, clamp01(scene.gridLineOpacity));
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthMask(false);
+    gl.depthFunc(gl.LEQUAL);
+    gl.disable(gl.CULL_FACE);
+    drawLineBuffer(gl, buffer);
+    gl.depthMask(true);
+    gl.depthFunc(gl.LESS);
+    deleteLineBuffer(gl, buffer);
+  }
+
+  private renderPointLightGizmos(snapshot: RendererSceneSnapshot, program: ProgramBundle): void {
+    const gl = this.gl!;
+    const pointBuffer = createPointBuffer(gl);
+    if (!pointBuffer) {
+      return;
+    }
+    gl.useProgram(program.program);
+    gl.uniformMatrix4fv(program.uniforms.u_view, false, this.viewMatrix);
+    gl.uniformMatrix4fv(program.uniforms.u_projection, false, this.projectionMatrix);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.depthMask(false);
+    gl.disable(gl.CULL_FACE);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    for (const light of snapshot.pointLights) {
+      if (!shouldRenderPointLightGizmo(light.light)) {
+        continue;
+      }
+      const selected = snapshot.selectedId === light.light.id;
+      const model = mat4.fromTranslation(
+        mat4.create(),
+        vec3.fromValues(light.light.position.x, light.light.position.y, light.light.position.z),
+      );
+      gl.uniformMatrix4fv(program.uniforms.u_model, false, model);
+      gl.uniform1f(program.uniforms.u_size, selected ? 360 : 300);
+      gl.uniform3fv(program.uniforms.u_color, pointLightGizmoColor(light.light.color, selected));
+      gl.uniform1f(program.uniforms.u_selected, selected ? 1 : 0);
+      drawLineBuffer(gl, pointBuffer);
+    }
+    gl.depthMask(true);
+    gl.depthFunc(gl.LESS);
+    gl.disable(gl.BLEND);
+    deleteLineBuffer(gl, pointBuffer);
+  }
+
+  private drawGroundPlane(
+    scene: RendererSceneSnapshot['scene'],
+    program: ProgramBundle,
+    transparentPass: boolean,
+    useProbe: boolean,
   ): void {
-    if (!this.scene) {
+    const gl = this.gl!;
+    if (!this.groundMesh?.vao || this.groundMesh.indexCount <= 0) {
       return;
     }
-    const key = `${plotId}|${round3(options.scale)}|${round3(options.alpha)}`;
-    const existing = this.implicitSelectionHalos.get(plotId);
-    if (existing && existing.parent === source && existing.metadata?.haloKey === key) {
-      existing.isVisible = source.isVisible;
+    const size = scene.groundPlaneSize;
+    const opacity = transparentPass ? 0.28 : 1;
+    const model = mat4.fromScaling(mat4.create(), vec3.fromValues(size, size, 1));
+    gl.uniformMatrix4fv(program.uniforms.u_model, false, model);
+    gl.uniformMatrix3fv(program.uniforms.u_normalMatrix, false, mat3.normalFromMat4(mat3.create(), model) ?? mat3.create());
+    gl.uniform3fv(program.uniforms.u_baseColor, hexToRgb(scene.groundPlaneColor));
+    gl.uniform1f(program.uniforms.u_opacity, opacity);
+    gl.uniform1f(program.uniforms.u_reflectiveness, scene.groundPlaneReflective ? 0.82 : 0.02);
+    gl.uniform1f(program.uniforms.u_roughness, clamp(scene.groundPlaneRoughness, 0.04, 1));
+    gl.uniform1i(program.uniforms.u_isTransparentPass, transparentPass ? 1 : 0);
+    gl.uniform1i(program.uniforms.u_useProbe, useProbe ? 1 : 0);
+    gl.uniform3fv(program.uniforms.u_probeCenter, useProbe ? this.probeResources.center : this.emptyProbeCenter);
+    gl.bindVertexArray(this.groundMesh.vao);
+    gl.drawElements(gl.TRIANGLES, this.groundMesh.indexCount, gl.UNSIGNED_SHORT, 0);
+    gl.bindVertexArray(null);
+  }
+
+  private drawShadedMesh(plot: PlotObject, program: ProgramBundle, transparentPass: boolean, useProbe: boolean): void {
+    const gl = this.gl!;
+    const visual = this.plotVisuals.get(plot.id);
+    if (!visual?.buffers.vao || visual.buffers.indexCount <= 0) {
       return;
     }
-    this.disposeImplicitSelectionHalo(plotId);
-    const halo = source.clone(`plot-${plotId}-selection-halo`, null, false);
-    if (!(halo instanceof Mesh)) {
-      return;
+    const model = mat4.fromTranslation(mat4.create(), vec3.fromValues(
+      plot.transform.position.x,
+      plot.transform.position.y,
+      plot.transform.position.z,
+    ));
+    const normalMatrix = mat3.normalFromMat4(mat3.create(), model) ?? mat3.create();
+    gl.uniformMatrix4fv(program.uniforms.u_model, false, model);
+    gl.uniformMatrix3fv(program.uniforms.u_normalMatrix, false, normalMatrix);
+    gl.uniform3fv(program.uniforms.u_baseColor, hexToRgb(plot.material.baseColor));
+    gl.uniform1f(program.uniforms.u_opacity, clamp01(plot.material.opacity));
+    gl.uniform1f(program.uniforms.u_reflectiveness, clamp01(plot.material.reflectiveness));
+    gl.uniform1f(program.uniforms.u_roughness, clamp(plot.material.roughness, 0.04, 1));
+    gl.uniform1i(program.uniforms.u_isTransparentPass, transparentPass ? 1 : 0);
+    gl.uniform1i(program.uniforms.u_useProbe, useProbe ? 1 : 0);
+    gl.uniform3fv(program.uniforms.u_probeCenter, useProbe ? this.probeResources.center : this.emptyProbeCenter);
+    gl.bindVertexArray(visual.buffers.vao);
+    gl.drawElements(gl.TRIANGLES, visual.buffers.indexCount, gl.UNSIGNED_INT, 0);
+    gl.bindVertexArray(null);
+  }
+
+  private bindOpaqueMeshPass(
+    snapshot: RendererSceneSnapshot,
+    pointLights: ReadonlyArray<PointLightObject>,
+    pointShadowLights: ReadonlyArray<ActivePointShadowLight>,
+  ): void {
+    const gl = this.gl!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.renderTargets.sceneFramebuffer);
+    gl.viewport(0, 0, this.renderTargets.width, this.renderTargets.height);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthMask(true);
+    gl.depthFunc(gl.LESS);
+    gl.disable(gl.CULL_FACE);
+    gl.disable(gl.BLEND);
+    gl.useProgram(this.renderPrograms!.mesh.program);
+    this.bindSceneUniforms(this.renderPrograms!.mesh, snapshot, pointLights, pointShadowLights, true, true);
+  }
+
+  private bindTransparentMeshPass(
+    snapshot: RendererSceneSnapshot,
+    pointLights: ReadonlyArray<PointLightObject>,
+    pointShadowLights: ReadonlyArray<ActivePointShadowLight>,
+  ): void {
+    const gl = this.gl!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.renderTargets.sceneFramebuffer);
+    gl.viewport(0, 0, this.renderTargets.width, this.renderTargets.height);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthMask(false);
+    gl.depthFunc(gl.LESS);
+    gl.disable(gl.CULL_FACE);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.blendEquation(gl.FUNC_ADD);
+    gl.useProgram(this.renderPrograms!.mesh.program);
+    this.bindSceneUniforms(this.renderPrograms!.mesh, snapshot, pointLights, pointShadowLights, true, true);
+  }
+
+  private bindSceneUniforms(
+    program: ProgramBundle,
+    snapshot: RendererSceneSnapshot,
+    pointLights: ReadonlyArray<PointLightObject>,
+    pointShadowLights: ReadonlyArray<ActivePointShadowLight>,
+    enableShadows: boolean,
+    enableReflections: boolean,
+  ): void {
+    const gl = this.gl!;
+    const cameraPosition = this.getCameraPosition();
+    const scene = snapshot.scene;
+
+    gl.uniformMatrix4fv(program.uniforms.u_view, false, this.viewMatrix);
+    gl.uniformMatrix4fv(program.uniforms.u_projection, false, this.projectionMatrix);
+    gl.uniformMatrix4fv(program.uniforms.u_lightMatrix, false, this.lightViewProjection);
+    gl.uniform3fv(program.uniforms.u_cameraPos, cameraPosition);
+    gl.uniform3fv(program.uniforms.u_ambientColor, hexToRgb(scene.ambient.color).map((value) => value * scene.ambient.intensity));
+    gl.uniform3fv(program.uniforms.u_dirColor, hexToRgb(scene.directional.color).map((value) => value * scene.directional.intensity));
+    gl.uniform3f(program.uniforms.u_dirDirection, scene.directional.direction.x, scene.directional.direction.y, scene.directional.direction.z);
+    gl.uniform1i(program.uniforms.u_pointCount, pointLights.length);
+    const pointPositions = new Float32Array(MAX_POINT_LIGHTS * 3);
+    const pointColors = new Float32Array(MAX_POINT_LIGHTS * 3);
+    const pointIntensity = new Float32Array(MAX_POINT_LIGHTS);
+    const pointRange = new Float32Array(MAX_POINT_LIGHTS);
+    pointLights.forEach((light, index) => {
+      pointPositions[index * 3] = light.position.x;
+      pointPositions[index * 3 + 1] = light.position.y;
+      pointPositions[index * 3 + 2] = light.position.z;
+      const color = hexToRgb(light.color);
+      pointColors[index * 3] = color[0];
+      pointColors[index * 3 + 1] = color[1];
+      pointColors[index * 3 + 2] = color[2];
+      pointIntensity[index] = light.intensity;
+      pointRange[index] = light.range;
+    });
+    gl.uniform3fv(program.uniforms.u_pointPositions, pointPositions);
+    gl.uniform3fv(program.uniforms.u_pointColors, pointColors);
+    gl.uniform1fv(program.uniforms.u_pointIntensity, pointIntensity);
+    gl.uniform1fv(program.uniforms.u_pointRange, pointRange);
+    const pointShadowSlots = new Int32Array(MAX_POINT_LIGHTS).fill(-1);
+    pointShadowLights.forEach((activeLight) => {
+      pointShadowSlots[activeLight.lightIndex] = activeLight.shadowSlot;
+    });
+    gl.uniform1iv(program.uniforms.u_pointShadowSlot, pointShadowSlots);
+    gl.uniform1f(program.uniforms.u_shadowSoftness, clamp(scene.shadow.shadowSoftness, 0, 1));
+    gl.uniform1i(program.uniforms.u_enableShadows, enableShadows && this.directionalShadowsEnabled(scene) ? 1 : 0);
+    gl.uniform1i(program.uniforms.u_enableReflections, enableReflections ? 1 : 0);
+    bindTexture(gl, this.shadowResources.directionalDepthTexture, 0, gl.TEXTURE_2D);
+    bindTexture(gl, this.shadowResources.directionalTransDepthTexture, 1, gl.TEXTURE_2D);
+    bindTexture(gl, this.shadowResources.directionalTransColorTexture, 2, gl.TEXTURE_2D);
+    bindTexture(gl, this.environmentCubemap, 3, gl.TEXTURE_CUBE_MAP);
+    bindTexture(gl, this.probeResources.cubemap, 4, gl.TEXTURE_CUBE_MAP);
+    const supportedPointShadowSlots = this.supportedPointShadowLightCount();
+    for (let shadowSlot = 0; shadowSlot < supportedPointShadowSlots; shadowSlot += 1) {
+      const unitBase = POINT_SHADOW_TEXTURE_UNIT_BASE + shadowSlot * POINT_SHADOW_TEXTURE_UNIT_STRIDE;
+      bindTexture(gl, this.shadowResources.pointDepthCubemaps[shadowSlot], unitBase, gl.TEXTURE_CUBE_MAP);
+      bindTexture(gl, this.shadowResources.pointTransDepthCubemaps[shadowSlot], unitBase + 1, gl.TEXTURE_CUBE_MAP);
+      bindTexture(gl, this.shadowResources.pointTransColorCubemaps[shadowSlot], unitBase + 2, gl.TEXTURE_CUBE_MAP);
     }
-    halo.parent = source;
-    halo.position.setAll(0);
-    halo.rotationQuaternion = null;
-    halo.rotation.setAll(0);
-    halo.scaling.setAll(options.scale);
-    halo.isPickable = false;
-    halo.receiveShadows = false;
-    halo.renderOverlay = false;
-    halo.renderOutline = false;
-    halo.renderingGroupId = 2;
-    halo.alphaIndex = 20_000 + stableAlphaIndex(plotId);
-    halo.metadata = { selectableId: null, selectableType: 'selectionHalo', sourceId: plotId, haloKey: key };
-    const haloMaterial = new StandardMaterial(`plot-${plotId}-selection-halo-mat`, this.scene);
-    haloMaterial.disableLighting = true;
-    haloMaterial.emissiveColor = new Color3(0.86, 0.93, 1);
-    haloMaterial.alpha = options.alpha;
-    haloMaterial.backFaceCulling = true;
-    haloMaterial.cullBackFaces = false;
-    haloMaterial.sideOrientation = (source.material as Material | null)?.sideOrientation ?? Material.ClockWiseSideOrientation;
-    haloMaterial.disableDepthWrite = true;
-    haloMaterial.zOffset = -1;
-    haloMaterial.zOffsetUnits = -1;
-    halo.material = haloMaterial;
-    halo.isVisible = source.isVisible;
-    this.implicitSelectionHalos.set(plotId, halo);
+    gl.uniform1i(program.uniforms.u_shadowDepth, 0);
+    gl.uniform1i(program.uniforms.u_transShadowDepth, 1);
+    gl.uniform1i(program.uniforms.u_transShadowColor, 2);
+    gl.uniform1i(program.uniforms.u_environment, 3);
+    gl.uniform1i(program.uniforms.u_probe, 4);
+    const pointShadowUnit = (shadowSlot: number, channelOffset: number) =>
+      shadowSlot < supportedPointShadowSlots
+        ? POINT_SHADOW_TEXTURE_UNIT_BASE + shadowSlot * POINT_SHADOW_TEXTURE_UNIT_STRIDE + channelOffset
+        : channelOffset;
+    gl.uniform1i(program.uniforms.u_pointShadowDepth0, pointShadowUnit(0, 0));
+    gl.uniform1i(program.uniforms.u_pointShadowTransDepth0, pointShadowUnit(0, 1));
+    gl.uniform1i(program.uniforms.u_pointShadowTransColor0, pointShadowUnit(0, 2));
+    gl.uniform1i(program.uniforms.u_pointShadowDepth1, pointShadowUnit(1, 0));
+    gl.uniform1i(program.uniforms.u_pointShadowTransDepth1, pointShadowUnit(1, 1));
+    gl.uniform1i(program.uniforms.u_pointShadowTransColor1, pointShadowUnit(1, 2));
+    gl.uniform1i(program.uniforms.u_pointShadowDepth2, pointShadowUnit(2, 0));
+    gl.uniform1i(program.uniforms.u_pointShadowTransDepth2, pointShadowUnit(2, 1));
+    gl.uniform1i(program.uniforms.u_pointShadowTransColor2, pointShadowUnit(2, 2));
   }
 
-  private createGroundAndGrid(): void {
-    if (!this.scene) return;
-
-    this.groundMesh?.dispose(false, true);
-    this.gridMesh?.dispose(false, true);
-    this.groundMesh = MeshBuilder.CreateGround('ground', { width: 1, height: 1, subdivisions: 1 }, this.scene);
-    this.groundMesh.position.z = 0;
-    this.groundMesh.rotationQuaternion = null;
-    // Rotate Babylon's default XZ ground into the app's XY ground plane (z-up world).
-    this.groundMesh.rotation = new Vector3(Math.PI / 2, 0, 0);
-    const groundMaterial = new PBRMaterial('ground-pbr', this.scene);
-    groundMaterial.albedoColor = new Color3(0.95, 0.93, 0.9);
-    groundMaterial.roughness = 0.35;
-    groundMaterial.metallic = 0.02;
-    groundMaterial.backFaceCulling = false;
-    groundMaterial.alpha = 1;
-    this.groundMesh.material = groundMaterial;
-    this.groundMesh.receiveShadows = true;
-
-    this.gridMesh = MeshBuilder.CreateGround('grid', { width: 1, height: 1, subdivisions: 1 }, this.scene);
-    this.gridMesh.position.z = 0.002;
-    this.gridMesh.rotationQuaternion = null;
-    this.gridMesh.rotation = new Vector3(Math.PI / 2, 0, 0);
-    const gridMaterial = new GridMaterial('grid-mat', this.scene);
-    gridMaterial.backFaceCulling = false;
-    gridMaterial.majorUnitFrequency = 5;
-    gridMaterial.minorUnitVisibility = 0.3;
-    gridMaterial.gridRatio = 1;
-    gridMaterial.opacity = 0.25;
-    this.gridMesh.material = gridMaterial;
-    this.gridMesh.isPickable = false;
-
-    groundMaterial.reflectionTexture = null;
+  private prepareProbeForPlot(snapshot: RendererSceneSnapshot, plot: PlotObject): ProbeUsage {
+    if (!this.shouldUseProbeReflections(plot.material.reflectiveness)) {
+      return { useProbe: false, refreshed: false };
+    }
+    const probe = this.probeResources;
+    const nextSceneKey = this.buildProbeSceneKey(snapshot, plot.id);
+    const nextCenter = vec3.fromValues(
+      plot.transform.position.x,
+      plot.transform.position.y,
+      plot.transform.position.z,
+    );
+    const movedSinceRefresh =
+      this.currentProbeOwnerId === plot.id && vec3.distance(probe.center, nextCenter) > 0.05;
+    const needsRefresh =
+      probe.refreshCount === 0
+      || this.currentProbeOwnerId !== plot.id
+      || this.currentProbeSceneKey !== nextSceneKey
+      || movedSinceRefresh
+      || probe.frameCounter % probeRefreshInterval(snapshot.render.interactiveQuality) === 0;
+    if (!needsRefresh) {
+      return { useProbe: true, refreshed: false };
+    }
+    vec3.copy(probe.center, nextCenter);
+    this.renderProbeCubemap(snapshot, probe.center, plot.id);
+    probe.refreshCount += 1;
+    this.currentProbeOwnerId = plot.id;
+    this.currentProbeSceneKey = nextSceneKey;
+    return { useProbe: true, refreshed: true };
   }
 
-  private createAxes(length: number): void {
-    if (!this.scene) return;
-    this.axesMeshes.forEach((m) => m.dispose(false, true));
-    this.axesMeshes = [];
-
-    const x = MeshBuilder.CreateLines('axis-x', { points: [new Vector3(0, 0, 0), new Vector3(length, 0, 0)] }, this.scene);
-    x.color = Color3.FromHexString('#ef4444');
-    x.isPickable = false;
-    const y = MeshBuilder.CreateLines('axis-y', { points: [new Vector3(0, 0, 0), new Vector3(0, length, 0)] }, this.scene);
-    y.color = Color3.FromHexString('#22c55e');
-    y.isPickable = false;
-    const z = MeshBuilder.CreateLines('axis-z', { points: [new Vector3(0, 0, 0), new Vector3(0, 0, length)] }, this.scene);
-    z.color = Color3.FromHexString('#3b82f6');
-    z.isPickable = false;
-
-    this.axesMeshes = [x, y, z];
-  }
-
-  private syncXYGridLines(snapshot: RendererSceneSnapshot): void {
-    if (!this.scene) return;
+  private buildProbeSceneKey(snapshot: RendererSceneSnapshot, excludedPlotId: string): string {
     const { scene } = snapshot;
+    const plotSignature = snapshot.plots
+      .filter(({ plot }) => plot.id !== excludedPlotId)
+      .map(({ plot, meshVersion }) => [
+        plot.id,
+        plot.visible ? 1 : 0,
+        meshVersion,
+        round3(plot.transform.position.x),
+        round3(plot.transform.position.y),
+        round3(plot.transform.position.z),
+        round3(clamp01(plot.material.opacity)),
+        round3(clamp01(plot.material.reflectiveness)),
+        round3(clamp(plot.material.roughness, 0, 1)),
+        plot.material.baseColor,
+      ].join(':'))
+      .join('|');
+    return [
+      scene.backgroundMode,
+      scene.backgroundColor,
+      scene.gradientTopColor,
+      scene.gradientBottomColor,
+      scene.groundPlaneVisible ? 1 : 0,
+      round3(scene.groundPlaneSize),
+      scene.groundPlaneColor,
+      round3(clamp(scene.groundPlaneRoughness, 0, 1)),
+      scene.groundPlaneReflective ? 1 : 0,
+      scene.ambient.color,
+      round3(scene.ambient.intensity),
+      scene.directional.color,
+      round3(scene.directional.intensity),
+      round3(scene.directional.direction.x),
+      round3(scene.directional.direction.y),
+      round3(scene.directional.direction.z),
+      plotSignature,
+    ].join('|');
+  }
 
-    const extent = Math.max(0.5, scene.gridExtent);
-    const minSpacing = Math.max(0.05, scene.gridSpacing);
-    const maxLineCount = 240;
-    const lineCountEstimate = Math.ceil((2 * extent) / minSpacing) + 1;
-    const spacing = lineCountEstimate > maxLineCount ? (2 * extent) / maxLineCount : minSpacing;
-    const key = `${extent.toFixed(4)}|${spacing.toFixed(4)}`;
-
-    if (this.xyGridKey !== key) {
-      this.xyGridLines.forEach((line) => line.dispose(false, true));
-      this.xyGridLines = [];
-      this.xyGridKey = key;
-
-      const z = 0.0025;
-      const start = -extent;
-      const end = extent;
-      const steps = Math.max(1, Math.floor((end - start) / spacing));
-
-      for (let i = 0; i <= steps; i += 1) {
-        const v = start + i * spacing;
-        const clamped = i === steps ? end : v;
-
-        const vertical = MeshBuilder.CreateLines(
-          `xy-grid-x-${i}`,
-          { points: [new Vector3(clamped, start, z), new Vector3(clamped, end, z)] },
-          this.scene,
+  private renderProbeCubemap(snapshot: RendererSceneSnapshot, center: vec3, excludedPlotId: string | null): void {
+    const gl = this.gl!;
+    const probe = this.probeResources;
+    mat4.perspective(this.probeProjectionMatrix, Math.PI / 2, 1, 0.05, 120);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, probe.framebuffer);
+    gl.viewport(0, 0, probe.size, probe.size);
+    gl.disable(gl.BLEND);
+    gl.disable(gl.CULL_FACE);
+    for (let face = 0; face < POINT_SHADOW_FACE_VECTORS.length; face += 1) {
+      uploadEnvironmentFaceToCubemap(
+        gl,
+        probe.cubemap,
+        gl.TEXTURE_CUBE_MAP_POSITIVE_X + face,
+        probe.size,
+        snapshot.scene,
+        face,
+      );
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_CUBE_MAP_POSITIVE_X + face, probe.cubemap, 0);
+      gl.clearDepth(1);
+      gl.clear(gl.DEPTH_BUFFER_BIT);
+      const faceTarget = vec3.add(vec3.create(), center, POINT_SHADOW_FACE_VECTORS[face].target);
+      mat4.lookAt(this.probeViewMatrix, center, faceTarget, POINT_SHADOW_FACE_VECTORS[face].up);
+      gl.useProgram(this.renderPrograms!.mesh.program);
+      this.bindProbeUniforms(snapshot, this.renderPrograms!.mesh);
+      if (snapshot.scene.groundPlaneVisible) {
+        this.drawGroundPlane(snapshot.scene, this.renderPrograms!.mesh, false, false);
+      }
+      for (const plotSnapshot of snapshot.plots) {
+        if (
+          !plotSnapshot.plot.visible
+          || plotSnapshot.plot.id === excludedPlotId
+          || clamp01(plotSnapshot.plot.material.opacity) < 0.999
+        ) {
+          continue;
+        }
+        this.drawShadedMeshWithMatrices(
+          plotSnapshot.plot,
+          this.renderPrograms!.mesh,
+          this.probeViewMatrix,
+          this.probeProjectionMatrix,
+          false,
+          false,
         );
-        vertical.isPickable = false;
-        this.xyGridLines.push(vertical);
-
-        const horizontal = MeshBuilder.CreateLines(
-          `xy-grid-y-${i}`,
-          { points: [new Vector3(start, clamped, z), new Vector3(end, clamped, z)] },
-          this.scene,
-        );
-        horizontal.isPickable = false;
-        this.xyGridLines.push(horizontal);
       }
     }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+  }
 
-    const baseColor = scene.groundPlaneVisible
-      ? new Color3(0.15, 0.2, 0.3)
-      : new Color3(0.72, 0.8, 0.95);
-    const majorColor = scene.groundPlaneVisible
-      ? new Color3(0.25, 0.32, 0.46)
-      : new Color3(0.88, 0.93, 1.0);
-    const opacity = clamp01(scene.gridLineOpacity);
-    const visible = scene.gridVisible;
+  private bindProbeUniforms(snapshot: RendererSceneSnapshot, program: ProgramBundle): void {
+    const gl = this.gl!;
+    const scene = snapshot.scene;
+    gl.uniformMatrix4fv(program.uniforms.u_lightMatrix, false, this.lightViewProjection);
+    gl.uniformMatrix4fv(program.uniforms.u_view, false, this.probeViewMatrix);
+    gl.uniformMatrix4fv(program.uniforms.u_projection, false, this.probeProjectionMatrix);
+    gl.uniform3fv(program.uniforms.u_cameraPos, this.probeResources.center);
+    gl.uniform3fv(program.uniforms.u_ambientColor, hexToRgb(scene.ambient.color).map((value) => value * scene.ambient.intensity));
+    gl.uniform3fv(program.uniforms.u_dirColor, hexToRgb(scene.directional.color).map((value) => value * scene.directional.intensity));
+    gl.uniform3f(program.uniforms.u_dirDirection, scene.directional.direction.x, scene.directional.direction.y, scene.directional.direction.z);
+    gl.uniform1i(program.uniforms.u_pointCount, 0);
+    gl.uniform1iv(program.uniforms.u_pointShadowSlot, new Int32Array(MAX_POINT_LIGHTS).fill(-1));
+    gl.uniform1f(program.uniforms.u_shadowSoftness, 0);
+    gl.uniform1i(program.uniforms.u_enableShadows, 0);
+    gl.uniform1i(program.uniforms.u_enableReflections, 0);
+    gl.uniform1i(program.uniforms.u_useProbe, 0);
+    bindTexture(gl, this.environmentCubemap, 3, gl.TEXTURE_CUBE_MAP);
+    bindTexture(gl, this.environmentCubemap, 4, gl.TEXTURE_CUBE_MAP);
+    gl.uniform1i(program.uniforms.u_environment, 3);
+    gl.uniform1i(program.uniforms.u_probe, 4);
+  }
 
-    const spacingForMajor = Math.max(0.05, spacing);
-    for (const line of this.xyGridLines) {
-      line.isVisible = visible;
-      line.alpha = opacity;
-      // Classify major lines from their constant coordinate encoded in the first point.
-      const p = line.getVerticesData('position');
-      const coord = p ? (Math.abs(p[0] - p[3]) < 1e-6 ? p[0] : p[1]) : 0;
-      const majorIndex = Math.round(coord / spacingForMajor);
-      const isMajor = Number.isFinite(majorIndex) && majorIndex % 5 === 0;
-      line.color = isMajor ? majorColor : baseColor;
+  private drawShadedMeshWithMatrices(
+    plot: PlotObject,
+    program: ProgramBundle,
+    view: mat4,
+    projection: mat4,
+    transparentPass: boolean,
+    useProbe: boolean,
+  ): void {
+    const gl = this.gl!;
+    const visual = this.plotVisuals.get(plot.id);
+    if (!visual?.buffers.vao || visual.buffers.indexCount <= 0) {
+      return;
     }
+    const model = mat4.fromTranslation(mat4.create(), vec3.fromValues(
+      plot.transform.position.x,
+      plot.transform.position.y,
+      plot.transform.position.z,
+    ));
+    const normalMatrix = mat3.normalFromMat4(mat3.create(), model) ?? mat3.create();
+    gl.uniformMatrix4fv(program.uniforms.u_view, false, view);
+    gl.uniformMatrix4fv(program.uniforms.u_projection, false, projection);
+    gl.uniformMatrix4fv(program.uniforms.u_model, false, model);
+    gl.uniformMatrix3fv(program.uniforms.u_normalMatrix, false, normalMatrix);
+    gl.uniform3fv(program.uniforms.u_baseColor, hexToRgb(plot.material.baseColor));
+    gl.uniform1f(program.uniforms.u_opacity, clamp01(plot.material.opacity));
+    gl.uniform1f(program.uniforms.u_reflectiveness, clamp01(plot.material.reflectiveness));
+    gl.uniform1f(program.uniforms.u_roughness, clamp(plot.material.roughness, 0.04, 1));
+    gl.uniform1i(program.uniforms.u_isTransparentPass, transparentPass ? 1 : 0);
+    gl.uniform1i(program.uniforms.u_useProbe, useProbe ? 1 : 0);
+    gl.uniform3fv(program.uniforms.u_probeCenter, useProbe ? this.probeResources.center : this.emptyProbeCenter);
+    gl.bindVertexArray(visual.buffers.vao);
+    gl.drawElements(gl.TRIANGLES, visual.buffers.indexCount, gl.UNSIGNED_INT, 0);
+    gl.bindVertexArray(null);
+  }
+
+  private syncRenderDiagnostics(
+    snapshot: RendererSceneSnapshot,
+    pointShadowLights: ReadonlyArray<ActivePointShadowLight>,
+  ): void {
+    const reflectivePlots = snapshot.plots.filter(({ plot }) => plot.visible && plot.material.reflectiveness > 0.16).length;
+    const probeReady = this.probeResources.refreshCount > 0;
+    const pointShadowCount = pointShadowLights.length;
+    const opaqueShadowCasters = snapshot.plots.filter(({ plot }) => plot.visible && clamp01(plot.material.opacity) >= 0.999).length;
+    const transmittanceShadowCasters = snapshot.plots.filter(({ plot }) => {
+      const opacity = clamp01(plot.material.opacity);
+      return plot.visible && opacity < 0.999;
+    }).length;
+    const directionalUsage = this.directionalShadowsEnabled(snapshot.scene) ? 0.5 : 0;
+    const pointCapacity = Math.max(1, this.supportedPointShadowLightCount());
+    const pointUsage = pointShadowCount > 0 ? (pointShadowCount / pointCapacity) * 0.5 : 0;
+    useAppStore.getState().setRenderDiagnostics({
+      backend: 'webgl2',
+      webglReady: Boolean(this.gl),
+      plotCount: snapshot.plots.length,
+      pointLightCount: snapshot.pointLights.length,
+      transparentPlotCount: snapshot.plots.filter(({ plot }) => clamp01(plot.material.opacity) < 0.999).length,
+      frameTimeMs: this.frameTimeMs,
+      fps: this.fps,
+      shadowMapResolution: snapshot.scene.shadow.shadowMapResolution,
+      shadowAtlasUsage: clamp(directionalUsage + pointUsage, 0, 1),
+      opaqueShadowCasters,
+      transmittanceShadowCasters,
+      pointShadowCount,
+      activeProbeCount: reflectivePlots > 0 && probeReady ? 1 : 0,
+      ssrHitRate: 0,
+      outlineMode: snapshot.selectedId ? 'screen_space_edges' : 'disabled',
+      reflectionSource: reflectivePlots > 0 && probeReady ? 'probe' : 'environment',
+      reflectionProbeRefreshCount: this.probeResources.refreshCount,
+      pointShadowMode: snapshot.scene.shadow.pointShadowMode,
+    });
+  }
+
+  private shouldUseProbeReflections(reflectiveness: number): boolean {
+    return Boolean(this.probeResources.cubemap)
+      && reflectiveness > 0.18;
+  }
+
+  private updateCameraMatrices(): void {
+    const aspect = this.canvas.width > 0 ? this.canvas.width / Math.max(1, this.canvas.height) : 1;
+    const position = this.getCameraPosition();
+    mat4.lookAt(this.viewMatrix, position, this.camera.target, this.camera.upVector);
+    mat4.perspective(this.projectionMatrix, this.camera.fov, aspect, this.camera.minZ, this.camera.maxZ);
+  }
+
+  private getCameraSnapshot(): RendererCameraLike {
+    const position = this.getCameraPosition();
+    return {
+      alpha: this.camera.alpha,
+      beta: this.camera.beta,
+      radius: this.camera.radius,
+      position: { x: position[0], y: position[1], z: position[2] },
+      target: { x: this.camera.target[0], y: this.camera.target[1], z: this.camera.target[2] },
+      upVector: { x: this.camera.upVector[0], y: this.camera.upVector[1], z: this.camera.upVector[2] },
+      fov: this.camera.fov,
+      minZ: this.camera.minZ,
+      maxZ: this.camera.maxZ,
+      mode: this.camera.mode,
+      orthoLeft: null,
+      orthoRight: null,
+      orthoTop: null,
+      orthoBottom: null,
+    };
+  }
+
+  private getCameraPosition(): vec3 {
+    const x = this.camera.target[0] + this.camera.radius * Math.cos(this.camera.alpha) * Math.sin(this.camera.beta);
+    const y = this.camera.target[1] + this.camera.radius * Math.sin(this.camera.alpha) * Math.sin(this.camera.beta);
+    const z = this.camera.target[2] + this.camera.radius * Math.cos(this.camera.beta);
+    return vec3.fromValues(x, y, z);
+  }
+
+  private computePickingRay(clientX: number, clientY: number): { origin: vec3; direction: vec3 } {
+    const rect = this.canvas.getBoundingClientRect();
+    const ndcX = ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
+    const ndcY = 1 - ((clientY - rect.top) / Math.max(1, rect.height)) * 2;
+    const invViewProj = mat4.invert(mat4.create(), mat4.multiply(mat4.create(), this.projectionMatrix, this.viewMatrix));
+    if (!invViewProj) {
+      return { origin: this.getCameraPosition(), direction: vec3.fromValues(0, 0, -1) };
+    }
+    const near = vec4.transformMat4(vec4.create(), vec4.fromValues(ndcX, ndcY, -1, 1), invViewProj);
+    const far = vec4.transformMat4(vec4.create(), vec4.fromValues(ndcX, ndcY, 1, 1), invViewProj);
+    const nearWorld = vec3.fromValues(near[0] / near[3], near[1] / near[3], near[2] / near[3]);
+    const farWorld = vec3.fromValues(far[0] / far[3], far[1] / far[3], far[2] / far[3]);
+    const direction = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), farWorld, nearWorld));
+    return { origin: nearWorld, direction };
   }
 
   private attachInputHandlers(): void {
-    if (!this.scene || !this.camera) return;
-
-    this.pointerObserver = this.scene.onPointerObservable.add((pointerInfo) => {
-      const event = pointerInfo.event as PointerEvent;
-      switch (pointerInfo.type) {
-        case PointerEventTypes.POINTERDOWN:
-          this.handlePointerDown(event);
-          break;
-        case PointerEventTypes.POINTERUP:
-          this.handlePointerUp(event);
-          break;
-        case PointerEventTypes.POINTERMOVE:
-          this.handlePointerMove(event);
-          break;
-        default:
-          break;
-      }
-    });
-
-    this.canvas.addEventListener('wheel', (event) => {
-      if (!this.camera) return;
+    this.canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+    this.pointerDownListener = (event) => this.handlePointerDown(event);
+    this.pointerMoveListener = (event) => this.handlePointerMove(event);
+    this.pointerUpListener = (event) => this.handlePointerUp(event);
+    this.wheelListener = (event) => {
       event.preventDefault();
       this.camera.radius *= Math.exp(event.deltaY * 0.0015);
-      this.camera.radius = Math.max(this.camera.lowerRadiusLimit ?? 1, Math.min(this.camera.upperRadiusLimit ?? 200, this.camera.radius));
-    }, { passive: false });
+      this.camera.radius = clamp(this.camera.radius, this.camera.lowerRadiusLimit, this.camera.upperRadiusLimit);
+    };
+    this.resizeListener = () => this.resizeViewport();
+    this.canvas.addEventListener('pointerdown', this.pointerDownListener);
+    window.addEventListener('pointermove', this.pointerMoveListener);
+    window.addEventListener('pointerup', this.pointerUpListener);
+    this.canvas.addEventListener('wheel', this.wheelListener, { passive: false });
+    window.addEventListener('resize', this.resizeListener);
   }
 
   private handlePointerDown(event: PointerEvent): void {
-    if (!this.scene || !this.camera) return;
     if (event.button === 2) {
       this.cameraDrag = {
         mode: event.shiftKey ? 'pan' : 'orbit',
@@ -1786,60 +1646,100 @@ export class SceneController {
       this.canvas.setPointerCapture(event.pointerId);
       return;
     }
-
     if (event.button !== 0) {
       return;
     }
-
-    const pick = this.scene.pick(this.scene.pointerX, this.scene.pointerY, (mesh) => !!mesh.metadata?.selectableId);
-    const selectableId = pick?.pickedMesh?.metadata?.selectableId as string | undefined;
-    if (!selectableId) {
-      useAppStore.getState().selectObject(null);
-      return;
-    }
-
-    useAppStore.getState().selectObject(selectableId);
-
-    if (!pick.pickedPoint) {
-      return;
-    }
-
-    const selected = useAppStore.getState().objects.find((obj) => obj.id === selectableId);
-    if (!selected) return;
-
-    const startPosition = selected.type === 'plot' ? vec3(selected.transform.position) : vec3(selected.position);
-    if (event.shiftKey) {
-      const ray = this.scene.createPickingRay(this.scene.pointerX, this.scene.pointerY, Matrix.Identity(), this.camera);
-      const axisZ = closestZOnVerticalAxisToRay(ray, startPosition.x, startPosition.y);
-      this.dragState = {
-        objectId: selectableId,
-        mode: 'z',
-        startPosition,
-        fixedX: startPosition.x,
-        fixedY: startPosition.y,
-        zOffset: axisZ === null ? 0 : startPosition.z - axisZ,
-        fallbackScale: this.camera.radius * 0.005,
-        startClientY: event.clientY,
-      };
-      useAppStore.getState().beginObjectDragHistory(selectableId);
-      this.canvas.setPointerCapture(event.pointerId);
-      return;
-    }
-
-    const hit = rayPlaneIntersectZ(this.scene.createPickingRay(this.scene.pointerX, this.scene.pointerY, Matrix.Identity(), this.camera), startPosition.z);
+    const hit = this.pickSceneObject(event.clientX, event.clientY);
+    useAppStore.getState().selectObject(hit?.id ?? null);
     if (!hit) {
       return;
     }
-
+    const selected = useAppStore.getState().objects.find((obj) => obj.id === hit.id);
+    if (!selected) {
+      return;
+    }
+    const startPosition = selected.type === 'plot'
+      ? vec3.fromValues(selected.transform.position.x, selected.transform.position.y, selected.transform.position.z)
+      : vec3.fromValues(selected.position.x, selected.position.y, selected.position.z);
+    const ray = this.computePickingRay(event.clientX, event.clientY);
+    if (event.shiftKey) {
+      const axisZ = closestZOnVerticalAxisToRay(ray, startPosition[0], startPosition[1]);
+      this.dragState = {
+        objectId: hit.id,
+        mode: 'z',
+        startPosition,
+        fixedX: startPosition[0],
+        fixedY: startPosition[1],
+        zOffset: axisZ === null ? 0 : startPosition[2] - axisZ,
+        fallbackScale: this.camera.radius * 0.005,
+        startClientY: event.clientY,
+      };
+      useAppStore.getState().beginObjectDragHistory(hit.id);
+      this.canvas.setPointerCapture(event.pointerId);
+      return;
+    }
+    const planeHit = rayPlaneIntersectZ(ray, startPosition[2]);
+    if (!planeHit) {
+      return;
+    }
     this.dragState = {
-      objectId: selectableId,
+      objectId: hit.id,
       mode: 'xy',
       startPosition,
-      planeZ: startPosition.z,
-      startPoint: hit,
+      planeZ: startPosition[2],
+      startPoint: planeHit,
     };
-    useAppStore.getState().beginObjectDragHistory(selectableId);
+    useAppStore.getState().beginObjectDragHistory(hit.id);
     this.canvas.setPointerCapture(event.pointerId);
+  }
+
+  private handlePointerMove(event: PointerEvent): void {
+    if (this.cameraDrag && this.cameraDrag.pointerId === event.pointerId) {
+      const dx = event.clientX - this.cameraDrag.lastX;
+      const dy = event.clientY - this.cameraDrag.lastY;
+      this.cameraDrag.lastX = event.clientX;
+      this.cameraDrag.lastY = event.clientY;
+      if (this.cameraDrag.mode === 'orbit') {
+        this.camera.alpha -= dx * 0.01;
+        this.camera.beta = clamp(this.camera.beta - dy * 0.01, 0.1, Math.PI - 0.1);
+      } else {
+        const scale = this.camera.radius * 0.002;
+        const position = this.getCameraPosition();
+        const forward = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), this.camera.target, position));
+        const right = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), forward, this.camera.upVector));
+        const up = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), right, forward));
+        vec3.scaleAndAdd(this.camera.target, this.camera.target, right, -dx * scale);
+        vec3.scaleAndAdd(this.camera.target, this.camera.target, up, dy * scale);
+      }
+      return;
+    }
+    if (!this.dragState) {
+      return;
+    }
+    const current = useAppStore.getState().objects.find((obj) => obj.id === this.dragState?.objectId);
+    if (!current) {
+      return;
+    }
+    const ray = this.computePickingRay(event.clientX, event.clientY);
+    if (this.dragState.mode === 'xy') {
+      const hit = rayPlaneIntersectZ(ray, this.dragState.planeZ);
+      if (!hit) {
+        return;
+      }
+      const delta = vec3.sub(vec3.create(), hit, this.dragState.startPoint);
+      const nextPosition = vec3.add(vec3.create(), this.dragState.startPosition, delta);
+      useAppStore.getState().setObjectPosition(current.id, { x: nextPosition[0], y: nextPosition[1], z: nextPosition[2] });
+      return;
+    }
+    const nextPosition = vec3.clone(this.dragState.startPosition);
+    const axisZ = closestZOnVerticalAxisToRay(ray, this.dragState.fixedX, this.dragState.fixedY);
+    if (axisZ === null) {
+      const dy = event.clientY - this.dragState.startClientY;
+      nextPosition[2] += -dy * this.dragState.fallbackScale;
+    } else {
+      nextPosition[2] = axisZ + this.dragState.zOffset;
+    }
+    useAppStore.getState().setObjectPosition(current.id, { x: nextPosition[0], y: nextPosition[1], z: nextPosition[2] });
   }
 
   private handlePointerUp(event: PointerEvent): void {
@@ -1855,610 +1755,1337 @@ export class SceneController {
     }
   }
 
-  private handlePointerMove(event: PointerEvent): void {
-    if (!this.scene || !this.camera) return;
-
-    if (this.cameraDrag && this.cameraDrag.pointerId === event.pointerId) {
-      const dx = event.clientX - this.cameraDrag.lastX;
-      const dy = event.clientY - this.cameraDrag.lastY;
-      this.cameraDrag.lastX = event.clientX;
-      this.cameraDrag.lastY = event.clientY;
-
-      if (this.cameraDrag.mode === 'orbit') {
-        this.camera.alpha -= dx * 0.01;
-        this.camera.beta = clamp(this.camera.beta - dy * 0.01, 0.1, Math.PI - 0.1);
-      } else {
-        const panScale = this.camera.radius * 0.002;
-        const right = this.camera.getDirection(new Vector3(1, 0, 0));
-        const up = this.camera.getDirection(new Vector3(0, 1, 0));
-        this.camera.target.addInPlace(right.scale(-dx * panScale));
-        this.camera.target.addInPlace(up.scale(dy * panScale));
+  private pickSceneObject(clientX: number, clientY: number): { id: string; distance: number } | null {
+    const ray = this.computePickingRay(clientX, clientY);
+    let bestId: string | null = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const light of this.pointLightVisuals.values()) {
+      if (!shouldRenderPointLightGizmo(light.light)) {
+        continue;
       }
-      return;
-    }
-
-    if (!this.dragState) return;
-
-    const current = useAppStore.getState().objects.find((obj) => obj.id === this.dragState?.objectId);
-    if (!current) return;
-
-    if (this.dragState.mode === 'xy') {
-      const ray = this.scene.createPickingRay(this.scene.pointerX, this.scene.pointerY, Matrix.Identity(), this.camera);
-      const hit = rayPlaneIntersectZ(ray, this.dragState.planeZ);
-      if (!hit) return;
-      const delta = hit.subtract(this.dragState.startPoint);
-      const pos = this.dragState.startPosition.add(delta);
-      useAppStore.getState().setObjectPosition(current.id, { x: pos.x, y: pos.y, z: pos.z });
-    } else {
-      const pos = this.dragState.startPosition.clone();
-      const ray = this.scene.createPickingRay(this.scene.pointerX, this.scene.pointerY, Matrix.Identity(), this.camera);
-      const axisZ = closestZOnVerticalAxisToRay(ray, this.dragState.fixedX, this.dragState.fixedY);
-      if (axisZ === null) {
-        const dy = event.clientY - this.dragState.startClientY;
-        const dz = -dy * this.dragState.fallbackScale;
-        pos.z += dz;
-      } else {
-        pos.z = axisZ + this.dragState.zOffset;
-      }
-      useAppStore.getState().setObjectPosition(current.id, { x: pos.x, y: pos.y, z: pos.z });
-    }
-  }
-
-  private ensureDirectionalShadowGenerator(resolution: number, softness: number): void {
-    if (!this.directionalLight) return;
-    const targetSize = clamp(Math.round(resolution), 256, 4096);
-    const currentSize = this.directionalShadow?.getShadowMap()?.getSize()?.width;
-    if (!this.directionalShadow || currentSize !== targetSize) {
-      this.directionalShadow?.dispose();
-      this.directionalShadow = new ShadowGenerator(targetSize, this.directionalLight);
-    }
-    this.configureShadowGenerator(this.directionalShadow, softness);
-  }
-
-  private configureShadowGenerator(shadow: ShadowGenerator, softness: number): void {
-    const s = clamp01(softness);
-    const isCubeShadow = shadow.getLight().needCube();
-    shadow.transparencyShadow = true;
-    shadow.enableSoftTransparentShadow = true;
-    shadow.useOpacityTextureForTransparentShadow = false;
-    this.ensureShadowAlphaHook(shadow);
-    // Directional shadows need more bias to avoid acne/striping on smooth surfaces.
-    // Point (cube) shadows are more sensitive; keep bias lower and prefer compatibility over filtering.
-    if (isCubeShadow) {
-      shadow.bias = 0.00005 + s * 0.0002;
-      shadow.normalBias = 0.0006 + s * 0.0024;
-      shadow.setDarkness(0.28);
-      shadow.frustumEdgeFalloff = 0.05;
-      shadow.forceBackFacesOnly = false;
-      // Filtering modes on cube shadows can be inconsistent across WebGPU drivers.
-      // Use unfiltered shadows first for correctness/visibility.
-      shadow.usePercentageCloserFiltering = false;
-      shadow.usePoissonSampling = false;
-    } else {
-      shadow.bias = 0.00008 + s * 0.00035;
-      shadow.normalBias = 0.0012 + s * 0.0065;
-      shadow.setDarkness(0.22);
-      shadow.frustumEdgeFalloff = 0.1;
-      // Back-face shadow casting reduces surface acne on thin parametric meshes.
-      shadow.forceBackFacesOnly = true;
-      shadow.usePercentageCloserFiltering = true;
-      shadow.usePoissonSampling = false;
-    }
-    shadow.filteringQuality = s > 0.66 ? ShadowGenerator.QUALITY_HIGH : ShadowGenerator.QUALITY_MEDIUM;
-    if (shadow.getShadowMap()) {
-      shadow.getShadowMap()!.refreshRate = 1;
-    }
-  }
-
-  private ensureShadowAlphaHook(shadow: ShadowGenerator): void {
-    if (this.shadowAlphaHookedGenerators.has(shadow)) {
-      return;
-    }
-    shadow.onBeforeShadowMapRenderMeshObservable.add((mesh) => {
-      const override = readInteractiveShadowAlpha(mesh);
-      if (override === null) {
-        return;
-      }
-      const material = mesh.material as (Material & { alpha?: number }) | null;
-      if (!material || typeof material.alpha !== 'number') {
-        return;
-      }
-      this.shadowAlphaRestore.set(mesh, material.alpha);
-      material.alpha = override;
-    });
-    shadow.onAfterShadowMapRenderMeshObservable.add((mesh) => {
-      const originalAlpha = this.shadowAlphaRestore.get(mesh);
-      if (originalAlpha === undefined) {
-        return;
-      }
-      const material = mesh.material as (Material & { alpha?: number }) | null;
-      if (material && typeof material.alpha === 'number') {
-        material.alpha = originalAlpha;
-      }
-      this.shadowAlphaRestore.delete(mesh);
-    });
-    this.shadowAlphaHookedGenerators.add(shadow);
-  }
-
-  private hasAnyPointLightShadowsEnabled(): boolean {
-    for (const visual of this.pointLightVisuals.values()) {
-      if (visual.shadowEnabled) {
-        return true;
+      const distance = intersectSphere(ray.origin, ray.direction, light.light.position, Math.max(0.16, this.camera.radius * 0.02));
+      if (distance !== null && distance < bestDistance) {
+        bestId = light.light.id;
+        bestDistance = distance;
       }
     }
-    return false;
-  }
-
-  private setQualityRendererStatus(active: RenderDiagnostics['qualityActiveRenderer'], fallbackReason: string | null): void {
-    const activeChanged = this.qualityActiveRenderer !== active;
-    const fallbackChanged = this.qualityFallbackReason !== fallbackReason;
-    if (!activeChanged && !fallbackChanged) {
-      return;
-    }
-    this.qualityActiveRenderer = active;
-    this.qualityFallbackReason = fallbackReason;
-    if (active === 'none') {
-      this.resetQualityPerfTracking();
-    }
-    useAppStore.getState().setRenderDiagnostics({
-      qualityActiveRenderer: this.qualityActiveRenderer,
-      qualityRendererFallbackReason: this.qualityFallbackReason,
-      qualitySamplesPerSecond: this.qualitySamplesPerSecond,
-    });
-  }
-
-  private resetQualityPerfTracking(): void {
-    this.qualityPerfWindowStartMs = 0;
-    this.qualityPerfWindowStartSamples = 0;
-    if (this.qualitySamplesPerSecond !== 0) {
-      this.qualitySamplesPerSecond = 0;
-      useAppStore.getState().setRenderDiagnostics({ qualitySamplesPerSecond: 0 });
-    }
-  }
-
-  private ensureQualityPreviewOverlayCanvas(): void {
-    if (this.qualityPreviewOverlayCanvas || typeof document === 'undefined') {
-      return;
-    }
-    const parent = this.canvas.parentElement;
-    if (!parent) {
-      return;
-    }
-    const overlay = document.createElement('canvas');
-    const ctx = overlay.getContext('2d', { alpha: true });
-    if (!ctx) {
-      return;
-    }
-    overlay.className = 'viewport-canvas';
-    overlay.style.position = 'absolute';
-    overlay.style.inset = '0';
-    overlay.style.width = '100%';
-    overlay.style.height = '100%';
-    overlay.style.pointerEvents = 'none';
-    overlay.style.zIndex = '2';
-    overlay.style.display = 'none';
-    overlay.style.background = 'transparent';
-    parent.insertBefore(overlay, this.canvas.nextSibling);
-    this.qualityPreviewOverlayCanvas = overlay;
-    this.qualityPreviewOverlayCtx = ctx;
-  }
-
-  private hideQualityPreviewOverlay(): void {
-    if (this.qualityPreviewOverlayCanvas) {
-      this.qualityPreviewOverlayCanvas.style.display = 'none';
-    }
-  }
-
-  private syncQualityPreviewOverlay(render: RenderSettings): void {
-    const overlayEligible =
-      this.qualityActiveRenderer === 'path'
-      || this.qualityActiveRenderer === 'hybrid_gpu_preview';
-    if (render.mode !== 'quality' || !overlayEligible || !this.qualityBackends) {
-      this.hideQualityPreviewOverlay();
-      return;
-    }
-    // Partial sub-pass previews (before the first full sample) are visually misleading:
-    // sparse interleaved pixels + browser canvas scaling can look like ghost geometry.
-    if (render.qualityCurrentSamples < 1) {
-      this.hideQualityPreviewOverlay();
-      return;
-    }
-    const exportCanvas = this.qualityBackends.getActiveBackendExportCanvas();
-    if (!exportCanvas) {
-      this.hideQualityPreviewOverlay();
-      return;
-    }
-    this.ensureQualityPreviewOverlayCanvas();
-    if (!this.qualityPreviewOverlayCanvas || !this.qualityPreviewOverlayCtx) {
-      return;
-    }
-    const overlay = this.qualityPreviewOverlayCanvas;
-    const ctx = this.qualityPreviewOverlayCtx;
-    const w = Math.max(1, exportCanvas.width);
-    const h = Math.max(1, exportCanvas.height);
-    if (overlay.width !== w || overlay.height !== h) {
-      overlay.width = w;
-      overlay.height = h;
-    }
-    ctx.save();
-    try {
-      ctx.globalAlpha = 1;
-      ctx.globalCompositeOperation = 'copy';
-      ctx.drawImage(exportCanvas, 0, 0, w, h);
-    } finally {
-      ctx.restore();
-    }
-    overlay.style.display = 'block';
-  }
-
-  private updateQualitySamplesPerSecond(currentSamples: number, active: boolean): void {
-    if (!active) {
-      this.resetQualityPerfTracking();
-      return;
-    }
-    const now = performance.now();
-    if (this.qualityPerfWindowStartMs <= 0) {
-      this.qualityPerfWindowStartMs = now;
-      this.qualityPerfWindowStartSamples = currentSamples;
-      return;
-    }
-    const elapsedMs = now - this.qualityPerfWindowStartMs;
-    if (elapsedMs < 250) {
-      return;
-    }
-    const deltaSamples = Math.max(0, currentSamples - this.qualityPerfWindowStartSamples);
-    const rawSps = elapsedMs > 0 ? (deltaSamples * 1000) / elapsedMs : 0;
-    const nextSps =
-      rawSps >= 10
-        ? Math.round(rawSps)
-        : rawSps >= 1
-          ? Math.round(rawSps * 10) / 10
-          : rawSps >= 0.1
-            ? Math.round(rawSps * 100) / 100
-            : Math.round(rawSps * 1000) / 1000;
-    if (nextSps !== this.qualitySamplesPerSecond) {
-      this.qualitySamplesPerSecond = nextSps;
-      useAppStore.getState().setRenderDiagnostics({ qualitySamplesPerSecond: nextSps });
-    }
-    if (elapsedMs >= 1000 || deltaSamples >= 32) {
-      this.qualityPerfWindowStartMs = now;
-      this.qualityPerfWindowStartSamples = currentSamples;
-    }
-  }
-
-  private announceQualityStatusOnce(key: string, message: string): void {
-    if (this.lastQualityStatusMessageKey === key) {
-      return;
-    }
-    this.lastQualityStatusMessageKey = key;
-    useAppStore.getState().setStatusMessage(message);
-  }
-
-  private syncRenderDiagnostics(snapshot: RendererSceneSnapshot): void {
-    const { scene, render, plots, pointLights } = snapshot;
-    const pointShadowsEnabled = Array.from(this.pointLightVisuals.values()).filter((v) => v.shadowEnabled).length;
-    const directionalShadowCasterCount = this.directionalShadow?.getShadowMap()?.renderList?.length ?? 0;
-    const pointShadowCasterCounts: Record<string, number> = {};
-    for (const [id, visual] of this.pointLightVisuals.entries()) {
-      pointShadowCasterCounts[id] = visual.shadowEnabled ? (visual.shadow?.getShadowMap()?.renderList?.length ?? 0) : 0;
-    }
-    const directionalShadowEnabled = Boolean(
-      scene.directional.castShadows && scene.shadow.directionalShadowEnabled && this.directionalShadow,
-    );
-    const transparentPlotCount = plots.filter((plot) => plot.opacityClass === 'transparent').length;
-    const shadowReceiver: RenderDiagnostics['shadowReceiver'] = scene.groundPlaneVisible
-      ? 'ground'
-      : 'none';
-    const currentDiagnostics = useAppStore.getState().renderDiagnostics;
-    const pathDiagnosticsActive = render.mode === 'quality' && this.qualityActiveRenderer === 'path';
-    const fallbackTexture = this.environmentFallbackTexture;
-    const fallbackReady = fallbackTexture?.isReady() ?? false;
-    const fallbackUsable = this.isUsableReflectionTexture(fallbackTexture);
-
-    useAppStore.getState().setRenderDiagnostics({
-      webgpuReady: Boolean(this.engine && this.scene),
-      plotCount: plots.length,
-      pointLightCount: pointLights.length,
-      directionalShadowEnabled,
-      directionalShadowCasterCount,
-      pointShadowsEnabled,
-      pointShadowLimit: scene.shadow.pointShadowMaxLights,
-      pointShadowCasterCounts,
-      shadowReceiver,
-      transparentPlotCount,
-      shadowMapResolution: scene.shadow.shadowMapResolution,
-      pointShadowMode: scene.shadow.pointShadowMode,
-      pointShadowCapability: this.pointShadowCapability,
-      interactiveReflectionPath: this.interactiveReflectionPath,
-      interactiveReflectionSource: this.interactiveReflectionSource,
-      interactiveReflectionFallbackReason: this.interactiveReflectionFallbackReason,
-      interactiveReflectionProbeSize: 0,
-      interactiveReflectionProbeRefreshCount: this.interactiveReflectionProbeRefreshCount,
-      interactiveReflectionLastRefreshReason: this.interactiveReflectionLastRefreshReason,
-      interactiveReflectionProbeHasCapture: false,
-      interactiveReflectionProbeUsable: false,
-      interactiveReflectionProbeTextureReady: false,
-      interactiveReflectionProbeTextureAllocated: false,
-      interactiveReflectionFallbackKind: this.interactiveReflectionFallbackKind,
-      interactiveReflectionFallbackEverUsable: this.interactiveReflectionFallbackEverUsable,
-      interactiveReflectionFallbackTexturePresent: Boolean(fallbackTexture),
-      interactiveReflectionFallbackTextureReady: fallbackReady,
-      interactiveReflectionFallbackTextureUsable: fallbackUsable,
-      qualityActiveRenderer: render.mode === 'quality' ? this.qualityActiveRenderer : 'none',
-      qualityRendererFallbackReason: render.mode === 'quality' ? this.qualityFallbackReason : null,
-      qualityResolutionScale: render.mode === 'quality' ? clamp(render.qualityResolutionScale, 0.25, 4) : 1,
-      qualitySamplesPerSecond: render.mode === 'quality' ? this.qualitySamplesPerSecond : 0,
-      qualityLastResetReason: render.mode === 'quality' ? this.qualityLastResetReason : null,
-      qualityPathExecutionMode: pathDiagnosticsActive ? currentDiagnostics.qualityPathExecutionMode : null,
-      qualityPathAlignmentStatus: pathDiagnosticsActive ? currentDiagnostics.qualityPathAlignmentStatus : null,
-      qualityPathAlignmentProbeCount: pathDiagnosticsActive ? currentDiagnostics.qualityPathAlignmentProbeCount : 0,
-      qualityPathAlignmentHitMismatches: pathDiagnosticsActive ? currentDiagnostics.qualityPathAlignmentHitMismatches : 0,
-      qualityPathAlignmentMaxPointError: pathDiagnosticsActive ? currentDiagnostics.qualityPathAlignmentMaxPointError : 0,
-      qualityPathAlignmentMaxDistanceError: pathDiagnosticsActive ? currentDiagnostics.qualityPathAlignmentMaxDistanceError : 0,
-      qualityPathWorkerBatchCount: pathDiagnosticsActive ? currentDiagnostics.qualityPathWorkerBatchCount : 0,
-      qualityPathWorkerPixelCount: pathDiagnosticsActive ? currentDiagnostics.qualityPathWorkerPixelCount : 0,
-      qualityPathWorkerBatchLatencyMs: pathDiagnosticsActive ? currentDiagnostics.qualityPathWorkerBatchLatencyMs : 0,
-      qualityPathWorkerBatchPixelsPerBatch: pathDiagnosticsActive ? currentDiagnostics.qualityPathWorkerBatchPixelsPerBatch : 0,
-      qualityPathWorkerPixelsPerSecond: pathDiagnosticsActive ? currentDiagnostics.qualityPathWorkerPixelsPerSecond : 0,
-      qualityPathMainThreadBatchCount: pathDiagnosticsActive ? currentDiagnostics.qualityPathMainThreadBatchCount : 0,
-      qualityPathMainThreadPixelCount: pathDiagnosticsActive ? currentDiagnostics.qualityPathMainThreadPixelCount : 0,
-      qualityPathMainThreadPixelsPerSecond: pathDiagnosticsActive ? currentDiagnostics.qualityPathMainThreadPixelsPerSecond : 0,
-    });
-  }
-
-  private syncQualityRenderer(snapshot: RendererSceneSnapshot): void {
-    this.syncQualityResolutionScale(snapshot.render);
-    this.syncQualityPipeline(snapshot);
-  }
-
-  private syncQualityResolutionScale(render: AppState['render']): void {
-    if (!this.engine) return;
-    const scale = render.mode === 'quality' ? clamp(render.qualityResolutionScale, 0.25, 4) : 1;
-    const targetLevel = this.baseHardwareScalingLevel / scale;
-    if (Number.isFinite(this.lastAppliedHardwareScalingLevel) && Math.abs(this.lastAppliedHardwareScalingLevel - targetLevel) < 1e-6) {
-      return;
-    }
-    this.engine.setHardwareScalingLevel(targetLevel);
-    this.engine.resize();
-    this.lastAppliedHardwareScalingLevel = targetLevel;
-    this.resetQualityAccumulation({
-      resetHistory: render.mode === 'quality',
-      reason: render.mode === 'quality' ? 'resolution_scale_change' : null,
-    });
-  }
-
-  private syncQualityPipeline(snapshot: RendererSceneSnapshot): void {
-    if (!this.engine || !this.scene || !this.camera) return;
-    const render = snapshot.render;
-    this.qualityBackends ??= new QualityBackendRouter(this.engine, this.scene, this.camera, {
-      getSnapshot: () => this.latestSnapshot,
-      setStatusMessage: (message) => useAppStore.getState().setStatusMessage(message),
-      setRenderDiagnostics: (diagnostics) => useAppStore.getState().setRenderDiagnostics(diagnostics),
-    });
-
-    const result = this.qualityBackends.sync(snapshot);
-    const effectiveFallbackReason =
-      result.activeRenderer !== 'none' && result.activeRenderer === render.qualityRenderer
-        ? null
-        : result.fallbackReason;
-    this.setQualityRendererStatus(result.activeRenderer, effectiveFallbackReason);
-
-    if (render.mode !== 'quality') {
-      this.hideQualityPreviewOverlay();
-      return;
-    }
-
-    if (render.qualityRenderer === 'path' && result.activeRenderer === 'hybrid_gpu_preview') {
-      this.announceQualityStatusOnce(
-        'quality-path-fallback-hybrid-gpu-preview',
-        effectiveFallbackReason ?? 'Quality path renderer unavailable; using Hybrid GPU Preview fallback',
+    for (const [plotId, visual] of this.plotVisuals.entries()) {
+      const plot = this.latestSnapshot?.objects.find((object): object is PlotObject => object.type === 'plot' && object.id === plotId);
+      if (!plot || !plot.visible) {
+        continue;
+      }
+      const hit = intersectRayWithPlotGeometry(
+        ray.origin,
+        ray.direction,
+        visual.geometry,
+        plot.transform.position,
       );
-    } else if (render.qualityRenderer === 'path' && result.activeRenderer === 'taa_preview') {
-      this.announceQualityStatusOnce(
-        'quality-path-fallback-taa',
-        effectiveFallbackReason ?? 'Quality path renderer unavailable; using TAA preview fallback',
-      );
-    } else if (render.qualityRenderer === 'hybrid_gpu_preview' && result.activeRenderer === 'hybrid_gpu_preview') {
-      this.announceQualityStatusOnce(
-        'quality-hybrid-gpu-preview-phase5a',
-        'Quality Hybrid GPU Preview is the Phase 5A fast GPU-backed accumulation path (advanced true path tracing remains in progress)',
-      );
-    } else if (render.qualityRenderer === 'hybrid_gpu_preview' && result.activeRenderer === 'taa_preview') {
-      this.announceQualityStatusOnce(
-        'quality-hybrid-gpu-preview-fallback-taa',
-        effectiveFallbackReason ?? 'Hybrid GPU Preview unavailable; using TAA preview fallback',
-      );
-    } else if (render.qualityRenderer === 'path' && result.activeRenderer === 'path') {
-      this.announceQualityStatusOnce(
-        'quality-path-v1-experimental',
-        'Quality path renderer is an experimental Phase 5B CPU path tracer prototype (true GPU path tracing is still in progress)',
-      );
-    } else if (result.activeRenderer === 'none' && effectiveFallbackReason) {
-      this.announceQualityStatusOnce(`quality-unsupported-${render.qualityRenderer}`, effectiveFallbackReason);
+      if (hit && hit.distance < bestDistance) {
+        bestId = plotId;
+        bestDistance = hit.distance;
+      }
     }
-
-    if (result.enabledJustNow) {
-      this.resetQualityAccumulation({ resetHistory: true, reason: 'quality_pipeline_enabled' });
-    }
+    return bestId ? { id: bestId, distance: bestDistance } : null;
   }
 
-  private tickQualityMode(): boolean {
-    const { render, markQualityProgress } = useAppStore.getState();
-    if (render.mode !== 'quality') {
-      this.qualityBackends?.disableAll();
-      this.setQualityRendererStatus('none', null);
-      this.hideQualityPreviewOverlay();
-      this.lastQualityCameraSignature = '';
-      this.updateQualitySamplesPerSecond(0, false);
-      if (render.qualityCurrentSamples !== 0 || render.qualityRunning) {
-        markQualityProgress(0, false);
-      }
-      return true;
-    }
-
-    if (!this.qualityBackends || !this.qualityBackends.isActiveBackendEnabled()) {
-      if (this.latestSnapshot) {
-        this.syncQualityPipeline(this.latestSnapshot);
-      }
-      if (!this.qualityBackends || !this.qualityBackends.isActiveBackendEnabled()) {
-        this.setQualityRendererStatus('none', this.qualityFallbackReason);
-        this.hideQualityPreviewOverlay();
-        this.updateQualitySamplesPerSecond(0, false);
-        if (render.qualityCurrentSamples !== 0 || render.qualityRunning) {
-          markQualityProgress(0, false);
-        }
-        return true;
-      }
-    }
-
-    const cameraSig = this.computeQualityCameraSignature();
-    if (cameraSig) {
-      if (this.lastQualityCameraSignature && cameraSig !== this.lastQualityCameraSignature) {
-        // Let the active quality backend handle history reset while we track a shared reset reason.
-        this.resetQualityAccumulation({ resetHistory: false, reason: 'camera_change' });
-      }
-      this.lastQualityCameraSignature = cameraSig;
-    }
-
-    const tick = this.qualityBackends.tick(render);
-    if (!tick.shouldRender) {
-      markQualityProgress(Math.max(0, Math.floor(tick.progress.currentSamples)), tick.progress.running);
-      this.updateQualitySamplesPerSecond(tick.progress.currentSamples, tick.progress.running);
-    }
-    return tick.shouldRender;
-  }
-
-  private handleQualityFrameRendered(): void {
-    if (!this.qualityBackends) {
+  private exposeDebugHandles(): void {
+    if (typeof window === 'undefined') {
       return;
     }
-    const { render, markQualityProgress } = useAppStore.getState();
-    if (render.mode !== 'quality' || !this.qualityBackends.isActiveBackendEnabled()) {
-      return;
-    }
-    this.qualityBackends.onFrameRendered(render, this.canvas);
-    const progress = this.qualityBackends.getActiveBackendProgress(render);
-    markQualityProgress(Math.max(0, Math.floor(progress.currentSamples)), progress.running);
-    this.updateQualitySamplesPerSecond(progress.currentSamples, progress.running);
-    this.syncQualityPreviewOverlay(render);
+    (window as Window & { __plotRenderSceneController?: unknown }).__plotRenderSceneController = this;
   }
 
-  private computeQualityCameraSignature(): string {
-    if (!this.camera) return '';
-    const t = this.camera.target;
-    const r = (n: number) => (Number.isFinite(n) ? n.toFixed(4) : 'nan');
-    return [
-      r(this.camera.alpha),
-      r(this.camera.beta),
-      r(this.camera.radius),
-      r(t.x),
-      r(t.y),
-      r(t.z),
+  private ensureRenderTargets(width: number, height: number): void {
+    const gl = this.gl!;
+    if (this.renderTargets.width === width && this.renderTargets.height === height && this.renderTargets.sceneFramebuffer) {
+      return;
+    }
+    this.deleteRenderTargets(gl);
+    const hdrColorFormat = this.supportsFloatColorBuffers
+      ? { internalFormat: gl.RGBA16F, format: gl.RGBA, type: gl.HALF_FLOAT }
+      : { internalFormat: gl.RGBA8, format: gl.RGBA, type: gl.UNSIGNED_BYTE };
+    const sceneColor = createColorTexture(gl, width, height, hdrColorFormat.internalFormat, hdrColorFormat.format, hdrColorFormat.type);
+    const sceneDepth = createDepthTexture(gl, width, height);
+    const sceneFramebuffer = createFramebuffer(gl, [
+      { attachment: gl.COLOR_ATTACHMENT0, texture: sceneColor, target: gl.TEXTURE_2D },
+      { attachment: gl.DEPTH_ATTACHMENT, texture: sceneDepth, target: gl.TEXTURE_2D },
+    ]);
+    const oitAccum = createColorTexture(gl, width, height, hdrColorFormat.internalFormat, hdrColorFormat.format, hdrColorFormat.type);
+    const oitReveal = createColorTexture(gl, width, height, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+    const oitFramebuffer = createFramebuffer(gl, [
+      { attachment: gl.COLOR_ATTACHMENT0, texture: oitAccum, target: gl.TEXTURE_2D },
+      { attachment: gl.COLOR_ATTACHMENT1, texture: oitReveal, target: gl.TEXTURE_2D },
+      { attachment: gl.DEPTH_ATTACHMENT, texture: sceneDepth, target: gl.TEXTURE_2D },
+    ]);
+    const maskTexture = createColorTexture(gl, width, height, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, gl.NEAREST);
+    const maskDepth = createDepthTexture(gl, width, height);
+    const maskFramebuffer = createFramebuffer(gl, [
+      { attachment: gl.COLOR_ATTACHMENT0, texture: maskTexture, target: gl.TEXTURE_2D },
+      { attachment: gl.DEPTH_ATTACHMENT, texture: maskDepth, target: gl.TEXTURE_2D },
+    ]);
+    this.renderTargets = {
+      width,
+      height,
+      sceneFramebuffer,
+      sceneColor,
+      sceneDepth,
+      oitFramebuffer,
+      oitAccum,
+      oitReveal,
+      maskFramebuffer,
+      maskTexture,
+      maskDepth,
+    };
+  }
+
+  private deleteRenderTargets(gl: WebGL2RenderingContext): void {
+    deleteFramebuffer(gl, this.renderTargets.sceneFramebuffer);
+    deleteFramebuffer(gl, this.renderTargets.oitFramebuffer);
+    deleteFramebuffer(gl, this.renderTargets.maskFramebuffer);
+    deleteTexture(gl, this.renderTargets.sceneColor);
+    deleteTexture(gl, this.renderTargets.sceneDepth);
+    deleteTexture(gl, this.renderTargets.oitAccum);
+    deleteTexture(gl, this.renderTargets.oitReveal);
+    deleteTexture(gl, this.renderTargets.maskTexture);
+    deleteTexture(gl, this.renderTargets.maskDepth);
+    this.renderTargets = emptyRenderTargets();
+  }
+
+  private ensureShadowResources(size: number): void {
+    const gl = this.gl!;
+    const targetSize = clamp(Math.round(size), 256, 4096);
+    if (this.shadowResources.size === targetSize && this.shadowResources.directionalFramebuffer) {
+      return;
+    }
+    this.deleteShadowResources(gl);
+    const directionalDepthTexture = createDepthTexture(gl, targetSize, targetSize);
+    const directionalFramebuffer = createFramebuffer(gl, [
+      { attachment: gl.DEPTH_ATTACHMENT, texture: directionalDepthTexture, target: gl.TEXTURE_2D },
+    ]);
+    const directionalTransDepthTexture = createDepthTexture(gl, targetSize, targetSize);
+    const directionalTransColorTexture = createColorTexture(gl, targetSize, targetSize, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+    const directionalTransFramebuffer = createFramebuffer(gl, [
+      { attachment: gl.COLOR_ATTACHMENT0, texture: directionalTransColorTexture, target: gl.TEXTURE_2D },
+      { attachment: gl.DEPTH_ATTACHMENT, texture: directionalTransDepthTexture, target: gl.TEXTURE_2D },
+    ]);
+    const pointFramebuffer = gl.createFramebuffer();
+    const pointTransFramebuffer = gl.createFramebuffer();
+    if (!pointFramebuffer || !pointTransFramebuffer) {
+      throw new Error('Failed to create point shadow framebuffers');
+    }
+    this.shadowResources = {
+      directionalFramebuffer,
+      directionalDepthTexture,
+      directionalTransFramebuffer,
+      directionalTransDepthTexture,
+      directionalTransColorTexture,
+      pointFramebuffer,
+      pointTransFramebuffer,
+      pointDepthCubemaps: Array.from({ length: MAX_POINT_SHADOW_LIGHTS }, () => createDepthCubemap(gl, targetSize)),
+      pointTransDepthCubemaps: Array.from({ length: MAX_POINT_SHADOW_LIGHTS }, () => createDepthCubemap(gl, targetSize)),
+      pointTransColorCubemaps: Array.from({ length: MAX_POINT_SHADOW_LIGHTS }, () => createColorCubemap(gl, targetSize, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE)),
+      size: targetSize,
+    };
+  }
+
+  private deleteShadowResources(gl: WebGL2RenderingContext): void {
+    deleteFramebuffer(gl, this.shadowResources.directionalFramebuffer);
+    deleteFramebuffer(gl, this.shadowResources.directionalTransFramebuffer);
+    deleteFramebuffer(gl, this.shadowResources.pointFramebuffer);
+    deleteFramebuffer(gl, this.shadowResources.pointTransFramebuffer);
+    deleteTexture(gl, this.shadowResources.directionalDepthTexture);
+    deleteTexture(gl, this.shadowResources.directionalTransDepthTexture);
+    deleteTexture(gl, this.shadowResources.directionalTransColorTexture);
+    this.shadowResources.pointDepthCubemaps.forEach((texture) => deleteTexture(gl, texture));
+    this.shadowResources.pointTransDepthCubemaps.forEach((texture) => deleteTexture(gl, texture));
+    this.shadowResources.pointTransColorCubemaps.forEach((texture) => deleteTexture(gl, texture));
+    this.shadowResources = emptyShadowResources();
+  }
+
+  private ensureEnvironmentCubemap(snapshot: RendererSceneSnapshot): void {
+    const key = [
+      snapshot.scene.backgroundMode,
+      snapshot.scene.backgroundColor,
+      snapshot.scene.gradientTopColor,
+      snapshot.scene.gradientBottomColor,
+      snapshot.scene.groundPlaneVisible ? 'ground:on' : 'ground:off',
+      snapshot.scene.groundPlaneColor,
+      snapshot.scene.ambient.color,
+      snapshot.scene.directional.color,
     ].join('|');
-  }
-
-  private resetQualityAccumulation(options: { resetHistory: boolean; reason?: string | null }): void {
-    this.lastQualityCameraSignature = this.computeQualityCameraSignature();
-    if (options.reason !== undefined) {
-      this.qualityLastResetReason = options.reason;
-      useAppStore.getState().setRenderDiagnostics({ qualityLastResetReason: this.qualityLastResetReason });
-    }
-    this.resetQualityPerfTracking();
-    this.qualityBackends?.resetActiveBackendAccumulation();
-    this.hideQualityPreviewOverlay();
-    if (!options.resetHistory) {
+    if (this.environmentCubemap && this.environmentKey === key) {
       return;
     }
-    this.qualityBackends?.resetActiveBackendHistory(options.reason ?? null);
+    const gl = this.gl!;
+    deleteTexture(gl, this.environmentCubemap);
+    this.environmentCubemap = createEnvironmentCubemap(gl, snapshot);
+    this.environmentKey = key;
   }
 
-  private disposeQualityPipeline(): void {
-    if (!this.qualityBackends) return;
-    this.qualityBackends.dispose();
-    this.qualityBackends = null;
-    this.hideQualityPreviewOverlay();
-    this.setQualityRendererStatus('none', null);
-  }
-
-  private async waitForQualityReadyForExport(timeoutMs: number): Promise<'skipped' | 'ready' | 'timeout'> {
-    const started = performance.now();
-    let announced = false;
-    while (true) {
-      if (this.disposed) {
-        return 'skipped';
-      }
-      const { render } = useAppStore.getState();
-      if (render.mode !== 'quality') {
-        return 'skipped';
-      }
-      if (render.qualityEarlyExportBehavior === 'immediate') {
-        return 'skipped';
-      }
-      if (!this.qualityBackends || !this.qualityBackends.isActiveBackendEnabled()) {
-        if (this.latestSnapshot) {
-          this.syncQualityPipeline(this.latestSnapshot);
-        }
-      }
-      if (this.qualityBackends?.isActiveBackendReadyForExport(render)) {
-        return 'ready';
-      }
-      if (this.qualityBackends && !this.qualityBackends.isActiveBackendEnabled() && this.qualityFallbackReason) {
-        return 'skipped';
-      }
-      if (!announced) {
-        useAppStore.getState().setStatusMessage('Waiting for quality accumulation before PNG export...');
-        announced = true;
-      }
-      if (performance.now() - started >= timeoutMs) {
-        return 'timeout';
-      }
-      await delay(50);
+  private deleteProbeResources(gl: WebGL2RenderingContext): void {
+    deleteTexture(gl, this.probeResources.cubemap);
+    deleteFramebuffer(gl, this.probeResources.framebuffer);
+    if (this.probeResources.depthRenderbuffer) {
+      gl.deleteRenderbuffer(this.probeResources.depthRenderbuffer);
     }
+    this.probeResources = emptyProbeResources();
+    this.currentProbeOwnerId = null;
+    this.currentProbeSceneKey = '';
   }
 
-  private readonly handleResize = () => {
-    this.engine?.resize();
-    if (useAppStore.getState().render.mode === 'quality') {
-      this.resetQualityAccumulation({ resetHistory: true, reason: 'resize' });
+  private createFullscreenResources(gl: WebGL2RenderingContext): void {
+    this.fullscreenVao = gl.createVertexArray();
+    this.fullscreenBuffer = gl.createBuffer();
+    gl.bindVertexArray(this.fullscreenVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.fullscreenBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, FULLSCREEN_TRIANGLE_VERTICES, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
+    const probeCubemap = gl.createTexture();
+    const probeFramebuffer = gl.createFramebuffer();
+    const probeDepth = gl.createRenderbuffer();
+    if (!probeCubemap || !probeFramebuffer || !probeDepth) {
+      throw new Error('Failed to create probe resources');
     }
+    gl.bindTexture(gl.TEXTURE_CUBE_MAP, probeCubemap);
+    for (let face = 0; face < 6; face += 1) {
+      gl.texImage2D(
+        gl.TEXTURE_CUBE_MAP_POSITIVE_X + face,
+        0,
+        gl.RGBA8,
+        DEFAULT_PROBE_SIZE,
+        DEFAULT_PROBE_SIZE,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        null,
+      );
+    }
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindRenderbuffer(gl.RENDERBUFFER, probeDepth);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, DEFAULT_PROBE_SIZE, DEFAULT_PROBE_SIZE);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, probeFramebuffer);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, probeDepth);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.probeResources = {
+      cubemap: probeCubemap,
+      framebuffer: probeFramebuffer,
+      depthRenderbuffer: probeDepth,
+      size: DEFAULT_PROBE_SIZE,
+      frameCounter: 0,
+      refreshCount: 0,
+      center: vec3.fromValues(0, 0, 0),
+    };
+    this.currentProbeOwnerId = null;
+    this.groundMesh = createGroundMesh(gl);
+  }
+}
+
+function createPrograms(gl: WebGL2RenderingContext): RenderPrograms {
+  const sharedMeshUniforms = [
+    'u_model',
+    'u_view',
+    'u_projection',
+    'u_normalMatrix',
+    'u_lightMatrix',
+    'u_cameraPos',
+    'u_baseColor',
+    'u_opacity',
+    'u_reflectiveness',
+    'u_roughness',
+    'u_ambientColor',
+    'u_dirColor',
+    'u_dirDirection',
+    'u_pointCount',
+    'u_pointPositions',
+    'u_pointColors',
+    'u_pointIntensity',
+    'u_pointRange',
+    'u_pointShadowSlot',
+    'u_shadowSoftness',
+    'u_shadowDepth',
+    'u_transShadowDepth',
+    'u_transShadowColor',
+    'u_pointShadowDepth0',
+    'u_pointShadowTransDepth0',
+    'u_pointShadowTransColor0',
+    'u_pointShadowDepth1',
+    'u_pointShadowTransDepth1',
+    'u_pointShadowTransColor1',
+    'u_pointShadowDepth2',
+    'u_pointShadowTransDepth2',
+    'u_pointShadowTransColor2',
+    'u_environment',
+    'u_probe',
+    'u_probeCenter',
+    'u_useProbe',
+    'u_enableShadows',
+    'u_enableReflections',
+    'u_isTransparentPass',
+  ];
+
+  return {
+    mesh: createProgramBundle(gl, meshVertexShaderSource, meshFragmentShaderSource, sharedMeshUniforms),
+    transparentAccum: createProgramBundle(gl, meshVertexShaderSource, transparentAccumFragmentShaderSource, sharedMeshUniforms),
+    transparentReveal: createProgramBundle(gl, meshVertexShaderSource, transparentRevealFragmentShaderSource, sharedMeshUniforms),
+    shadow: createProgramBundle(gl, shadowVertexShaderSource, shadowFragmentShaderSource, [
+      'u_model',
+      'u_lightMatrix',
+    ]),
+    transShadow: createProgramBundle(gl, shadowVertexShaderSource, transparentShadowFragmentShaderSource, [
+      'u_model',
+      'u_lightMatrix',
+      'u_baseColor',
+      'u_opacity',
+    ]),
+    pointShadow: createProgramBundle(gl, pointShadowVertexShaderSource, pointShadowFragmentShaderSource, [
+      'u_model',
+      'u_lightMatrix',
+      'u_lightPosition',
+      'u_lightFar',
+    ]),
+    pointTransShadow: createProgramBundle(gl, pointShadowVertexShaderSource, pointTransparentShadowFragmentShaderSource, [
+      'u_model',
+      'u_lightMatrix',
+      'u_lightPosition',
+      'u_lightFar',
+      'u_baseColor',
+      'u_opacity',
+    ]),
+    line: createProgramBundle(gl, lineVertexShaderSource, lineFragmentShaderSource, [
+      'u_model',
+      'u_view',
+      'u_projection',
+      'u_viewport',
+      'u_screenOffset',
+      'u_color',
+    ]),
+    gizmo: createProgramBundle(gl, pointGizmoVertexShaderSource, pointGizmoFragmentShaderSource, [
+      'u_model',
+      'u_view',
+      'u_projection',
+      'u_size',
+      'u_color',
+      'u_selected',
+    ]),
+    mask: createProgramBundle(gl, maskVertexShaderSource, maskFragmentShaderSource, [
+      'u_model',
+      'u_view',
+      'u_projection',
+    ]),
+    composite: createProgramBundle(gl, fullscreenVertexShaderSource, compositeFragmentShaderSource, [
+      'u_sceneColor',
+      'u_accum',
+      'u_reveal',
+      'u_toneMapping',
+      'u_exposure',
+    ]),
+    outline: createProgramBundle(gl, fullscreenVertexShaderSource, outlineFragmentShaderSource, [
+      'u_mask',
+      'u_maskDepth',
+      'u_sceneDepth',
+      'u_texelSize',
+    ]),
   };
+}
 
-  private safeDisposeEngine(): void {
-    if (!this.engine) return;
-    try {
-      // Babylon WebGPU dispose can throw if initialization was interrupted mid-flight.
-      this.engine.dispose();
-    } catch (error) {
-      console.warn('Engine dispose failed (ignored)', error, { engineInitialized: this.engineInitialized });
+const meshVertexShaderSource = `#version 300 es
+precision highp float;
+layout(location = 0) in vec3 a_position;
+layout(location = 1) in vec3 a_normal;
+
+uniform mat4 u_model;
+uniform mat4 u_view;
+uniform mat4 u_projection;
+uniform mat3 u_normalMatrix;
+uniform mat4 u_lightMatrix;
+
+out vec3 v_worldPosition;
+out vec3 v_worldNormal;
+out vec4 v_shadowPosition;
+
+void main() {
+  vec4 world = u_model * vec4(a_position, 1.0);
+  v_worldPosition = world.xyz;
+  v_worldNormal = normalize(u_normalMatrix * a_normal);
+  v_shadowPosition = u_lightMatrix * world;
+  gl_Position = u_projection * u_view * world;
+}
+`;
+
+const meshLightingPreamble = `
+precision highp float;
+
+uniform vec3 u_cameraPos;
+uniform vec3 u_baseColor;
+uniform float u_opacity;
+uniform float u_reflectiveness;
+uniform float u_roughness;
+uniform vec3 u_ambientColor;
+uniform vec3 u_dirColor;
+uniform vec3 u_dirDirection;
+uniform int u_pointCount;
+uniform vec3 u_pointPositions[${MAX_POINT_LIGHTS}];
+uniform vec3 u_pointColors[${MAX_POINT_LIGHTS}];
+uniform float u_pointIntensity[${MAX_POINT_LIGHTS}];
+uniform float u_pointRange[${MAX_POINT_LIGHTS}];
+uniform int u_pointShadowSlot[${MAX_POINT_LIGHTS}];
+uniform float u_shadowSoftness;
+uniform sampler2D u_shadowDepth;
+uniform sampler2D u_transShadowDepth;
+uniform sampler2D u_transShadowColor;
+uniform samplerCube u_pointShadowDepth0;
+uniform samplerCube u_pointShadowTransDepth0;
+uniform samplerCube u_pointShadowTransColor0;
+uniform samplerCube u_pointShadowDepth1;
+uniform samplerCube u_pointShadowTransDepth1;
+uniform samplerCube u_pointShadowTransColor1;
+uniform samplerCube u_pointShadowDepth2;
+uniform samplerCube u_pointShadowTransDepth2;
+uniform samplerCube u_pointShadowTransColor2;
+uniform samplerCube u_environment;
+uniform samplerCube u_probe;
+uniform vec3 u_probeCenter;
+uniform int u_useProbe;
+uniform int u_enableShadows;
+uniform int u_enableReflections;
+uniform int u_isTransparentPass;
+
+in vec3 v_worldPosition;
+in vec3 v_worldNormal;
+in vec4 v_shadowPosition;
+
+float sampleShadow();
+
+float sampleDepthTexture(sampler2D tex, vec2 uv) {
+  return texture(tex, uv).r;
+}
+
+float samplePointShadowDepth(int shadowSlot, vec3 direction) {
+  if (shadowSlot == 0) {
+    return texture(u_pointShadowDepth0, direction).r;
+  }
+  if (shadowSlot == 1) {
+    return texture(u_pointShadowDepth1, direction).r;
+  }
+  if (shadowSlot == 2) {
+    return texture(u_pointShadowDepth2, direction).r;
+  }
+  return 1.0;
+}
+
+float samplePointTransShadowDepth(int shadowSlot, vec3 direction) {
+  if (shadowSlot == 0) {
+    return texture(u_pointShadowTransDepth0, direction).r;
+  }
+  if (shadowSlot == 1) {
+    return texture(u_pointShadowTransDepth1, direction).r;
+  }
+  if (shadowSlot == 2) {
+    return texture(u_pointShadowTransDepth2, direction).r;
+  }
+  return 1.0;
+}
+
+vec3 samplePointTransShadowColor(int shadowSlot, vec3 direction) {
+  if (shadowSlot == 0) {
+    return texture(u_pointShadowTransColor0, direction).rgb;
+  }
+  if (shadowSlot == 1) {
+    return texture(u_pointShadowTransColor1, direction).rgb;
+  }
+  if (shadowSlot == 2) {
+    return texture(u_pointShadowTransColor2, direction).rgb;
+  }
+  return vec3(1.0);
+}
+
+${shadowVisibilityGlsl}
+
+float sampleShadow() {
+  vec3 projected = v_shadowPosition.xyz / max(v_shadowPosition.w, 0.0001);
+  projected = projected * 0.5 + 0.5;
+  if (projected.x < 0.0 || projected.x > 1.0 || projected.y < 0.0 || projected.y > 1.0 || projected.z < 0.0 || projected.z > 1.0) {
+    return 1.0;
+  }
+  float bias = 0.0018 + max(0.0, 1.0 - abs(dot(normalize(v_worldNormal), normalize(-u_dirDirection)))) * 0.003;
+  float softness = mix(0.65, 2.25, clamp(u_shadowSoftness, 0.0, 1.0));
+  float visibility = 0.0;
+  for (int y = -1; y <= 1; y += 1) {
+    for (int x = -1; x <= 1; x += 1) {
+      vec2 offset = vec2(float(x), float(y)) * softness / vec2(textureSize(u_shadowDepth, 0));
+      float depth = sampleDepthTexture(u_shadowDepth, projected.xy + offset);
+      visibility += projected.z - bias <= depth ? 1.0 : 0.0;
     }
   }
+  visibility /= 9.0;
+  float transDepth = sampleDepthTexture(u_transShadowDepth, projected.xy);
+  vec3 transColor = texture(u_transShadowColor, projected.xy).rgb;
+  if (projected.z - bias > transDepth && transDepth > 0.0 && transDepth < 1.0) {
+    return combineShadowVisibility(visibility, dot(transColor, vec3(0.299, 0.587, 0.114)));
+  }
+  return visibility;
 }
 
-function buildGeometryKey(plot: PlotObject, meshVersion = 0): string {
-  const curveStyle =
-    plot.equation.kind === 'parametric_curve'
-      ? {
-          renderAsTube: plot.equation.renderAsTube,
-          tubeRadius: plot.equation.tubeRadius,
-        }
-      : undefined;
-  return JSON.stringify({
-    meshVersion,
-    curveStyle,
-    wireframeCellSize: plot.material.wireframeCellSize ?? 4,
+float samplePointShadow(int shadowSlot, vec3 N, vec3 pointDirection, vec3 lightVector, float distanceToLight, float lightRange) {
+  if (shadowSlot < 0 || distanceToLight <= 0.0) {
+    return 1.0;
+  }
+  float farPlane = max(lightRange, 0.001);
+  if (distanceToLight >= farPlane) {
+    return 1.0;
+  }
+  float bias = 0.0022 + (1.0 - max(dot(N, pointDirection), 0.0)) * 0.005;
+  float currentDepth = distanceToLight / farPlane;
+  vec3 sampleDirection = normalize(lightVector);
+  vec3 referenceAxis = abs(sampleDirection.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
+  vec3 tangent = normalize(cross(referenceAxis, sampleDirection));
+  vec3 bitangent = cross(sampleDirection, tangent);
+  float cubeTexel = 1.0 / float(textureSize(u_pointShadowDepth0, 0).x);
+  float angularRadius = cubeTexel * mix(0.0, 1.35, clamp(u_shadowSoftness, 0.0, 1.0));
+  float visibility = 0.0;
+  for (int sampleIndex = 0; sampleIndex < 5; sampleIndex += 1) {
+    vec2 offset = vec2(0.0);
+    if (sampleIndex == 1) {
+      offset = vec2(angularRadius, 0.0);
+    } else if (sampleIndex == 2) {
+      offset = vec2(-angularRadius, 0.0);
+    } else if (sampleIndex == 3) {
+      offset = vec2(0.0, angularRadius);
+    } else if (sampleIndex == 4) {
+      offset = vec2(0.0, -angularRadius);
+    }
+    vec3 jitteredDirection = normalize(sampleDirection + tangent * offset.x + bitangent * offset.y);
+    float depth = samplePointShadowDepth(shadowSlot, jitteredDirection);
+    visibility += currentDepth - bias <= depth ? 1.0 : 0.0;
+  }
+  visibility /= 5.0;
+  float transDepth = samplePointTransShadowDepth(shadowSlot, lightVector);
+  vec3 transColor = samplePointTransShadowColor(shadowSlot, lightVector);
+  if (currentDepth - bias > transDepth && transDepth > 0.0 && transDepth < 1.0) {
+    return combineShadowVisibility(visibility, dot(transColor, vec3(0.299, 0.587, 0.114)));
+  }
+  return visibility;
+}
+
+vec3 applyLighting(vec3 N, vec3 V) {
+  float roughness = clamp(u_roughness, 0.0, 1.0);
+  float reflectiveness = clamp(u_reflectiveness, 0.0, 1.0);
+  float diffuseScale = mix(1.0, 0.02, pow(reflectiveness, 1.2));
+  float polished = pow(1.0 - roughness, 2.2);
+  float specularCoreExponent = mix(220.0, 10.0, sqrt(roughness));
+  float specularBloomExponent = mix(38.0, 2.8, sqrt(roughness));
+  float viewFresnel = pow(1.0 - max(dot(N, V), 0.0), 5.0);
+  float specularStrength = mix(0.14, 2.4, pow(reflectiveness, 0.92))
+    * mix(1.85, 0.62, roughness)
+    * mix(1.0, 2.4, polished);
+  float bloomStrength = specularStrength * mix(0.9, 2.1, roughness);
+  vec3 specularColor = vec3(mix(0.7, 1.45, reflectiveness));
+  vec3 dir = normalize(-u_dirDirection);
+  float ndl = max(dot(N, dir), 0.0);
+  vec3 color = u_baseColor * u_ambientColor * diffuseScale;
+  float shadow = 1.0;
+  if (u_enableShadows == 1) {
+    shadow = sampleShadow();
+  }
+  color += u_dirColor * ndl * shadow * u_baseColor * diffuseScale;
+  if (ndl > 0.0) {
+    vec3 dirHalfVector = normalize(dir + V);
+    float dirHalfDot = max(dot(N, dirHalfVector), 0.0);
+    float dirSpecularCore = pow(dirHalfDot, specularCoreExponent);
+    float dirSpecularBloom = pow(dirHalfDot, specularBloomExponent);
+    color += u_dirColor * shadow * specularColor
+      * (dirSpecularCore * specularStrength + dirSpecularBloom * bloomStrength);
+  }
+  for (int i = 0; i < ${MAX_POINT_LIGHTS}; i += 1) {
+    if (i >= u_pointCount) {
+      break;
+    }
+    vec3 lightVector = u_pointPositions[i] - v_worldPosition;
+    float distanceToLight = length(lightVector);
+    float lightRange = max(u_pointRange[i], 0.001);
+    float attenuation = clamp(1.0 - distanceToLight / lightRange, 0.0, 1.0);
+    vec3 pointDirection = distanceToLight > 0.0 ? lightVector / distanceToLight : vec3(0.0, 0.0, 1.0);
+    float pointShadow = samplePointShadow(u_pointShadowSlot[i], N, pointDirection, -lightVector, distanceToLight, lightRange);
+    float pointDiffuse = max(dot(N, pointDirection), 0.0);
+    float lightEnergy = attenuation * (u_pointIntensity[i] * 0.025);
+    color += u_pointColors[i] * pointDiffuse * lightEnergy * pointShadow * u_baseColor * diffuseScale;
+
+    vec3 halfVector = normalize(pointDirection + V);
+    float pointHalfDot = max(dot(N, halfVector), 0.0);
+    float pointSpecularCore = pow(pointHalfDot, specularCoreExponent);
+    float pointSpecularBloom = pow(pointHalfDot, specularBloomExponent);
+    color += u_pointColors[i] * lightEnergy * pointShadow * specularColor
+      * (pointSpecularCore * specularStrength + pointSpecularBloom * bloomStrength);
+  }
+  if (u_enableReflections == 1 && u_reflectiveness > 0.001) {
+    vec3 reflected = reflect(-V, N);
+    vec3 reflectedColor = texture(u_environment, reflected).rgb;
+    if (u_useProbe == 1) {
+      reflectedColor = texture(u_probe, reflected).rgb;
+    }
+    float baseReflectance = mix(0.02, 0.985, pow(reflectiveness, 1.2));
+    float reflectionMix = clamp((baseReflectance + (1.0 - baseReflectance) * viewFresnel) * mix(1.0, 0.72, roughness), 0.0, 0.995);
+    color = mix(color, reflectedColor, reflectionMix);
+  }
+  return color;
+}
+`;
+
+const meshFragmentShaderSource = `#version 300 es
+${meshLightingPreamble}
+out vec4 outColor;
+
+void main() {
+  vec3 N = normalize(gl_FrontFacing ? v_worldNormal : -v_worldNormal);
+  vec3 V = normalize(u_cameraPos - v_worldPosition);
+  vec3 color = applyLighting(N, V);
+  float alpha = u_isTransparentPass == 1 ? clamp(u_opacity, 0.0, 0.995) : 1.0;
+  outColor = vec4(color, alpha);
+}
+`;
+
+const transparentAccumFragmentShaderSource = `#version 300 es
+${meshLightingPreamble}
+out vec4 outColor;
+
+void main() {
+  vec3 N = normalize(gl_FrontFacing ? v_worldNormal : -v_worldNormal);
+  vec3 V = normalize(u_cameraPos - v_worldPosition);
+  vec3 color = applyLighting(N, V);
+  float alpha = clamp(u_opacity, 0.0, 0.995);
+  float weight = max(0.05, alpha * 8.0 + pow(max(0.0, 1.0 - u_roughness), 2.0));
+  outColor = vec4(color * alpha, alpha) * weight;
+}
+`;
+
+const transparentRevealFragmentShaderSource = `#version 300 es
+${meshLightingPreamble}
+out vec4 outColor;
+
+void main() {
+  float alpha = clamp(u_opacity, 0.0, 0.995);
+  outColor = vec4(alpha);
+}
+`;
+
+const shadowVertexShaderSource = `#version 300 es
+precision highp float;
+layout(location = 0) in vec3 a_position;
+uniform mat4 u_model;
+uniform mat4 u_lightMatrix;
+void main() {
+  gl_Position = u_lightMatrix * u_model * vec4(a_position, 1.0);
+}
+`;
+
+const shadowFragmentShaderSource = `#version 300 es
+precision highp float;
+void main() {}
+`;
+
+const transparentShadowFragmentShaderSource = `#version 300 es
+precision highp float;
+${shadowVisibilityGlsl}
+uniform vec3 u_baseColor;
+uniform float u_opacity;
+out vec4 outColor;
+void main() {
+  vec3 transmittance = resolveTransparentShadowTransmittance(u_baseColor, u_opacity);
+  outColor = vec4(transmittance, 1.0);
+}
+`;
+
+const pointShadowVertexShaderSource = `#version 300 es
+precision highp float;
+layout(location = 0) in vec3 a_position;
+
+uniform mat4 u_model;
+uniform mat4 u_lightMatrix;
+
+out vec3 v_worldPosition;
+
+void main() {
+  vec4 world = u_model * vec4(a_position, 1.0);
+  v_worldPosition = world.xyz;
+  gl_Position = u_lightMatrix * world;
+}
+`;
+
+const pointShadowFragmentShaderSource = `#version 300 es
+precision highp float;
+
+uniform vec3 u_lightPosition;
+uniform float u_lightFar;
+
+in vec3 v_worldPosition;
+
+void main() {
+  float lightDistance = length(v_worldPosition - u_lightPosition);
+  gl_FragDepth = clamp(lightDistance / max(u_lightFar, 0.001), 0.0, 1.0);
+}
+`;
+
+const pointTransparentShadowFragmentShaderSource = `#version 300 es
+precision highp float;
+${shadowVisibilityGlsl}
+
+uniform vec3 u_lightPosition;
+uniform float u_lightFar;
+uniform vec3 u_baseColor;
+uniform float u_opacity;
+
+in vec3 v_worldPosition;
+
+out vec4 outColor;
+
+void main() {
+  float lightDistance = length(v_worldPosition - u_lightPosition);
+  gl_FragDepth = clamp(lightDistance / max(u_lightFar, 0.001), 0.0, 1.0);
+  vec3 transmittance = resolveTransparentShadowTransmittance(u_baseColor, u_opacity);
+  outColor = vec4(transmittance, 1.0);
+}
+`;
+
+const lineVertexShaderSource = `#version 300 es
+precision highp float;
+layout(location = 0) in vec3 a_position;
+uniform mat4 u_model;
+uniform mat4 u_view;
+uniform mat4 u_projection;
+uniform vec2 u_viewport;
+uniform vec2 u_screenOffset;
+void main() {
+  vec4 clip = u_projection * u_view * u_model * vec4(a_position, 1.0);
+  vec2 safeViewport = max(u_viewport, vec2(1.0));
+  clip.xy += (u_screenOffset / safeViewport) * 2.0 * clip.w;
+  gl_Position = clip;
+}
+`;
+
+const lineFragmentShaderSource = `#version 300 es
+precision highp float;
+uniform vec4 u_color;
+out vec4 outColor;
+void main() {
+  outColor = u_color;
+}
+`;
+
+const pointGizmoVertexShaderSource = `#version 300 es
+precision highp float;
+layout(location = 0) in vec3 a_position;
+
+uniform mat4 u_model;
+uniform mat4 u_view;
+uniform mat4 u_projection;
+uniform float u_size;
+
+void main() {
+  vec4 world = u_model * vec4(a_position, 1.0);
+  vec4 clip = u_projection * u_view * world;
+  gl_Position = clip;
+  gl_PointSize = clamp(u_size / max(clip.w, 0.001), 10.0, 30.0);
+}
+`;
+
+const pointGizmoFragmentShaderSource = `#version 300 es
+precision highp float;
+
+uniform vec3 u_color;
+uniform float u_selected;
+
+out vec4 outColor;
+
+void main() {
+  vec2 uv = gl_PointCoord * 2.0 - 1.0;
+  float radius2 = dot(uv, uv);
+  if (radius2 > 1.0) {
+    discard;
+  }
+
+  float radius = sqrt(radius2);
+  float z = sqrt(max(0.0, 1.0 - radius2));
+  vec3 normal = normalize(vec3(uv.x, -uv.y, z));
+  vec3 lightDir = normalize(vec3(-0.45, 0.65, 0.7));
+  float diffuse = 0.38 + max(dot(normal, lightDir), 0.0) * 0.62;
+  float rim = pow(1.0 - max(normal.z, 0.0), 1.8);
+  float specular = pow(max(dot(reflect(-lightDir, normal), vec3(0.0, 0.0, 1.0)), 0.0), 28.0);
+  float ring = smoothstep(0.72, 0.92, radius) * (1.0 - smoothstep(0.92, 1.0, radius));
+
+  vec3 color = u_color * diffuse;
+  color += vec3(1.0, 0.98, 0.9) * specular * 0.55;
+  color = mix(color, vec3(1.0, 0.95, 0.62), rim * 0.12);
+  color += vec3(1.0, 0.97, 0.82) * ring * mix(0.18, 0.5, u_selected);
+
+  float alpha = 1.0 - smoothstep(0.84, 1.0, radius);
+  alpha = max(alpha, ring * mix(0.2, 0.45, u_selected));
+  outColor = vec4(color, alpha);
+}
+`;
+
+const maskVertexShaderSource = lineVertexShaderSource;
+
+const maskFragmentShaderSource = `#version 300 es
+precision highp float;
+out vec4 outColor;
+void main() {
+  outColor = vec4(1.0);
+}
+`;
+
+const fullscreenVertexShaderSource = `#version 300 es
+precision highp float;
+layout(location = 0) in vec2 a_position;
+out vec2 v_uv;
+void main() {
+  v_uv = a_position * 0.5 + 0.5;
+  gl_Position = vec4(a_position, 0.0, 1.0);
+}
+`;
+
+const compositeFragmentShaderSource = `#version 300 es
+precision highp float;
+uniform sampler2D u_sceneColor;
+uniform sampler2D u_accum;
+uniform sampler2D u_reveal;
+uniform int u_toneMapping;
+uniform float u_exposure;
+in vec2 v_uv;
+out vec4 outColor;
+
+vec3 toneMap(vec3 color) {
+  color *= u_exposure;
+  if (u_toneMapping == 1) {
+    color = clamp((color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14), 0.0, 1.0);
+  } else if (u_toneMapping == 2) {
+    color = color / (color + vec3(1.0));
+  }
+  return color;
+}
+
+void main() {
+  vec4 scene = texture(u_sceneColor, v_uv);
+  outColor = vec4(toneMap(scene.rgb), clamp(scene.a, 0.0, 1.0));
+}
+`;
+
+const outlineFragmentShaderSource = `#version 300 es
+precision highp float;
+uniform sampler2D u_mask;
+uniform sampler2D u_maskDepth;
+uniform sampler2D u_sceneDepth;
+uniform vec2 u_texelSize;
+in vec2 v_uv;
+out vec4 outColor;
+
+float sampleMask(vec2 uv) {
+  return step(0.5, texture(u_mask, uv).a);
+}
+
+void main() {
+  float center = sampleMask(v_uv);
+  float selectedDepth = texture(u_maskDepth, v_uv).r;
+  float sceneDepth = texture(u_sceneDepth, v_uv).r;
+  if (center < 0.5 || selectedDepth >= 1.0 || selectedDepth > sceneDepth + 0.0005) {
+    outColor = vec4(0.0);
+    return;
+  }
+  float edge = 0.0;
+  for (int y = -1; y <= 1; y += 1) {
+    for (int x = -1; x <= 1; x += 1) {
+      vec2 offset = vec2(float(x), float(y)) * u_texelSize;
+      edge = max(edge, abs(center - sampleMask(v_uv + offset)));
+    }
+  }
+  outColor = edge > 0.01 ? vec4(0.86, 0.93, 1.0, 0.9) : vec4(0.0);
+}
+`;
+
+function createProgramBundle(
+  gl: WebGL2RenderingContext,
+  vertexSource: string,
+  fragmentSource: string,
+  uniformNames: string[],
+): ProgramBundle {
+  const vertexShader = compileShader(gl, gl.VERTEX_SHADER, vertexSource);
+  const fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
+  const program = gl.createProgram();
+  if (!program) {
+    throw new Error('Failed to create WebGL program');
+  }
+  gl.attachShader(program, vertexShader);
+  gl.attachShader(program, fragmentShader);
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    const info = gl.getProgramInfoLog(program) ?? 'Unknown link error';
+    gl.deleteShader(vertexShader);
+    gl.deleteShader(fragmentShader);
+    gl.deleteProgram(program);
+    throw new Error(`WebGL program link failed: ${info}`);
+  }
+  gl.deleteShader(vertexShader);
+  gl.deleteShader(fragmentShader);
+  const uniforms: Record<string, WebGLUniformLocation | null> = {};
+  uniformNames.forEach((name) => {
+    uniforms[name] = gl.getUniformLocation(program, name);
   });
+  return { program, uniforms };
 }
 
-function color3(hex: string): Color3 {
-  try {
-    return Color3.FromHexString(hex);
-  } catch {
-    return Color3.White();
+function compileShader(gl: WebGL2RenderingContext, type: number, source: string): WebGLShader {
+  const shader = gl.createShader(type);
+  if (!shader) {
+    throw new Error('Failed to create shader');
+  }
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    const info = gl.getShaderInfoLog(shader) ?? 'Unknown shader compile error';
+    gl.deleteShader(shader);
+    throw new Error(`Shader compile failed: ${info}`);
+  }
+  return shader;
+}
+
+function createLineBuffer(gl: WebGL2RenderingContext, positions: Float32Array, primitive: number): GpuLineBuffer | null {
+  if (positions.length < 6) {
+    return null;
+  }
+  const vao = gl.createVertexArray();
+  const vertexBuffer = gl.createBuffer();
+  if (!vao || !vertexBuffer) {
+    return null;
+  }
+  gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.bindVertexArray(null);
+  return { vao, vertexBuffer, vertexCount: positions.length / 3, primitive };
+}
+
+function createPointBuffer(gl: WebGL2RenderingContext): GpuLineBuffer | null {
+  const vao = gl.createVertexArray();
+  const vertexBuffer = gl.createBuffer();
+  if (!vao || !vertexBuffer) {
+    return null;
+  }
+  gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 0]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.bindVertexArray(null);
+  return { vao, vertexBuffer, vertexCount: 1, primitive: gl.POINTS };
+}
+
+function drawLineBuffer(gl: WebGL2RenderingContext, buffer: GpuLineBuffer): void {
+  gl.bindVertexArray(buffer.vao);
+  gl.drawArrays(buffer.primitive, 0, buffer.vertexCount);
+  gl.bindVertexArray(null);
+}
+
+function deleteLineBuffer(gl: WebGL2RenderingContext, buffer: GpuLineBuffer | null): void {
+  if (!buffer) {
+    return;
+  }
+  deleteVertexArray(gl, buffer.vao);
+  deleteBuffer(gl, buffer.vertexBuffer);
+}
+
+function createFramebuffer(
+  gl: WebGL2RenderingContext,
+  attachments: Array<{ attachment: number; texture: WebGLTexture | null; target: number }>,
+): WebGLFramebuffer {
+  const framebuffer = gl.createFramebuffer();
+  if (!framebuffer) {
+    throw new Error('Failed to create framebuffer');
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+  attachments.forEach(({ attachment, texture, target }) => {
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, attachment, target, texture, 0);
+  });
+  const colorAttachments = attachments
+    .filter((attachment) => attachment.attachment >= gl.COLOR_ATTACHMENT0 && attachment.attachment <= gl.COLOR_ATTACHMENT15)
+    .map((attachment) => attachment.attachment);
+  if (colorAttachments.length > 0) {
+    gl.drawBuffers(colorAttachments);
+  }
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    throw new Error('Framebuffer is incomplete');
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return framebuffer;
+}
+
+function createColorTexture(
+  gl: WebGL2RenderingContext,
+  width: number,
+  height: number,
+  internalFormat: number,
+  format: number,
+  type: number,
+  filter: number = gl.LINEAR,
+): WebGLTexture {
+  const texture = gl.createTexture();
+  if (!texture) {
+    throw new Error('Failed to create color texture');
+  }
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, internalFormat, width, height, 0, format, type, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.bindTexture(gl.TEXTURE_2D, null);
+  return texture;
+}
+
+function createDepthTexture(gl: WebGL2RenderingContext, width: number, height: number): WebGLTexture {
+  const texture = gl.createTexture();
+  if (!texture) {
+    throw new Error('Failed to create depth texture');
+  }
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, width, height, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.bindTexture(gl.TEXTURE_2D, null);
+  return texture;
+}
+
+function createColorCubemap(
+  gl: WebGL2RenderingContext,
+  size: number,
+  internalFormat: number,
+  format: number,
+  type: number,
+): WebGLTexture {
+  const texture = gl.createTexture();
+  if (!texture) {
+    throw new Error('Failed to create color cubemap');
+  }
+  gl.bindTexture(gl.TEXTURE_CUBE_MAP, texture);
+  for (let face = 0; face < 6; face += 1) {
+    gl.texImage2D(
+      gl.TEXTURE_CUBE_MAP_POSITIVE_X + face,
+      0,
+      internalFormat,
+      size,
+      size,
+      0,
+      format,
+      type,
+      null,
+    );
+  }
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+  gl.bindTexture(gl.TEXTURE_CUBE_MAP, null);
+  return texture;
+}
+
+function createDepthCubemap(gl: WebGL2RenderingContext, size: number): WebGLTexture {
+  const texture = gl.createTexture();
+  if (!texture) {
+    throw new Error('Failed to create depth cubemap');
+  }
+  gl.bindTexture(gl.TEXTURE_CUBE_MAP, texture);
+  for (let face = 0; face < 6; face += 1) {
+    gl.texImage2D(
+      gl.TEXTURE_CUBE_MAP_POSITIVE_X + face,
+      0,
+      gl.DEPTH_COMPONENT24,
+      size,
+      size,
+      0,
+      gl.DEPTH_COMPONENT,
+      gl.UNSIGNED_INT,
+      null,
+    );
+  }
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+  gl.bindTexture(gl.TEXTURE_CUBE_MAP, null);
+  return texture;
+}
+
+function createEnvironmentCubemap(gl: WebGL2RenderingContext, snapshot: RendererSceneSnapshot): WebGLTexture {
+  const texture = gl.createTexture();
+  if (!texture) {
+    throw new Error('Failed to create environment cubemap');
+  }
+  gl.bindTexture(gl.TEXTURE_CUBE_MAP, texture);
+  for (let face = 0; face < 6; face += 1) {
+    gl.texImage2D(
+      gl.TEXTURE_CUBE_MAP_POSITIVE_X + face,
+      0,
+      gl.RGBA8,
+      ENVIRONMENT_CUBEMAP_SIZE,
+      ENVIRONMENT_CUBEMAP_SIZE,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      buildEnvironmentFacePixels(snapshot.scene, ENVIRONMENT_CUBEMAP_SIZE, face),
+    );
+  }
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+  gl.bindTexture(gl.TEXTURE_CUBE_MAP, null);
+  return texture;
+}
+
+function sampleSceneEnvironmentColor(
+  scene: RendererSceneSnapshot['scene'],
+  direction: ArrayLike<number>,
+): [number, number, number] {
+  const z = Number(direction[2]) || 0;
+  const top = hexToRgb(scene.backgroundMode === 'gradient' ? scene.gradientTopColor : scene.backgroundColor);
+  const bottom = hexToRgb(scene.backgroundMode === 'gradient' ? scene.gradientBottomColor : scene.backgroundColor);
+  const backdrop = mixRgb(bottom, top, 0.5);
+  if (scene.groundPlaneVisible && z < -0.08) {
+    const ground = hexToRgb(scene.groundPlaneColor);
+    return mixRgb(backdrop, ground, clamp01((-z - 0.08) / 0.92) * 0.35);
+  }
+  return backdrop;
+}
+
+function buildEnvironmentFacePixels(
+  scene: RendererSceneSnapshot['scene'],
+  size: number,
+  face: number,
+): Uint8Array {
+  const pixels = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const direction = sampleEnvironmentDirectionForFace(face, size, x, y);
+      const color = sampleSceneEnvironmentColor(scene, direction);
+      const offset = (y * size + x) * 4;
+      pixels[offset] = Math.round(clamp01(color[0]) * 255);
+      pixels[offset + 1] = Math.round(clamp01(color[1]) * 255);
+      pixels[offset + 2] = Math.round(clamp01(color[2]) * 255);
+      pixels[offset + 3] = 255;
+    }
+  }
+  return pixels;
+}
+
+function sampleEnvironmentDirectionForFace(face: number, size: number, x: number, y: number): vec3 {
+  const faceVector = POINT_SHADOW_FACE_VECTORS[face] ?? POINT_SHADOW_FACE_VECTORS[0];
+  const forward = faceVector.target;
+  const up = faceVector.up;
+  const right = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), forward, up));
+  const sx = ((x + 0.5) / size) * 2 - 1;
+  const sy = 1 - ((y + 0.5) / size) * 2;
+  const direction = vec3.clone(forward);
+  vec3.scaleAndAdd(direction, direction, right, sx);
+  vec3.scaleAndAdd(direction, direction, up, sy);
+  return vec3.normalize(direction, direction);
+}
+
+function uploadEnvironmentFaceToCubemap(
+  gl: WebGL2RenderingContext,
+  texture: WebGLTexture | null,
+  targetFace: number,
+  size: number,
+  scene: RendererSceneSnapshot['scene'],
+  faceIndex: number,
+): void {
+  if (!texture) {
+    return;
+  }
+  gl.bindTexture(gl.TEXTURE_CUBE_MAP, texture);
+  gl.texSubImage2D(
+    targetFace,
+    0,
+    0,
+    0,
+    size,
+    size,
+    gl.RGBA,
+    gl.UNSIGNED_BYTE,
+    buildEnvironmentFacePixels(scene, size, faceIndex),
+  );
+  gl.bindTexture(gl.TEXTURE_CUBE_MAP, null);
+}
+
+function deleteProgramBundle(gl: WebGL2RenderingContext, bundle: ProgramBundle | null): void {
+  if (bundle) {
+    gl.deleteProgram(bundle.program);
   }
 }
 
-function vec3(v: { x: number; y: number; z: number }): Vector3 {
-  return new Vector3(v.x, v.y, v.z);
+function deleteTexture(gl: WebGL2RenderingContext, texture: WebGLTexture | null): void {
+  if (texture) {
+    gl.deleteTexture(texture);
+  }
+}
+
+function deleteFramebuffer(gl: WebGL2RenderingContext, framebuffer: WebGLFramebuffer | null): void {
+  if (framebuffer) {
+    gl.deleteFramebuffer(framebuffer);
+  }
+}
+
+function deleteVertexArray(gl: WebGL2RenderingContext, vao: WebGLVertexArrayObject | null): void {
+  if (vao) {
+    gl.deleteVertexArray(vao);
+  }
+}
+
+function deleteBuffer(gl: WebGL2RenderingContext, buffer: WebGLBuffer | null): void {
+  if (buffer) {
+    gl.deleteBuffer(buffer);
+  }
+}
+
+function bindTexture(
+  gl: WebGL2RenderingContext,
+  texture: WebGLTexture | null,
+  unit: number,
+  target: number,
+): void {
+  gl.activeTexture(gl.TEXTURE0 + unit);
+  gl.bindTexture(target, texture);
+}
+
+function buildGridLines(extent: number, spacing: number): { positions: Float32Array } {
+  const safeExtent = Math.max(0.5, extent);
+  const safeSpacing = Math.max(0.05, spacing);
+  const positions: number[] = [];
+  for (let value = -safeExtent; value <= safeExtent + 1e-6; value += safeSpacing) {
+    positions.push(value, -safeExtent, 0.0025, value, safeExtent, 0.0025);
+    positions.push(-safeExtent, value, 0.0025, safeExtent, value, 0.0025);
+  }
+  return { positions: new Float32Array(positions) };
+}
+
+function buildAxesLines(length: number): { positions: Float32Array } {
+  return {
+    positions: new Float32Array([
+      0, 0, 0, length, 0, 0,
+      0, 0, 0, 0, length, 0,
+      0, 0, 0, 0, 0, length,
+    ]),
+  };
+}
+
+function drawColoredAxes(gl: WebGL2RenderingContext, program: ProgramBundle, buffer: GpuLineBuffer): void {
+  const axisColors = [
+    [0.94, 0.27, 0.27, 0.95],
+    [0.13, 0.77, 0.37, 0.95],
+    [0.23, 0.51, 0.96, 0.95],
+  ];
+  for (let axis = 0; axis < 3; axis += 1) {
+    gl.uniform4fv(program.uniforms.u_color, new Float32Array(axisColors[axis]));
+    gl.bindVertexArray(buffer.vao);
+    gl.drawArrays(gl.LINES, axis * 2, 2);
+    gl.bindVertexArray(null);
+  }
+}
+
+function pointLightGizmoColor(hex: string, selected: boolean): Float32Array {
+  const warm = [1.0, 0.86, 0.28];
+  const light = hexToRgb(hex);
+  const mixAmount = selected ? 0.18 : 0.12;
+  const color = mixRgb(warm, light, mixAmount);
+  return new Float32Array([
+    clamp01(color[0] + (selected ? 0.06 : 0.0)),
+    clamp01(color[1] + (selected ? 0.04 : 0.0)),
+    clamp01(color[2]),
+  ]);
+}
+
+function createGroundMesh(gl: WebGL2RenderingContext): SimpleMeshBuffer {
+  const vao = gl.createVertexArray();
+  const vertexBuffer = gl.createBuffer();
+  const normalBuffer = gl.createBuffer();
+  const indexBuffer = gl.createBuffer();
+  if (!vao || !vertexBuffer || !normalBuffer || !indexBuffer) {
+    throw new Error('Failed to create ground mesh');
+  }
+  const positions = new Float32Array([
+    -1, -1, 0,
+    1, -1, 0,
+    1, 1, 0,
+    -1, 1, 0,
+  ]);
+  const normals = new Float32Array([
+    0, 0, 1,
+    0, 0, 1,
+    0, 0, 1,
+    0, 0, 1,
+  ]);
+  const indices = new Uint16Array([0, 1, 2, 0, 2, 3]);
+  gl.bindVertexArray(vao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, normalBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, normals, gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(1);
+  gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+  gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+  gl.bindVertexArray(null);
+  gl.deleteBuffer(vertexBuffer);
+  gl.deleteBuffer(normalBuffer);
+  return {
+    vao,
+    indexBuffer,
+    indexCount: indices.length,
+  };
+}
+
+function normalizeVec3(input: { x: number; y: number; z: number }, fallback: { x: number; y: number; z: number }) {
+  const length = Math.hypot(input.x, input.y, input.z);
+  if (!Number.isFinite(length) || length < 1e-6) {
+    return fallback;
+  }
+  return { x: input.x / length, y: input.y / length, z: input.z / length };
+}
+
+function mixRgb(a: ArrayLike<number>, b: ArrayLike<number>, t: number): [number, number, number] {
+  return [
+    a[0] + (b[0] - a[0]) * t,
+    a[1] + (b[1] - a[1]) * t,
+    a[2] + (b[2] - a[2]) * t,
+  ];
+}
+
+function hexToRgb(hex: string): Float32Array {
+  const normalized = hex.trim().replace('#', '');
+  const expanded = normalized.length === 3
+    ? normalized.split('').map((char) => `${char}${char}`).join('')
+    : normalized;
+  const value = Number.parseInt(expanded, 16);
+  if (!Number.isFinite(value)) {
+    return new Float32Array([1, 1, 1]);
+  }
+  return new Float32Array([
+    ((value >> 16) & 255) / 255,
+    ((value >> 8) & 255) / 255,
+    (value & 255) / 255,
+  ]);
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -2469,144 +3096,28 @@ function clamp01(value: number): number {
   return clamp(value, 0, 1);
 }
 
-function transparencyBlendFromOpacity(opacity: number): number {
-  const openness = clamp01(1 - opacity);
-  const t = clamp01(openness / 0.12);
-  return t * t * (3 - 2 * t);
-}
-
 function round3(value: number): number {
   return Math.round(value * 1000) / 1000;
 }
 
-function mixColor(a: Color3, b: Color3, t: number): Color3 {
-  const tt = clamp01(t);
-  return new Color3(
-    a.r + (b.r - a.r) * tt,
-    a.g + (b.g - a.g) * tt,
-    a.b + (b.b - a.b) * tt,
-  );
+function clearDefaultFramebuffer(gl: WebGL2RenderingContext, clearColor: [number, number, number, number]): void {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.clearColor(clearColor[0], clearColor[1], clearColor[2], clearColor[3]);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 }
 
-function resolveShellLayerAlpha(targetOpacity: number): number {
-  const opacity = clamp01(targetOpacity);
-  if (opacity >= 1) {
-    return 1;
-  }
-  // Two shell layers should approximately compose back to the requested opacity:
-  // combined = 1 - (1 - layerAlpha)^2
-  return 1 - Math.sqrt(Math.max(0, 1 - opacity));
-}
-
-function resolveInteractiveShadowAlpha(opacity: number, renderSide: 'both' | 'front' | 'back'): number {
-  const remappedOpacity = 0.25 + 0.75 * clamp01(opacity);
-  return renderSide === 'both'
-    ? remappedOpacity
-    : resolveShellLayerAlpha(remappedOpacity);
-}
-
-function readInteractiveShadowAlpha(mesh: Mesh): number | null {
-  const candidate = (mesh.metadata as { interactiveShadowAlpha?: unknown } | null | undefined)?.interactiveShadowAlpha;
-  return typeof candidate === 'number' && Number.isFinite(candidate)
-    ? clamp01(candidate)
-    : null;
-}
-
-function makeSolidCubeFaceBytes(color: Color3, size: number): Uint8Array {
-  const faceSize = Math.max(1, Math.floor(size));
-  const data = new Uint8Array(faceSize * faceSize * 4);
-  const r = Math.round(clamp01(color.r) * 255);
-  const g = Math.round(clamp01(color.g) * 255);
-  const b = Math.round(clamp01(color.b) * 255);
-  for (let i = 0; i < faceSize * faceSize; i += 1) {
-    const base = i * 4;
-    data[base] = r;
-    data[base + 1] = g;
-    data[base + 2] = b;
-    data[base + 3] = 255;
-  }
-  return data;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
-function stableAlphaIndex(id: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < id.length; i += 1) {
-    h ^= id.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return Math.abs(h % 1000);
-}
-
-function applySerializedMeshToBabylonMesh(mesh: Mesh, meshData: SerializedMesh): void {
-  const vd = new VertexData();
-  vd.positions = Array.from(meshData.positions);
-  vd.indices = Array.from(meshData.indices);
-  if (meshData.normals) {
-    vd.normals = Array.from(meshData.normals);
-  }
-  if (meshData.uvs) {
-    vd.uvs = Array.from(meshData.uvs);
-  }
-  vd.applyToMesh(mesh);
-}
-
-function floatArrayToVector3Path(coords: Float32Array): Vector3[] {
-  const points: Vector3[] = [];
-  for (let i = 0; i < coords.length; i += 3) {
-    const x = coords[i];
-    const y = coords[i + 1];
-    const z = coords[i + 2];
-    if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
-      points.push(new Vector3(x, y, z));
-    }
-  }
-  return points;
-}
-
-function isWorkerMeshPending(status?: PlotJobStatus): boolean {
-  if (!status) return false;
-  return status.meshPhase === 'queued' || status.meshPhase === 'mesh_preview' || status.meshPhase === 'mesh_final';
-}
-
-function rayPlaneIntersectZ(ray: { origin: Vector3; direction: Vector3 }, z: number): Vector3 | null {
-  const dz = ray.direction.z;
-  if (Math.abs(dz) < 1e-6) return null;
-  const t = (z - ray.origin.z) / dz;
-  if (t < 0) return null;
-  return ray.origin.add(ray.direction.scale(t));
-}
-
-function closestZOnVerticalAxisToRay(
-  ray: { origin: Vector3; direction: Vector3 },
-  x: number,
-  y: number,
-): number | null {
-  const d = ray.direction;
-  const o = ray.origin;
-  const a = new Vector3(x, y, 0);
-
-  // Axis line is A(t) = (x, y, 0) + t * (0,0,1)
-  const dd = Vector3.Dot(d, d);
-  const dk = d.z;
-  const rhs1 = d.x * (a.x - o.x) + d.y * (a.y - o.y) + d.z * (a.z - o.z);
-  const rhs2 = a.z - o.z;
-  const det = dd - dk * dk;
-  if (Math.abs(det) < 1e-8) {
-    return null;
-  }
-  let s = (rhs1 - rhs2 * dk) / det;
-  if (!Number.isFinite(s)) {
-    return null;
-  }
-  if (s < 0) {
-    s = 0;
-  }
-  const t = rhs2 + dk * s;
-  return Number.isFinite(t) ? t : null;
+function buildPngFileName(): string {
+  const now = new Date();
+  const stamp = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+    '-',
+    String(now.getHours()).padStart(2, '0'),
+    String(now.getMinutes()).padStart(2, '0'),
+    String(now.getSeconds()).padStart(2, '0'),
+  ].join('');
+  return `plot-${stamp}.png`;
 }
 
 async function exportCanvasPng(canvas: HTMLCanvasElement, filename: string): Promise<void> {
@@ -2624,61 +3135,120 @@ async function exportCanvasPng(canvas: HTMLCanvasElement, filename: string): Pro
   URL.revokeObjectURL(url);
 }
 
-async function exportScenePngViaRenderTarget(
-  engine: WebGPUEngine,
-  camera: ArcRotateCamera,
-  sourceCanvas: HTMLCanvasElement,
-  filename: string,
-): Promise<void> {
-  const width = Math.max(1, sourceCanvas.width);
-  const height = Math.max(1, sourceCanvas.height);
-  try {
-    const dataUrl = await CreateScreenshotUsingRenderTargetAsync(engine, camera, { width, height }, 'image/png');
-    if (typeof dataUrl === 'string' && dataUrl.startsWith('data:image/png')) {
-      downloadDataUrl(dataUrl, filename);
-      return;
-    }
-    throw new Error('Babylon screenshot returned unexpected data');
-  } catch (error) {
-    console.warn('Render-target PNG export failed; falling back to canvas.toBlob()', error);
-    await exportCanvasPng(sourceCanvas, filename);
-  }
+function toneMappingMode(mode: AppState['render']['toneMapping']): number {
+  return mode === 'aces' ? 1 : mode === 'filmic' ? 2 : 0;
 }
 
-function downloadDataUrl(dataUrl: string, filename: string): void {
-  const link = document.createElement('a');
-  link.href = dataUrl;
-  link.download = filename;
-  document.body.append(link);
-  link.click();
-  link.remove();
+function probeRefreshInterval(quality: AppState['render']['interactiveQuality']): number {
+  return quality === 'quality' ? PROBE_REFRESH_INTERVAL : quality === 'balanced' ? PROBE_REFRESH_INTERVAL * 2 : PROBE_REFRESH_INTERVAL * 4;
 }
 
-function canvasLooksBlank(canvas: HTMLCanvasElement): boolean {
-  const ctx = canvas.getContext('2d');
-  if (!ctx) {
-    return false;
+function emptyRenderTargets(): RenderTargets {
+  return {
+    width: 0,
+    height: 0,
+    sceneFramebuffer: null,
+    sceneColor: null,
+    sceneDepth: null,
+    oitFramebuffer: null,
+    oitAccum: null,
+    oitReveal: null,
+    maskFramebuffer: null,
+    maskTexture: null,
+    maskDepth: null,
+  };
+}
+
+function emptyShadowResources(): ShadowResources {
+  return {
+    directionalFramebuffer: null,
+    directionalDepthTexture: null,
+    directionalTransFramebuffer: null,
+    directionalTransDepthTexture: null,
+    directionalTransColorTexture: null,
+    pointFramebuffer: null,
+    pointTransFramebuffer: null,
+    pointDepthCubemaps: Array(MAX_POINT_SHADOW_LIGHTS).fill(null),
+    pointTransDepthCubemaps: Array(MAX_POINT_SHADOW_LIGHTS).fill(null),
+    pointTransColorCubemaps: Array(MAX_POINT_SHADOW_LIGHTS).fill(null),
+    size: 0,
+  };
+}
+
+function emptyProbeResources(): ProbeResources {
+  return {
+    cubemap: null,
+    framebuffer: null,
+    depthRenderbuffer: null,
+    size: 0,
+    frameCounter: 0,
+    refreshCount: 0,
+    center: vec3.fromValues(0, 0, 0),
+  };
+}
+
+function rayPlaneIntersectZ(ray: { origin: vec3; direction: vec3 }, z: number): vec3 | null {
+  const dz = ray.direction[2];
+  if (Math.abs(dz) < 1e-6) {
+    return null;
   }
-  const w = canvas.width;
-  const h = canvas.height;
-  if (w <= 0 || h <= 0) {
-    return true;
+  const t = (z - ray.origin[2]) / dz;
+  if (t < 0) {
+    return null;
   }
-  const probeCols = 5;
-  const probeRows = 5;
-  try {
-    for (let ry = 0; ry < probeRows; ry += 1) {
-      const y = Math.min(h - 1, Math.floor((ry + 0.5) * (h / probeRows)));
-      for (let rx = 0; rx < probeCols; rx += 1) {
-        const x = Math.min(w - 1, Math.floor((rx + 0.5) * (w / probeCols)));
-        const p = ctx.getImageData(x, y, 1, 1).data;
-        if (p[0] !== 0 || p[1] !== 0 || p[2] !== 0 || p[3] !== 0) {
-          return false;
-        }
-      }
-    }
-  } catch {
-    return false;
+  return vec3.scaleAndAdd(vec3.create(), ray.origin, ray.direction, t);
+}
+
+function closestZOnVerticalAxisToRay(ray: { origin: vec3; direction: vec3 }, x: number, y: number): number | null {
+  const ox = ray.origin[0];
+  const oy = ray.origin[1];
+  const oz = ray.origin[2];
+  const dx = ray.direction[0];
+  const dy = ray.direction[1];
+  const dz = ray.direction[2];
+  const dd = dx * dx + dy * dy + dz * dz;
+  const dk = dz;
+  const rhs1 = dx * (x - ox) + dy * (y - oy) - dz * oz;
+  const rhs2 = -oz;
+  const det = dd - dk * dk;
+  if (Math.abs(det) < 1e-8) {
+    return null;
   }
-  return true;
+  let s = (rhs1 - rhs2 * dk) / det;
+  if (!Number.isFinite(s)) {
+    return null;
+  }
+  if (s < 0) {
+    s = 0;
+  }
+  const t = rhs2 + dk * s;
+  return Number.isFinite(t) ? t : null;
+}
+
+function transparentSortDistance(plot: PlotObject, cameraPosition: vec3): number {
+  const dx = plot.transform.position.x - cameraPosition[0];
+  const dy = plot.transform.position.y - cameraPosition[1];
+  const dz = plot.transform.position.z - cameraPosition[2];
+  return dx * dx + dy * dy + dz * dz;
+}
+
+function intersectSphere(
+  origin: vec3,
+  direction: vec3,
+  center: PointLightObject['position'],
+  radius: number,
+): number | null {
+  const oc = vec3.fromValues(origin[0] - center.x, origin[1] - center.y, origin[2] - center.z);
+  const a = vec3.dot(direction, direction);
+  const b = 2 * vec3.dot(oc, direction);
+  const c = vec3.dot(oc, oc) - radius * radius;
+  const discriminant = b * b - 4 * a * c;
+  if (discriminant < 0) {
+    return null;
+  }
+  const sqrt = Math.sqrt(discriminant);
+  const t0 = (-b - sqrt) / (2 * a);
+  const t1 = (-b + sqrt) / (2 * a);
+  const hit = t0 > 0 ? t0 : t1 > 0 ? t1 : null;
+  return hit;
 }

@@ -88,7 +88,7 @@ describe('implicit mesher', () => {
       min: { x: -4, y: -4, z: -8 },
       max: { x: 4, y: 4, z: 8 },
     };
-    const mesh = buildImplicitMeshFromScalarField(cylinderBounds, (x, y, _z) => x * x + y * y, 'high', 9);
+    const mesh = buildImplicitMeshFromScalarField(cylinderBounds, (x, y) => x * x + y * y, 'high', 9);
     expect(mesh.topology?.isClosedManifold).toBe(false);
     const topo = edgeTopology(mesh);
     expect(topo.nonManifoldEdges).toBe(0);

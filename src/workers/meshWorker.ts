@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 
 import { compilePlotObject } from '../math/compile';
+import { computeMeshBounds } from '../math/mesh/geometry';
 import { buildImplicitMeshFromScalarField } from '../math/mesh/implicitMarchingTetra';
 import { buildSurfaceMesh, sampleCurve } from '../math/mesh/parametric';
 import type {
@@ -50,6 +51,16 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
           positions: new Float32Array(0),
           indices: new Uint32Array(0),
           curvePath: path,
+          bounds: computeMeshBounds(path),
+          boundaryEdges: new Float32Array(0),
+          featureEdges: new Float32Array(0),
+          topology: {
+            isClosedManifold: false,
+            hasBoundaryEdges: false,
+            hasFeatureEdges: false,
+            boundaryEdgeCount: 0,
+            featureEdgeCount: 0,
+          },
         };
         if (isCanceled(req.objectId)) return;
         postMesh(req.priority === 'preview' ? 'mesh_preview' : 'mesh_final', req.jobId, req.objectId, mesh);

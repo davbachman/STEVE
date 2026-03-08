@@ -1,7 +1,7 @@
 # AGENTS.md
 
 ## App Overview
-This repository contains a desktop-first, browser-only 3D equation graphing app built on Babylon.js WebGPU.
+This repository contains a desktop-first, browser-only 3D equation graphing app built on an in-repo WebGL2 renderer.
 
 The app supports:
 - Parametric curves `(x(t), y(t), z(t))`
@@ -9,7 +9,7 @@ The app supports:
 - Implicit surfaces `F(x,y,z)=0`
 - Explicit single-axis surfaces (`z=f(x,y)`, `x=g(y,z)`, `y=h(x,z)`)
 
-Current product direction is interactive rendering. The legacy quality renderer code remains for compatibility/reference.
+Current product direction is interactive rendering only. The Babylon and legacy quality-renderer paths have been removed from the active app.
 
 ## Core Capabilities
 - Multi-object 3D scenes with plot objects and point lights
@@ -23,7 +23,7 @@ Current product direction is interactive rendering. The legacy quality renderer 
 - React + TypeScript + Vite
 - Zustand + Immer
 - CodeMirror 6 + KaTeX
-- Babylon.js (`@babylonjs/core`) on WebGPU
+- Raw WebGL2 + `gl-matrix`
 - Web Workers for parsing and meshing
 - Dexie/IndexedDB for local persistence
 - Vitest + Playwright for testing
@@ -41,7 +41,6 @@ Current product direction is interactive rendering. The legacy quality renderer 
   - `state/`
     - `defaults.ts`: default scene/render/material settings
     - `store.ts`: Zustand state/actions/history/import normalization
-    - `renderCompat.ts`: render compatibility coercion helpers
 
   - `math/`
     - Parsing/classification/LaTeX/evaluation/compile pipeline
@@ -51,7 +50,6 @@ Current product direction is interactive rendering. The legacy quality renderer 
     - `mathWorker.ts`: parse/classify worker
     - `meshWorker.ts`: meshing worker
     - `runtimeMeshCache.ts`: runtime mesh handoff cache
-    - `pathTraceQualityWorker*.ts`: legacy quality worker code
 
   - `hooks/`
     - `useAutosave.ts`: autosave integration
@@ -59,8 +57,8 @@ Current product direction is interactive rendering. The legacy quality renderer 
 
   - `renderer/`
     - `Viewport3D.tsx`: canvas host and renderer overlays
-    - `SceneController.ts`: Babylon scene/material/light/input orchestration
-    - `qualityBackends.ts`: legacy quality backend implementations
+    - `SceneController.ts`: WebGL2 scene/render/input orchestration
+    - `plotGeometry.ts`: renderer-ready geometry conversion and CPU picking helpers
 
   - `ui/components/`
     - `TopBar.tsx`: file actions, autosave controls, export, quality selector

@@ -3,7 +3,6 @@ import './index.css';
 import { Viewport3D } from './renderer/Viewport3D';
 import type { ViewportApi } from './renderer/SceneController';
 import { useWorkerPipeline } from './hooks/useWorkerPipeline';
-import { LEGACY_QUALITY_MODE_PARKED_MESSAGE } from './state/renderCompat';
 import { useAppStore } from './state/store';
 import { createBuiltInTestScene } from './testing/testScenes';
 import { EquationEditor } from './ui/components/EquationEditor';
@@ -39,13 +38,8 @@ export default function App() {
       || testScene === 'phase5b-path-mixed-geometry'
     ) {
       const builtIn = createBuiltInTestScene(testScene);
-      const requestedLegacyQualityMode = builtIn.render.mode === 'quality';
       replaceProject(builtIn);
-      setStatusMessage(
-        requestedLegacyQualityMode
-          ? `Loaded test scene: ${testScene}. ${LEGACY_QUALITY_MODE_PARKED_MESSAGE}`
-          : `Loaded test scene: ${testScene}`,
-      );
+      setStatusMessage(`Loaded test scene: ${testScene}`);
     }
   }, [replaceProject, setStatusMessage]);
 

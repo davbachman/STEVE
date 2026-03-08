@@ -147,19 +147,9 @@ export const defaultSceneSettings = (): SceneSettings => ({
 });
 
 export const defaultRenderSettings = (): RenderSettings => ({
-  mode: 'interactive',
   toneMapping: 'aces',
   exposure: 1,
   interactiveQuality: 'balanced',
-  qualityRenderer: 'taa_preview',
-  qualitySamplesTarget: 256,
-  qualityResolutionScale: 1,
-  qualityMaxBounces: 4,
-  qualityClampFireflies: true,
-  qualityEarlyExportBehavior: 'wait',
-  denoise: false,
-  qualityRunning: false,
-  qualityCurrentSamples: 0,
   showDiagnostics: false,
 });
 

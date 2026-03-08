@@ -42,6 +42,13 @@ export function useWorkerPipeline(): void {
     const mathWorker = new Worker(new URL('../workers/mathWorker.ts', import.meta.url), { type: 'module' });
     const meshWorker = new Worker(new URL('../workers/meshWorker.ts', import.meta.url), { type: 'module' });
     workersRef.current = { math: mathWorker, mesh: meshWorker };
+    const parseTimers = parseTimerRef.current;
+    const meshTimers = meshTimerRef.current;
+    const plotSignatures = sigsRef.current;
+    const latestParseJobs = latestParseJobRef.current;
+    const latestPreviewJobs = latestMeshPreviewJobRef.current;
+    const latestFinalJobs = latestMeshFinalJobRef.current;
+    const jobMeta = jobMetaRef.current;
 
     mathWorker.onmessage = (event: MessageEvent<WorkerResponse>) => {
       handleMathWorkerMessage(
@@ -60,19 +67,19 @@ export function useWorkerPipeline(): void {
     };
 
     return () => {
-      for (const timer of parseTimerRef.current.values()) {
+      for (const timer of parseTimers.values()) {
         window.clearTimeout(timer);
       }
-      for (const timer of meshTimerRef.current.values()) {
+      for (const timer of meshTimers.values()) {
         window.clearTimeout(timer);
       }
-      parseTimerRef.current.clear();
-      meshTimerRef.current.clear();
-      sigsRef.current.clear();
-      latestParseJobRef.current.clear();
-      latestMeshPreviewJobRef.current.clear();
-      latestMeshFinalJobRef.current.clear();
-      jobMetaRef.current.clear();
+      parseTimers.clear();
+      meshTimers.clear();
+      plotSignatures.clear();
+      latestParseJobs.clear();
+      latestPreviewJobs.clear();
+      latestFinalJobs.clear();
+      jobMeta.clear();
       clearAllRuntimePlotMeshes();
       mathWorker.terminate();
       meshWorker.terminate();

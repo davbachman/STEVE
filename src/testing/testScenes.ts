@@ -112,13 +112,10 @@ function createShadowRegressionScene(): ProjectFileV1 {
   };
 
   const render = defaultRenderSettings();
-  render.mode = 'interactive';
   render.toneMapping = 'aces';
   render.exposure = 1.05;
   render.interactiveQuality = 'quality';
   render.showDiagnostics = false;
-  render.qualityCurrentSamples = 0;
-  render.qualityRunning = false;
 
   const objects: SceneObject[] = [ribbon, sphere, key, fill];
 
@@ -280,7 +277,6 @@ function createInteractiveRenderRegressionScene(): ProjectFileV1 {
   };
 
   const render = defaultRenderSettings();
-  render.mode = 'interactive';
   render.toneMapping = 'aces';
   render.exposure = 1.02;
   render.interactiveQuality = 'quality';
@@ -390,17 +386,10 @@ function createPhase5BPathMixedGeometryScene(): ProjectFileV1 {
   };
 
   const render = defaultRenderSettings();
-  render.mode = 'quality';
-  render.qualityRenderer = 'path';
-  render.qualitySamplesTarget = 12;
-  render.qualityResolutionScale = 0.5;
-  render.qualityMaxBounces = 4;
-  render.qualityClampFireflies = true;
+  render.interactiveQuality = 'quality';
   render.toneMapping = 'aces';
   render.exposure = 1.02;
   render.showDiagnostics = true;
-  render.qualityCurrentSamples = 0;
-  render.qualityRunning = false;
 
   const objects: SceneObject[] = [glassSheet, lineCurve, backdrop, key, rim];
 

@@ -1,17 +1,16 @@
-import type { ArcRotateCamera } from '@babylonjs/core';
 import type { AppState } from '../state/store';
 import type {
   InteractiveReflectionSource,
+  PointShadowMode,
   PlotJobStatus,
   PlotObject,
   PointLightObject,
+  RenderSettings,
   SceneObject,
-  SerializedMesh,
 } from '../types/contracts';
 
 export const INTERACTIVE_RENDERABLE_OPACITY_EPSILON = 0.02;
 export const INTERACTIVE_OPAQUE_OPACITY_EPSILON = 0.999;
-export const INTERACTIVE_SHELL_RENDER_OPACITY_EPSILON = 0.96;
 
 export type PlotOpacityClass = 'hidden' | 'opaque' | 'transparent';
 export type InteractiveShadowMode = 'none' | 'solid' | 'attenuated';
@@ -42,7 +41,6 @@ export interface RendererPlotSnapshot {
   castsInteractiveShadows: boolean;
   interactiveShadowMode: InteractiveShadowMode;
   showsWireframe: boolean;
-  usesTransparentShells: boolean;
 }
 
 export interface RendererPointLightSnapshot {
@@ -63,6 +61,23 @@ export interface RendererSceneSnapshot {
 export interface ReflectionSourceOptions {
   externalEnvironmentUsable: boolean;
   fallbackEnvironmentUsable: boolean;
+}
+
+export interface RendererCameraLike {
+  alpha: number;
+  beta: number;
+  radius: number;
+  position: { x: number; y: number; z: number };
+  target: { x: number; y: number; z: number };
+  upVector: { x: number; y: number; z: number };
+  fov: number;
+  minZ: number;
+  maxZ: number;
+  mode: number;
+  orthoLeft?: number | null;
+  orthoRight?: number | null;
+  orthoTop?: number | null;
+  orthoBottom?: number | null;
 }
 
 export function clamp01(value: number): number {
@@ -88,47 +103,19 @@ export function shouldShowPlotWireframe(plot: PlotObject): boolean {
   return plot.visible && plotSupportsWireframe(plot) && Boolean(plot.material.wireframeVisible);
 }
 
-export function shouldUseShellSelectionHalo(
-  plot: PlotObject,
-  meshTopology?: SerializedMesh['topology'],
-): boolean {
-  return plot.equation.kind === 'implicit_surface' && meshTopology?.isClosedManifold === true;
-}
-
 export function classifyInteractiveShadowMode(plot: PlotObject): InteractiveShadowMode {
   if (!plot.visible) {
     return 'none';
   }
   const opacity = clamp01(plot.material.opacity);
-  if (plot.equation.kind === 'parametric_curve' && opacity <= INTERACTIVE_RENDERABLE_OPACITY_EPSILON) {
-    return 'none';
+  if (opacity >= INTERACTIVE_OPAQUE_OPACITY_EPSILON) {
+    return 'solid';
   }
-  if (plot.equation.kind === 'implicit_surface') {
-    return opacity < INTERACTIVE_SHELL_RENDER_OPACITY_EPSILON ? 'attenuated' : 'solid';
-  }
-  return plotUsesTransparentShells(plot) ? 'attenuated' : 'solid';
+  return 'attenuated';
 }
 
 export function shouldPlotCastInteractiveShadows(plot: PlotObject): boolean {
   return classifyInteractiveShadowMode(plot) !== 'none';
-}
-
-export function plotUsesTransparentShells(plot: PlotObject): boolean {
-  const opacity = clamp01(plot.material.opacity);
-  return opacity < INTERACTIVE_SHELL_RENDER_OPACITY_EPSILON
-    && (plot.equation.kind === 'parametric_surface' || plot.equation.kind === 'explicit_surface');
-}
-
-export function shouldUseTransparentBackShell(
-  plot: PlotObject,
-  meshTopology?: SerializedMesh['topology'],
-): boolean {
-  if (plotUsesTransparentShells(plot)) {
-    return true;
-  }
-  return plot.equation.kind === 'implicit_surface'
-    && clamp01(plot.material.opacity) < INTERACTIVE_SHELL_RENDER_OPACITY_EPSILON
-    && meshTopology?.isClosedManifold !== true;
 }
 
 export function selectInteractiveReflectionSource(
@@ -141,6 +128,27 @@ export function selectInteractiveReflectionSource(
     return 'fallback_ready';
   }
   return 'none';
+}
+
+export function resolveInteractivePointShadowBudget(
+  pointShadowMode: PointShadowMode,
+  pointShadowMaxLights: number,
+  interactiveQuality: RenderSettings['interactiveQuality'],
+): number {
+  const requestedLights = Math.max(0, Math.round(pointShadowMaxLights));
+  if (pointShadowMode === 'off' || requestedLights === 0) {
+    return 0;
+  }
+  if (pointShadowMode === 'on') {
+    return requestedLights;
+  }
+  if (interactiveQuality === 'performance') {
+    return 0;
+  }
+  if (interactiveQuality === 'balanced') {
+    return Math.min(requestedLights, 1);
+  }
+  return requestedLights;
 }
 
 export function resolveDirectionalShadowFrustumSize(scene: AppState['scene']): number {
@@ -157,7 +165,7 @@ export function resolveDirectionalShadowFrustumSize(scene: AppState['scene']): n
 
 export function createRendererSceneSnapshot(
   state: Pick<AppState, 'scene' | 'render' | 'objects' | 'selectedId' | 'plotJobs'>,
-  camera: ArcRotateCamera | null,
+  camera: RendererCameraLike | null,
 ): RendererSceneSnapshot {
   return {
     scene: state.scene,
@@ -180,7 +188,6 @@ export function createRendererSceneSnapshot(
           castsInteractiveShadows: interactiveShadowMode !== 'none',
           interactiveShadowMode,
           showsWireframe: shouldShowPlotWireframe(plot),
-          usesTransparentShells: plotUsesTransparentShells(plot),
         };
       }),
     pointLights: state.objects

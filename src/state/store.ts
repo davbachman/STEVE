@@ -29,7 +29,6 @@ import {
   defaultSceneSettings,
   materialPresets,
 } from './defaults';
-import { coerceRenderSettingsForInteractiveOnly, LEGACY_QUALITY_MODE_PARKED_MESSAGE } from './renderCompat';
 
 interface AppStateShape {
   scene: SceneSettings;
@@ -79,7 +78,6 @@ interface AppActions {
   exportProjectFile: () => ProjectFileV1;
   undo: () => void;
   redo: () => void;
-  markQualityProgress: (samples: number, running: boolean) => void;
   setRenderDiagnostics: (diagnostics: Partial<RenderDiagnostics>) => void;
   upsertPlotJobStatus: (id: UUID, patch: Partial<PlotJobStatus>) => void;
   resetPlotJobStatus: (id: UUID) => void;
@@ -93,53 +91,24 @@ export type AppState = AppStateShape & AppActions;
 
 function defaultRenderDiagnostics(): RenderDiagnostics {
   return {
-    webgpuReady: false,
+    backend: 'unsupported',
+    webglReady: false,
     plotCount: 0,
     pointLightCount: 0,
-    directionalShadowEnabled: false,
-    directionalShadowCasterCount: 0,
-    pointShadowsEnabled: 0,
-    pointShadowLimit: 0,
-    pointShadowCasterCounts: {},
-    shadowReceiver: 'none',
     transparentPlotCount: 0,
     shadowMapResolution: 0,
+    frameTimeMs: 0,
+    fps: 0,
+    shadowAtlasUsage: 0,
+    opaqueShadowCasters: 0,
+    transmittanceShadowCasters: 0,
+    pointShadowCount: 0,
+    activeProbeCount: 0,
+    ssrHitRate: 0,
+    outlineMode: 'disabled',
+    reflectionSource: 'none',
+    reflectionProbeRefreshCount: 0,
     pointShadowMode: 'off',
-    pointShadowCapability: 'unknown',
-    interactiveReflectionPath: 'none',
-    interactiveReflectionSource: 'none',
-    interactiveReflectionFallbackReason: null,
-    interactiveReflectionProbeSize: 0,
-    interactiveReflectionProbeRefreshCount: 0,
-    interactiveReflectionLastRefreshReason: null,
-    interactiveReflectionProbeHasCapture: false,
-    interactiveReflectionProbeUsable: false,
-    interactiveReflectionProbeTextureReady: false,
-    interactiveReflectionProbeTextureAllocated: false,
-    interactiveReflectionFallbackKind: 'none',
-    interactiveReflectionFallbackEverUsable: false,
-    interactiveReflectionFallbackTexturePresent: false,
-    interactiveReflectionFallbackTextureReady: false,
-    interactiveReflectionFallbackTextureUsable: false,
-    qualityActiveRenderer: 'none',
-    qualityRendererFallbackReason: null,
-    qualityResolutionScale: 1,
-    qualitySamplesPerSecond: 0,
-    qualityLastResetReason: null,
-    qualityPathExecutionMode: null,
-    qualityPathAlignmentStatus: null,
-    qualityPathAlignmentProbeCount: 0,
-    qualityPathAlignmentHitMismatches: 0,
-    qualityPathAlignmentMaxPointError: 0,
-    qualityPathAlignmentMaxDistanceError: 0,
-    qualityPathWorkerBatchCount: 0,
-    qualityPathWorkerPixelCount: 0,
-    qualityPathWorkerBatchLatencyMs: 0,
-    qualityPathWorkerBatchPixelsPerBatch: 0,
-    qualityPathWorkerPixelsPerSecond: 0,
-    qualityPathMainThreadBatchCount: 0,
-    qualityPathMainThreadPixelCount: 0,
-    qualityPathMainThreadPixelsPerSecond: 0,
   };
 }
 
@@ -379,7 +348,7 @@ function asProjectFile(state: AppStateShape): ProjectFileV1 {
 
 function normalizeImportedProject(project: ProjectFileV1): {
   project: ProjectFileV1;
-  coercedLegacyQualityMode: boolean;
+  droppedLegacyQualitySettings: boolean;
   inferredLegacySchemaVersion: boolean;
   skippedInvalidObjects: number;
 } {
@@ -403,13 +372,22 @@ function normalizeImportedProject(project: ProjectFileV1): {
   const mergedRender: RenderSettings = {
     ...renderDefaults,
     ...(renderInput as Partial<RenderSettings>),
-    qualityCurrentSamples: 0,
-    qualityRunning: false,
     showDiagnostics: (renderInput as Partial<RenderSettings>).showDiagnostics ?? renderDefaults.showDiagnostics,
   };
   const normalizedScene = normalizeSceneSettingsImport(sceneInput, ambientInput, directionalInput, shadowInput, sceneDefaults);
   const normalizedRender = normalizeRenderSettingsImport(mergedRender, renderInput, renderDefaults);
-  const renderCompat = coerceRenderSettingsForInteractiveOnly(normalizedRender);
+  const droppedLegacyQualitySettings = [
+    'mode',
+    'qualityRenderer',
+    'qualitySamplesTarget',
+    'qualityResolutionScale',
+    'qualityMaxBounces',
+    'qualityClampFireflies',
+    'qualityEarlyExportBehavior',
+    'denoise',
+    'qualityRunning',
+    'qualityCurrentSamples',
+  ].some((key) => key in renderInput);
   const objectInputs = Array.isArray(projectRecord.objects) ? projectRecord.objects : [];
   const normalizedObjects = objectInputs
     .map((obj, index) => normalizeSceneObjectImport(obj, index))
@@ -420,10 +398,10 @@ function normalizeImportedProject(project: ProjectFileV1): {
       schemaVersion: 1,
       appVersion: typeof projectRecord.appVersion === 'string' ? projectRecord.appVersion : APP_VERSION,
       scene: normalizedScene,
-      render: renderCompat.render,
+      render: normalizedRender,
       objects: normalizedObjects,
     },
-    coercedLegacyQualityMode: renderCompat.coercedLegacyQualityMode,
+    droppedLegacyQualitySettings,
     inferredLegacySchemaVersion,
     skippedInvalidObjects: objectInputs.length - normalizedObjects.length,
   };
@@ -562,19 +540,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     })),
 
   updateRender: (patch) =>
-    set((state) => {
-      const requestedLegacyQualityMode = patch.mode === 'quality';
-      const compat = coerceRenderSettingsForInteractiveOnly({ ...state.render, ...patch });
-      return {
-        ...state,
-        render: compat.render,
-        historyPast: [...state.historyPast, snapshotOf(state)],
-        historyFuture: [],
-        ui: requestedLegacyQualityMode && compat.coercedLegacyQualityMode
-          ? { ...state.ui, statusMessage: LEGACY_QUALITY_MODE_PARKED_MESSAGE }
-          : state.ui,
-      };
-    }),
+    set((state) => ({
+      ...state,
+      render: { ...state.render, ...patch },
+      historyPast: [...state.historyPast, snapshotOf(state)],
+      historyFuture: [],
+    })),
 
   setObjectName: (id, name) =>
     set((state) => {
@@ -801,17 +772,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       };
     }),
 
-  markQualityProgress: (samples, running) =>
-    set((state) => {
-      if (state.render.qualityCurrentSamples === samples && state.render.qualityRunning === running) {
-        return state;
-      }
-      return {
-        ...state,
-        render: { ...state.render, qualityCurrentSamples: samples, qualityRunning: running },
-      };
-    }),
-
   setRenderDiagnostics: (diagnostics) =>
     set((state) => {
       const next = { ...state.renderDiagnostics, ...diagnostics };
@@ -922,19 +882,16 @@ function positionsEqual(
 }
 
 function buildProjectLoadStatusMessage(normalized: {
-  coercedLegacyQualityMode: boolean;
+  droppedLegacyQualitySettings: boolean;
   inferredLegacySchemaVersion: boolean;
   skippedInvalidObjects: number;
 }): string {
-  if (!normalized.coercedLegacyQualityMode && !normalized.inferredLegacySchemaVersion && normalized.skippedInvalidObjects === 0) {
+  if (!normalized.droppedLegacyQualitySettings && !normalized.inferredLegacySchemaVersion && normalized.skippedInvalidObjects === 0) {
     return 'Project loaded';
   }
-  if (!normalized.inferredLegacySchemaVersion && normalized.skippedInvalidObjects === 0 && normalized.coercedLegacyQualityMode) {
-    return LEGACY_QUALITY_MODE_PARKED_MESSAGE;
-  }
   const notes: string[] = [];
-  if (normalized.coercedLegacyQualityMode) {
-    notes.push('legacy quality mode parked');
+  if (normalized.droppedLegacyQualitySettings) {
+    notes.push('removed legacy quality settings ignored');
   }
   if (normalized.inferredLegacySchemaVersion) {
     notes.push('schema version inferred as 1');
@@ -986,7 +943,11 @@ function normalizeSceneSettingsImport(
       ...defaults.shadow,
       directionalShadowEnabled: asBoolean(shadowInput.directionalShadowEnabled) ?? defaults.shadow.directionalShadowEnabled,
       pointShadowMode: asEnum(shadowInput.pointShadowMode, ['off', 'auto', 'on']) ?? defaults.shadow.pointShadowMode,
-      pointShadowMaxLights: asFiniteInteger(shadowInput.pointShadowMaxLights) ?? defaults.shadow.pointShadowMaxLights,
+      pointShadowMaxLights: clampNumber(
+        asFiniteInteger(shadowInput.pointShadowMaxLights) ?? defaults.shadow.pointShadowMaxLights,
+        0,
+        3,
+      ),
       shadowMapResolution: asFiniteInteger(shadowInput.shadowMapResolution) ?? defaults.shadow.shadowMapResolution,
       shadowSoftness: clampNumber(asFiniteNumber(shadowInput.shadowSoftness) ?? defaults.shadow.shadowSoftness, 0, 1),
     },
@@ -1000,20 +961,10 @@ function normalizeRenderSettingsImport(
 ): RenderSettings {
   return {
     ...mergedRender,
-    mode: asEnum(renderInput.mode, ['interactive', 'quality']) ?? mergedRender.mode,
     toneMapping: asEnum(renderInput.toneMapping, ['aces', 'filmic', 'none']) ?? mergedRender.toneMapping,
     interactiveQuality: asEnum(renderInput.interactiveQuality, ['performance', 'balanced', 'quality']) ?? mergedRender.interactiveQuality,
-    qualityRenderer: asEnum(renderInput.qualityRenderer, ['taa_preview', 'hybrid_gpu_preview', 'path']) ?? mergedRender.qualityRenderer,
-    qualitySamplesTarget: Math.max(1, asFiniteInteger(renderInput.qualitySamplesTarget) ?? mergedRender.qualitySamplesTarget),
-    qualityResolutionScale: clampNumber(asFiniteNumber(renderInput.qualityResolutionScale) ?? mergedRender.qualityResolutionScale, 0.1, 2),
-    qualityMaxBounces: Math.max(0, asFiniteInteger(renderInput.qualityMaxBounces) ?? mergedRender.qualityMaxBounces),
-    qualityClampFireflies: asBoolean(renderInput.qualityClampFireflies) ?? mergedRender.qualityClampFireflies,
-    qualityEarlyExportBehavior: asEnum(renderInput.qualityEarlyExportBehavior, ['wait', 'immediate']) ?? mergedRender.qualityEarlyExportBehavior,
-    denoise: asBoolean(renderInput.denoise) ?? mergedRender.denoise,
     showDiagnostics: asBoolean(renderInput.showDiagnostics) ?? mergedRender.showDiagnostics ?? defaults.showDiagnostics,
     exposure: asFiniteNumber(renderInput.exposure) ?? mergedRender.exposure,
-    qualityRunning: false,
-    qualityCurrentSamples: 0,
   };
 }
 
@@ -1239,64 +1190,26 @@ function countLights(objects: SceneObject[]): number {
 
 function shallowDiagnosticsEqual(a: RenderDiagnostics, b: RenderDiagnostics): boolean {
   return (
-    a.webgpuReady === b.webgpuReady &&
+    a.backend === b.backend &&
+    a.webglReady === b.webglReady &&
     a.plotCount === b.plotCount &&
     a.pointLightCount === b.pointLightCount &&
-    a.directionalShadowEnabled === b.directionalShadowEnabled &&
-    a.directionalShadowCasterCount === b.directionalShadowCasterCount &&
-    a.pointShadowsEnabled === b.pointShadowsEnabled &&
-    a.pointShadowLimit === b.pointShadowLimit &&
-    a.shadowReceiver === b.shadowReceiver &&
     a.transparentPlotCount === b.transparentPlotCount &&
+    a.frameTimeMs === b.frameTimeMs &&
+    a.fps === b.fps &&
     a.shadowMapResolution === b.shadowMapResolution &&
+    a.shadowAtlasUsage === b.shadowAtlasUsage &&
+    a.opaqueShadowCasters === b.opaqueShadowCasters &&
+    a.transmittanceShadowCasters === b.transmittanceShadowCasters &&
+    a.pointShadowCount === b.pointShadowCount &&
+    a.activeProbeCount === b.activeProbeCount &&
+    a.ssrHitRate === b.ssrHitRate &&
+    a.outlineMode === b.outlineMode &&
+    a.reflectionSource === b.reflectionSource &&
+    a.reflectionProbeRefreshCount === b.reflectionProbeRefreshCount &&
     a.pointShadowMode === b.pointShadowMode &&
-    a.pointShadowCapability === b.pointShadowCapability &&
-    a.interactiveReflectionPath === b.interactiveReflectionPath &&
-    a.interactiveReflectionSource === b.interactiveReflectionSource &&
-    a.interactiveReflectionFallbackReason === b.interactiveReflectionFallbackReason &&
-    a.interactiveReflectionProbeSize === b.interactiveReflectionProbeSize &&
-    a.interactiveReflectionProbeRefreshCount === b.interactiveReflectionProbeRefreshCount &&
-    a.interactiveReflectionLastRefreshReason === b.interactiveReflectionLastRefreshReason &&
-    a.interactiveReflectionProbeHasCapture === b.interactiveReflectionProbeHasCapture &&
-    a.interactiveReflectionProbeUsable === b.interactiveReflectionProbeUsable &&
-    a.interactiveReflectionProbeTextureReady === b.interactiveReflectionProbeTextureReady &&
-    a.interactiveReflectionProbeTextureAllocated === b.interactiveReflectionProbeTextureAllocated &&
-    a.interactiveReflectionFallbackKind === b.interactiveReflectionFallbackKind &&
-    a.interactiveReflectionFallbackEverUsable === b.interactiveReflectionFallbackEverUsable &&
-    a.interactiveReflectionFallbackTexturePresent === b.interactiveReflectionFallbackTexturePresent &&
-    a.interactiveReflectionFallbackTextureReady === b.interactiveReflectionFallbackTextureReady &&
-    a.interactiveReflectionFallbackTextureUsable === b.interactiveReflectionFallbackTextureUsable &&
-    a.qualityActiveRenderer === b.qualityActiveRenderer &&
-    a.qualityRendererFallbackReason === b.qualityRendererFallbackReason &&
-    a.qualityResolutionScale === b.qualityResolutionScale &&
-    a.qualitySamplesPerSecond === b.qualitySamplesPerSecond &&
-    a.qualityLastResetReason === b.qualityLastResetReason &&
-    a.qualityPathExecutionMode === b.qualityPathExecutionMode &&
-    a.qualityPathAlignmentStatus === b.qualityPathAlignmentStatus &&
-    a.qualityPathAlignmentProbeCount === b.qualityPathAlignmentProbeCount &&
-    a.qualityPathAlignmentHitMismatches === b.qualityPathAlignmentHitMismatches &&
-    a.qualityPathAlignmentMaxPointError === b.qualityPathAlignmentMaxPointError &&
-    a.qualityPathAlignmentMaxDistanceError === b.qualityPathAlignmentMaxDistanceError &&
-    a.qualityPathWorkerBatchCount === b.qualityPathWorkerBatchCount &&
-    a.qualityPathWorkerPixelCount === b.qualityPathWorkerPixelCount &&
-    a.qualityPathWorkerBatchLatencyMs === b.qualityPathWorkerBatchLatencyMs &&
-    a.qualityPathWorkerBatchPixelsPerBatch === b.qualityPathWorkerBatchPixelsPerBatch &&
-    a.qualityPathWorkerPixelsPerSecond === b.qualityPathWorkerPixelsPerSecond &&
-    a.qualityPathMainThreadBatchCount === b.qualityPathMainThreadBatchCount &&
-    a.qualityPathMainThreadPixelCount === b.qualityPathMainThreadPixelCount &&
-    a.qualityPathMainThreadPixelsPerSecond === b.qualityPathMainThreadPixelsPerSecond &&
-    shallowPointShadowCasterCountsEqual(a.pointShadowCasterCounts ?? {}, b.pointShadowCasterCounts ?? {})
+    a.reflectionSource === b.reflectionSource
   );
-}
-
-function shallowPointShadowCasterCountsEqual(a: Record<string, number>, b: Record<string, number>): boolean {
-  const aKeys = Object.keys(a);
-  const bKeys = Object.keys(b);
-  if (aKeys.length !== bKeys.length) return false;
-  for (const key of aKeys) {
-    if (a[key] !== b[key]) return false;
-  }
-  return true;
 }
 
 function shallowPlotJobEqual(a: PlotJobStatus, b: PlotJobStatus): boolean {

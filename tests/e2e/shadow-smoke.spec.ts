@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test.describe('WebGPU Shadow Smoke', () => {
+test.describe('WebGL2 Shadow Smoke', () => {
   test('opens app, toggles shadow controls, and captures a shadow-debug screenshot', async ({ page }, testInfo) => {
     await page.goto('/');
 
@@ -8,9 +8,9 @@ test.describe('WebGPU Shadow Smoke', () => {
     await expect(page.getByRole('button', { name: 'Scene' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Render' })).toBeVisible();
 
-    const webGpuGate = page.getByRole('heading', { name: 'WebGPU Required' });
+    const webGpuGate = page.getByRole('heading', { name: 'WebGL2 Required' });
     if (await webGpuGate.isVisible().catch(() => false)) {
-      test.skip(true, 'WebGPU not available in this Playwright browser session');
+      test.skip(true, 'WebGL2 not available in this Playwright browser session');
     }
 
     await page.getByRole('button', { name: 'Render' }).click();
@@ -34,9 +34,10 @@ test.describe('WebGPU Shadow Smoke', () => {
     await page.getByRole('button', { name: 'Render' }).click();
     const diagnosticsOverlay = page.locator('.viewport-overlay--diagnostics');
     await expect(diagnosticsOverlay).toBeVisible();
-    await expect(diagnosticsOverlay.getByText('Receiver: grid')).toBeVisible();
+    await expect(diagnosticsOverlay.getByText(/Backend: webgl2/i)).toBeVisible();
+    await expect(diagnosticsOverlay.getByText(/Shadow atlas:/i)).toBeVisible();
 
-    // Give Babylon a moment to update shadow maps after control changes.
+    // Give the WebGL renderer a moment to refresh shadow maps after control changes.
     await page.waitForTimeout(1200);
 
     const viewport = page.locator('.viewport-shell');

@@ -176,7 +176,7 @@ function MaterialTab({ selected }: { selected: PlotObject | PointLightObject | n
         Color
         <input type="color" value={selected.material.baseColor} onChange={(e) => updatePlotMaterial(selected.id, { baseColor: e.target.value })} />
       </label>
-      <RangeField label="Opacity" min={0.05} max={1} step={0.01} value={selected.material.opacity} onChange={(v) => updatePlotMaterial(selected.id, { opacity: v })} />
+      <RangeField label="Opacity" min={0} max={1} step={0.01} value={selected.material.opacity} onChange={(v) => updatePlotMaterial(selected.id, { opacity: v })} />
       <RangeField label="Reflectiveness" min={0} max={1} step={0.01} value={selected.material.reflectiveness} onChange={(v) => updatePlotMaterial(selected.id, { reflectiveness: v })} />
       <RangeField label="Roughness" min={0} max={1} step={0.01} value={selected.material.roughness} onChange={(v) => updatePlotMaterial(selected.id, { roughness: v })} />
       {(selected.equation.kind === 'parametric_surface' || selected.equation.kind === 'explicit_surface') ? (
@@ -258,10 +258,10 @@ function LightingTab({ selected }: { selected: PlotObject | PointLightObject | n
       <RangeField
         label="Point shadow max lights"
         min={0}
-        max={4}
+        max={3}
         step={1}
         value={scene.shadow.pointShadowMaxLights}
-        onChange={(v) => updateScene({ shadow: { ...scene.shadow, pointShadowMaxLights: Math.round(v) } })}
+        onChange={(v) => updateScene({ shadow: { ...scene.shadow, pointShadowMaxLights: Math.min(3, Math.round(v)) } })}
       />
       <RangeField
         label="Shadow map resolution"
@@ -373,20 +373,19 @@ function RenderTab() {
       </label>
       {render.showDiagnostics ? (
         <div className="inspector-note">
+          <div>Backend: {diagnostics.backend}</div>
+          <div>WebGL2: {diagnostics.webglReady ? 'ready' : 'not ready'}</div>
           <div>Plots: {diagnostics.plotCount}</div>
           <div>Point lights: {diagnostics.pointLightCount}</div>
-          <div>Point shadows: {diagnostics.pointShadowsEnabled}/{diagnostics.pointShadowLimit} ({diagnostics.pointShadowMode})</div>
-          <div>Shadow receiver: {diagnostics.shadowReceiver}</div>
-          <div>Point shadow capability: {diagnostics.pointShadowCapability}</div>
-          <div>Interactive reflections: {diagnostics.interactiveReflectionPath}</div>
-          <div>Reflection source: {diagnostics.interactiveReflectionSource}</div>
-          <div>Reflection probe: {diagnostics.interactiveReflectionProbeSize}px | refreshes {diagnostics.interactiveReflectionProbeRefreshCount}</div>
-          <div>Reflection probe capture: {diagnostics.interactiveReflectionProbeHasCapture ? 'yes' : 'no'} | usable: {diagnostics.interactiveReflectionProbeUsable ? 'yes' : 'no'}</div>
-          <div>Reflection probe texture: ready {diagnostics.interactiveReflectionProbeTextureReady ? 'yes' : 'no'} | allocated {diagnostics.interactiveReflectionProbeTextureAllocated ? 'yes' : 'no'}</div>
-          <div>Reflection fallback kind: {diagnostics.interactiveReflectionFallbackKind} | ever usable {diagnostics.interactiveReflectionFallbackEverUsable ? 'yes' : 'no'}</div>
-          <div>Reflection fallback texture: {diagnostics.interactiveReflectionFallbackTexturePresent ? 'present' : 'missing'} | ready {diagnostics.interactiveReflectionFallbackTextureReady ? 'yes' : 'no'} | usable {diagnostics.interactiveReflectionFallbackTextureUsable ? 'yes' : 'no'}</div>
-          <div>Reflection refresh: {diagnostics.interactiveReflectionLastRefreshReason ?? 'none'}</div>
-          {diagnostics.interactiveReflectionFallbackReason ? <div>Reflection fallback: {diagnostics.interactiveReflectionFallbackReason}</div> : null}
+          <div>Frame: {diagnostics.frameTimeMs.toFixed(1)} ms ({diagnostics.fps.toFixed(1)} fps)</div>
+          <div>Point shadows: {diagnostics.pointShadowCount} ({diagnostics.pointShadowMode})</div>
+          <div>Shadow atlas usage: {(diagnostics.shadowAtlasUsage * 100).toFixed(0)}%</div>
+          <div>Transmittance casters: {diagnostics.transmittanceShadowCasters}</div>
+          <div>Opaque casters: {diagnostics.opaqueShadowCasters}</div>
+          <div>Reflection source: {diagnostics.reflectionSource}</div>
+          <div>Reflection probes: {diagnostics.activeProbeCount} | refreshes {diagnostics.reflectionProbeRefreshCount}</div>
+          <div>SSR hit rate: {(diagnostics.ssrHitRate * 100).toFixed(0)}%</div>
+          <div>Outline mode: {diagnostics.outlineMode}</div>
         </div>
       ) : null}
     </div>

@@ -4,16 +4,14 @@ import type { PlotJobStatus } from '../../types/contracts';
 import {
   INTERACTIVE_OPAQUE_OPACITY_EPSILON,
   INTERACTIVE_RENDERABLE_OPACITY_EPSILON,
-  INTERACTIVE_SHELL_RENDER_OPACITY_EPSILON,
   classifyInteractiveShadowMode,
   classifyPlotOpacity,
   createRendererSceneSnapshot,
   resolveDirectionalShadowFrustumSize,
+  resolveInteractivePointShadowBudget,
   selectInteractiveReflectionSource,
   shouldPlotCastInteractiveShadows,
   shouldShowPlotWireframe,
-  shouldUseTransparentBackShell,
-  shouldUseShellSelectionHalo,
 } from '../renderSnapshot';
 
 function idlePlotJob(meshVersion = 0): PlotJobStatus {
@@ -36,7 +34,7 @@ describe('renderSnapshot helpers', () => {
     expect(classifyPlotOpacity(1.5)).toBe('opaque');
   });
 
-  it('keeps wireframe visibility literal and shadow participation renderable-only', () => {
+  it('keeps wireframe visibility literal while allowing attenuated shadows below render opacity', () => {
     const surface = createDefaultSurface('Wireframe Surface');
     surface.visible = true;
     surface.material.opacity = 0.72;
@@ -53,14 +51,18 @@ describe('renderSnapshot helpers', () => {
     expect(classifyInteractiveShadowMode(surface)).toBe('attenuated');
     expect(shouldPlotCastInteractiveShadows(surface)).toBe(true);
 
+    surface.material.opacity = 0.97;
+    expect(classifyInteractiveShadowMode(surface)).toBe('attenuated');
+    expect(shouldPlotCastInteractiveShadows(surface)).toBe(true);
+
     surface.material.opacity = 1;
     expect(classifyInteractiveShadowMode(surface)).toBe('solid');
     expect(shouldPlotCastInteractiveShadows(surface)).toBe(true);
   });
 
-  it('builds plot snapshots with shells only once surfaces are clearly translucent', () => {
+  it('keeps all non-opaque surfaces on the continuous transparent path', () => {
     const surface = createDefaultSurface('Glass Surface');
-    surface.material.opacity = INTERACTIVE_SHELL_RENDER_OPACITY_EPSILON - 0.01;
+    surface.material.opacity = 0.95;
     surface.material.wireframeVisible = true;
 
     const nearOpaqueSurface = createDefaultSurface('Near Opaque Surface');
@@ -95,45 +97,22 @@ describe('renderSnapshot helpers', () => {
       showsWireframe: true,
       castsInteractiveShadows: true,
       interactiveShadowMode: 'attenuated',
-      usesTransparentShells: true,
     });
     expect(nearOpaqueSnapshot).toMatchObject({
       meshVersion: 5,
       opacityClass: 'transparent',
       castsInteractiveShadows: true,
-      interactiveShadowMode: 'solid',
-      usesTransparentShells: false,
+      interactiveShadowMode: 'attenuated',
     });
     expect(implicitSnapshot).toMatchObject({
       meshVersion: 3,
       opacityClass: 'transparent',
-      usesTransparentShells: false,
       castsInteractiveShadows: true,
       interactiveShadowMode: 'attenuated',
     });
   });
 
-  it('uses shell selection halos only for implicit surfaces', () => {
-    const surface = createDefaultSurface('Selected Surface');
-    const implicit = createDefaultImplicit('Selected Implicit');
-
-    expect(shouldUseShellSelectionHalo(surface, { isClosedManifold: true })).toBe(false);
-    expect(shouldUseShellSelectionHalo(implicit, { isClosedManifold: false })).toBe(false);
-    expect(shouldUseShellSelectionHalo(implicit, { isClosedManifold: true })).toBe(true);
-  });
-
-  it('uses transparent back shells for open implicits but not closed ones', () => {
-    const surface = createDefaultSurface('Transparent Surface');
-    surface.material.opacity = 0.7;
-    const implicit = createDefaultImplicit('Open Implicit');
-    implicit.material.opacity = 0.7;
-
-    expect(shouldUseTransparentBackShell(surface)).toBe(true);
-    expect(shouldUseTransparentBackShell(implicit, { isClosedManifold: false })).toBe(true);
-    expect(shouldUseTransparentBackShell(implicit, { isClosedManifold: true })).toBe(false);
-  });
-
-  it('keeps fully transparent surfaces in the attenuated shadow path', () => {
+  it('keeps fully transparent surfaces invisible while still allowing faint shadows', () => {
     const surface = createDefaultSurface('Zero Opacity Surface');
     surface.visible = true;
     surface.material.opacity = 0;
@@ -156,7 +135,6 @@ describe('renderSnapshot helpers', () => {
       isRenderable: false,
       castsInteractiveShadows: true,
       interactiveShadowMode: 'attenuated',
-      usesTransparentShells: true,
     });
   });
 
@@ -175,6 +153,15 @@ describe('renderSnapshot helpers', () => {
       externalEnvironmentUsable: false,
       fallbackEnvironmentUsable: false,
     })).toBe('none');
+  });
+
+  it('scales point-shadow budgets with mode and interactive quality', () => {
+    expect(resolveInteractivePointShadowBudget('off', 3, 'quality')).toBe(0);
+    expect(resolveInteractivePointShadowBudget('auto', 3, 'performance')).toBe(0);
+    expect(resolveInteractivePointShadowBudget('auto', 3, 'balanced')).toBe(1);
+    expect(resolveInteractivePointShadowBudget('auto', 3, 'quality')).toBe(3);
+    expect(resolveInteractivePointShadowBudget('on', 2, 'performance')).toBe(2);
+    expect(resolveInteractivePointShadowBudget('on', -2, 'quality')).toBe(0);
   });
 
   it('keeps hidden helper extents out of the directional shadow frustum', () => {

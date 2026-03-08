@@ -6,9 +6,9 @@ test.describe('Implicit Mesher Smoke', () => {
   test('adds an implicit plot and renders it in the viewport', async ({ page }, testInfo) => {
     await page.goto('/');
 
-    const webGpuGate = page.getByRole('heading', { name: 'WebGPU Required' });
+    const webGpuGate = page.getByRole('heading', { name: 'WebGL2 Required' });
     if (await webGpuGate.isVisible().catch(() => false)) {
-      test.skip(true, 'WebGPU not available in this Playwright browser session');
+      test.skip(true, 'WebGL2 not available in this Playwright browser session');
     }
 
     await expect(page.getByRole('button', { name: /Ribbon Surface/ })).toContainText('Ready');

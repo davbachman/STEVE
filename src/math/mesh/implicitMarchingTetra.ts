@@ -1,5 +1,6 @@
 import type { Bounds3D, ImplicitSurfaceSpec, SerializedMesh } from '../../types/contracts';
 import { MC_EDGE_TABLE, MC_TRI_TABLE } from './marchingCubesTables';
+import { computeMeshBounds, extractMeshEdges } from './geometry';
 
 const tetrahedra: Array<[number, number, number, number]> = [
   [0, 5, 1, 6],
@@ -453,14 +454,20 @@ function finalizeImplicitMesh(ctx: MeshBuildContext): SerializedMesh {
   orientTrianglesByNormals(indices, positions, normals);
   const isClosedManifold = hasClosedManifoldTopology(indices);
   canonicalizeClosedMeshOrientation(indices, positions, normals, isClosedManifold);
+  const edgeData = extractMeshEdges(positions, indices);
+  const topology = {
+    ...edgeData.topology,
+    isClosedManifold,
+  };
 
   return {
     positions: new Float32Array(positions),
     indices: new Uint32Array(indices),
     normals: new Float32Array(normals),
-    topology: {
-      isClosedManifold,
-    },
+    bounds: computeMeshBounds(positions),
+    boundaryEdges: edgeData.boundaryEdges,
+    featureEdges: edgeData.featureEdges,
+    topology,
   };
 }
 
@@ -784,8 +791,15 @@ function emptyMesh(): SerializedMesh {
     positions: new Float32Array(0),
     indices: new Uint32Array(0),
     normals: new Float32Array(0),
+    bounds: computeMeshBounds([]),
+    boundaryEdges: new Float32Array(0),
+    featureEdges: new Float32Array(0),
     topology: {
       isClosedManifold: false,
+      hasBoundaryEdges: false,
+      hasFeatureEdges: false,
+      boundaryEdgeCount: 0,
+      featureEdgeCount: 0,
     },
   };
 }

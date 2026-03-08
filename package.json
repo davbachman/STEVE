@@ -16,15 +16,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@babylonjs/core": "^8.52.0",
-    "@babylonjs/loaders": "^8.52.0",
-    "@babylonjs/materials": "^8.52.0",
-    "@babylonjs/post-processes": "^8.52.0",
-    "@babylonjs/procedural-textures": "^8.52.0",
-    "@babylonjs/serializers": "^8.52.0",
     "@codemirror/lang-javascript": "^6.2.4",
     "@uiw/react-codemirror": "^4.25.4",
     "codemirror": "^6.0.2",
+    "gl-matrix": "^3.4.4",
     "immer": "^11.1.4",
     "katex": "^0.16.32",
     "react": "^19.2.0",

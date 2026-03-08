@@ -1,5 +1,5 @@
-import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData';
 import type { SerializedMesh } from '../../types/contracts';
+import { computeMeshBounds, computeVertexNormals, extractMeshEdges } from './geometry';
 
 export interface CurveSample {
   points: Array<{ x: number; y: number; z: number }>;
@@ -71,8 +71,8 @@ export function buildSurfaceMesh(
     }
   }
 
-  const normals: number[] = new Array(positions.length).fill(0);
-  VertexData.ComputeNormals(positions, indices, normals);
+  const normals = computeVertexNormals(positions, indices);
+  const edgeData = extractMeshEdges(positions, indices);
 
   const lines: Float32Array[] = [];
   const step = Math.max(1, Math.floor(wireframeCellSize));
@@ -96,8 +96,12 @@ export function buildSurfaceMesh(
   return {
     positions: new Float32Array(positions),
     indices: new Uint32Array(indices),
-    normals: new Float32Array(normals),
+    normals,
     uvs: new Float32Array(uvs),
     lines,
+    bounds: computeMeshBounds(positions),
+    boundaryEdges: edgeData.boundaryEdges,
+    featureEdges: edgeData.featureEdges,
+    topology: edgeData.topology,
   };
 }

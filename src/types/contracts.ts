@@ -186,19 +186,9 @@ export interface SceneSettings {
 }
 
 export interface RenderSettings {
-  mode: 'interactive' | 'quality';
   toneMapping: 'aces' | 'filmic' | 'none';
   exposure: number;
   interactiveQuality: 'performance' | 'balanced' | 'quality';
-  qualityRenderer: 'taa_preview' | 'hybrid_gpu_preview' | 'path';
-  qualitySamplesTarget: number;
-  qualityResolutionScale: number;
-  qualityMaxBounces: number;
-  qualityClampFireflies: boolean;
-  qualityEarlyExportBehavior: 'wait' | 'immediate';
-  denoise: boolean;
-  qualityRunning: boolean;
-  qualityCurrentSamples: number;
   showDiagnostics: boolean;
 }
 
@@ -212,6 +202,21 @@ export interface ProjectFileV1 {
   objects: SceneObject[];
 }
 
+export interface MeshBounds {
+  min: Vec3;
+  max: Vec3;
+  center: Vec3;
+  radius: number;
+}
+
+export interface SerializedMeshTopology {
+  isClosedManifold: boolean;
+  hasBoundaryEdges: boolean;
+  hasFeatureEdges: boolean;
+  boundaryEdgeCount: number;
+  featureEdgeCount: number;
+}
+
 export interface SerializedMesh {
   positions: Float32Array;
   indices: Uint32Array;
@@ -219,9 +224,10 @@ export interface SerializedMesh {
   uvs?: Float32Array;
   lines?: Float32Array[];
   curvePath?: Float32Array;
-  topology?: {
-    isClosedManifold: boolean;
-  };
+  bounds?: MeshBounds;
+  boundaryEdges?: Float32Array;
+  featureEdges?: Float32Array;
+  topology?: SerializedMeshTopology;
 }
 
 export interface ParseClassifyResult {
@@ -271,53 +277,24 @@ export type WorkerResponse =
   | { type: 'job_error'; jobId: UUID; objectId: UUID; message: string; recoverable: boolean };
 
 export interface RenderDiagnostics {
-  webgpuReady: boolean;
+  backend: 'webgl2' | 'unsupported';
+  webglReady: boolean;
   plotCount: number;
   pointLightCount: number;
-  directionalShadowEnabled: boolean;
-  directionalShadowCasterCount: number;
-  pointShadowsEnabled: number;
-  pointShadowLimit: number;
-  pointShadowCasterCounts?: Record<string, number>;
-  shadowReceiver: 'ground' | 'none';
   transparentPlotCount: number;
+  frameTimeMs: number;
+  fps: number;
   shadowMapResolution: number;
+  shadowAtlasUsage: number;
+  opaqueShadowCasters: number;
+  transmittanceShadowCasters: number;
+  pointShadowCount: number;
+  activeProbeCount: number;
+  ssrHitRate: number;
+  outlineMode: 'screen_space_edges' | 'object_mask' | 'disabled';
+  reflectionSource: 'none' | 'environment' | 'probe';
+  reflectionProbeRefreshCount: number;
   pointShadowMode: PointShadowMode;
-  pointShadowCapability: 'unknown' | 'available' | 'unavailable';
-  interactiveReflectionPath: 'none' | 'environment_fallback' | 'probe';
-  interactiveReflectionSource: InteractiveReflectionSource;
-  interactiveReflectionFallbackReason: string | null;
-  interactiveReflectionProbeSize: number;
-  interactiveReflectionProbeRefreshCount: number;
-  interactiveReflectionLastRefreshReason: string | null;
-  interactiveReflectionProbeHasCapture: boolean;
-  interactiveReflectionProbeUsable: boolean;
-  interactiveReflectionProbeTextureReady: boolean;
-  interactiveReflectionProbeTextureAllocated: boolean;
-  interactiveReflectionFallbackKind: 'none' | 'raw_cube' | 'image_cube' | 'raw_equirect';
-  interactiveReflectionFallbackEverUsable: boolean;
-  interactiveReflectionFallbackTexturePresent: boolean;
-  interactiveReflectionFallbackTextureReady: boolean;
-  interactiveReflectionFallbackTextureUsable: boolean;
-  qualityActiveRenderer: 'none' | 'taa_preview' | 'hybrid_gpu_preview' | 'path';
-  qualityRendererFallbackReason: string | null;
-  qualityResolutionScale: number;
-  qualitySamplesPerSecond: number;
-  qualityLastResetReason: string | null;
-  qualityPathExecutionMode: string | null;
-  qualityPathAlignmentStatus: string | null;
-  qualityPathAlignmentProbeCount: number;
-  qualityPathAlignmentHitMismatches: number;
-  qualityPathAlignmentMaxPointError: number;
-  qualityPathAlignmentMaxDistanceError: number;
-  qualityPathWorkerBatchCount: number;
-  qualityPathWorkerPixelCount: number;
-  qualityPathWorkerBatchLatencyMs: number;
-  qualityPathWorkerBatchPixelsPerBatch: number;
-  qualityPathWorkerPixelsPerSecond: number;
-  qualityPathMainThreadBatchCount: number;
-  qualityPathMainThreadPixelCount: number;
-  qualityPathMainThreadPixelsPerSecond: number;
 }
 
 export type InteractiveReflectionSource = 'probe_ready' | 'fallback_ready' | 'external_env' | 'none';
