@@ -329,7 +329,7 @@ export class SceneController {
         }
         this.resizeViewport();
         this.renderScene();
-        await exportCanvasPng(gl, this.canvas, filename);
+        await exportCanvasPng(gl, this.canvas, this.latestSnapshot?.scene ?? useAppStore.getState().scene, filename);
         useAppStore.getState().setStatusMessage('Exported PNG');
       },
     };
@@ -3119,6 +3119,7 @@ function buildPngFileName(): string {
 async function exportCanvasPng(
   gl: WebGL2RenderingContext,
   canvas: HTMLCanvasElement,
+  scene: AppState['scene'],
   filename: string,
 ): Promise<void> {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -3137,14 +3138,24 @@ async function exportCanvasPng(
   if (!ctx) {
     throw new Error('Failed to create PNG export surface');
   }
-  const imageData = ctx.createImageData(width, height);
+  paintExportBackground(ctx, scene, width, height);
+
+  const imageCanvas = document.createElement('canvas');
+  imageCanvas.width = width;
+  imageCanvas.height = height;
+  const imageCtx = imageCanvas.getContext('2d');
+  if (!imageCtx) {
+    throw new Error('Failed to create PNG export image surface');
+  }
+  const imageData = imageCtx.createImageData(width, height);
   const rowSize = width * 4;
   for (let y = 0; y < height; y += 1) {
     const srcOffset = (height - 1 - y) * rowSize;
     const dstOffset = y * rowSize;
     imageData.data.set(pixels.subarray(srcOffset, srcOffset + rowSize), dstOffset);
   }
-  ctx.putImageData(imageData, 0, 0);
+  imageCtx.putImageData(imageData, 0, 0);
+  ctx.drawImage(imageCanvas, 0, 0);
 
   const blob = await new Promise<Blob | null>((resolve) => exportCanvas.toBlob(resolve, 'image/png'));
   if (!blob) {
@@ -3158,6 +3169,23 @@ async function exportCanvasPng(
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+function paintExportBackground(
+  ctx: CanvasRenderingContext2D,
+  scene: AppState['scene'],
+  width: number,
+  height: number,
+): void {
+  if (scene.backgroundMode === 'solid') {
+    ctx.fillStyle = scene.backgroundColor;
+  } else {
+    const gradient = ctx.createLinearGradient(0, 0, 0, height);
+    gradient.addColorStop(0, scene.gradientTopColor);
+    gradient.addColorStop(1, scene.gradientBottomColor);
+    ctx.fillStyle = gradient;
+  }
+  ctx.fillRect(0, 0, width, height);
 }
 
 function toneMappingMode(mode: AppState['render']['toneMapping']): number {
