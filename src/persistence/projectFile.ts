@@ -54,7 +54,9 @@ export async function saveBlobFileWithDialog(
 ): Promise<void> {
   const picker = (window as Window & { showSaveFilePicker?: ShowSaveFilePickerLike }).showSaveFilePicker;
   if (!picker) {
-    throw new Error('This browser does not support choosing a save location for STL export');
+    const blob = await createBlob();
+    downloadBlobFile(blob, filename);
+    return;
   }
   const handle = await picker({
     suggestedName: filename,
