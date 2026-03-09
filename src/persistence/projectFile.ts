@@ -47,7 +47,11 @@ export async function saveBlobFile(blob: Blob, filename: string, fileType?: Save
   await writable.close();
 }
 
-export async function saveBlobFileWithDialog(blob: Blob, filename: string, fileType?: SaveFilePickerType): Promise<void> {
+export async function saveBlobFileWithDialog(
+  filename: string,
+  createBlob: () => Blob | Promise<Blob>,
+  fileType?: SaveFilePickerType,
+): Promise<void> {
   const picker = (window as Window & { showSaveFilePicker?: ShowSaveFilePickerLike }).showSaveFilePicker;
   if (!picker) {
     throw new Error('This browser does not support choosing a save location for STL export');
@@ -56,6 +60,7 @@ export async function saveBlobFileWithDialog(blob: Blob, filename: string, fileT
     suggestedName: filename,
     types: fileType ? [fileType] : undefined,
   });
+  const blob = await createBlob();
   const writable = await handle.createWritable();
   await writable.write(blob);
   await writable.close();

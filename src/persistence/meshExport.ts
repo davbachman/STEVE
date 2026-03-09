@@ -4,21 +4,16 @@ import type { PlotObject, Vec3 } from '../types/contracts';
 import { saveBlobFileWithDialog } from './projectFile';
 
 export async function exportPlotAsStl(plot: PlotObject): Promise<void> {
-  const geometry = buildPlotGeometry(plot);
-  if (geometry.indices.length < 3) {
-    throw new Error('Selected plot has no exportable triangle mesh');
-  }
-
-  const stl = serializePlotGeometryAsAsciiStl(plot.name, geometry, plot.transform.position);
   await saveBlobFileWithDialog(
-    new Blob([stl], { type: 'model/stl' }),
     `${sanitizeFileStem(plot.name)}.stl`,
-    {
-      description: 'STL mesh',
-      accept: {
-        'application/sla': ['.stl'],
-        'model/stl': ['.stl'],
-      },
+    () => {
+      const geometry = buildPlotGeometry(plot);
+      if (geometry.indices.length < 3) {
+        throw new Error('Selected plot has no exportable triangle mesh');
+      }
+
+      const stl = serializePlotGeometryAsAsciiStl(plot.name, geometry, plot.transform.position);
+      return new Blob([stl], { type: 'model/stl' });
     },
   );
 }
