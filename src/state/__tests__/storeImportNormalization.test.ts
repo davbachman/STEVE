@@ -51,7 +51,7 @@ describe('project import normalization', () => {
     }
     expect(state.objects[0].equation.source.rawText).toBe('z = cos(x) * sin(y)');
     expect('ior' in state.objects[0].material).toBe(false);
-    expect(state.ui.statusMessage).toContain('skipped 2 invalid objects');
+    expect(state.selectedId).toBeNull();
   });
 
   it('infers missing schema version as v1', () => {
@@ -63,7 +63,7 @@ describe('project import normalization', () => {
     };
 
     useAppStore.getState().replaceProject(project as never);
-    expect(useAppStore.getState().ui.statusMessage).toContain('schema version inferred as 1');
+    expect(useAppStore.getState().exportProjectFile().schemaVersion).toBe(1);
   });
 
   it('preserves imported parameter values for detected constants', () => {

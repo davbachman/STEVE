@@ -256,7 +256,7 @@ export class SceneController {
       webglReady: true,
     });
     if (!this.supportsFloatColorBuffers) {
-      useAppStore.getState().setStatusMessage('WebGL2 float color buffers unavailable; using compatibility fallback');
+      console.warn('WebGL2 float color buffers unavailable; using compatibility fallback');
     }
   }
 
@@ -326,7 +326,6 @@ export class SceneController {
         this.resizeViewport();
         this.renderScene();
         await exportCanvasPng(gl, this.canvas, this.latestSnapshot?.scene ?? useAppStore.getState().scene, filename);
-        useAppStore.getState().setStatusMessage('Exported PNG');
       },
     };
   }

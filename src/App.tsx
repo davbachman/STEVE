@@ -21,7 +21,6 @@ export default function App() {
   const redo = useAppStore((s) => s.redo);
   const selectObject = useAppStore((s) => s.selectObject);
   const replaceProject = useAppStore((s) => s.replaceProject);
-  const setStatusMessage = useAppStore((s) => s.setStatusMessage);
   const objects = useAppStore((s) => s.objects);
   const selectedId = useAppStore((s) => s.selectedId);
   const updatePlotEquationText = useAppStore((s) => s.updatePlotEquationText);
@@ -39,9 +38,8 @@ export default function App() {
     ) {
       const builtIn = createBuiltInTestScene(testScene);
       replaceProject(builtIn);
-      setStatusMessage(`Loaded test scene: ${testScene}`);
     }
-  }, [replaceProject, setStatusMessage]);
+  }, [replaceProject]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

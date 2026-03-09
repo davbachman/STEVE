@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
 import { readProjectFile, saveProjectFile } from '../../persistence/projectFile';
 import { useAppStore } from '../../state/store';
 import type { ViewportApi } from '../../renderer/SceneController';
@@ -24,29 +24,16 @@ export function TopBar({
   const newProject = useAppStore((s) => s.newProject);
   const render = useAppStore((s) => s.render);
   const updateRender = useAppStore((s) => s.updateRender);
-  const statusMessage = useAppStore((s) => s.ui.statusMessage);
-  const setStatusMessage = useAppStore((s) => s.setStatusMessage);
-
-  useEffect(() => {
-    if (!statusMessage) {
-      return undefined;
-    }
-    const timer = window.setTimeout(() => {
-      setStatusMessage(null);
-    }, 4500);
-    return () => window.clearTimeout(timer);
-  }, [setStatusMessage, statusMessage]);
 
   const handleSaveProject = () => {
     void (async () => {
       try {
         await saveProjectFile(exportProjectFile());
-        setStatusMessage('Saved project');
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') {
           return;
         }
-        setStatusMessage(error instanceof Error ? error.message : 'Failed to save project');
+        console.error(error instanceof Error ? error.message : 'Failed to save project');
       }
     })();
   };
@@ -54,7 +41,6 @@ export function TopBar({
   const handleExportPng = () => {
     void (async () => {
       if (!viewportApi) {
-        setStatusMessage('Viewport not ready');
         return;
       }
       try {
@@ -63,7 +49,7 @@ export function TopBar({
         if (error instanceof DOMException && error.name === 'AbortError') {
           return;
         }
-        setStatusMessage(error instanceof Error ? error.message : 'Failed to export PNG');
+        console.error(error instanceof Error ? error.message : 'Failed to export PNG');
       }
     })();
   };
@@ -92,11 +78,6 @@ export function TopBar({
       </div>
 
       <div className="top-bar__group top-bar__group--right">
-        {statusMessage ? (
-          <div className="top-bar__status" aria-live="polite">
-            {statusMessage}
-          </div>
-        ) : null}
         <div className="top-bar__sidebar-toggles" aria-label="Sidebar visibility">
           <button
             className={leftSidebarVisible ? 'top-bar__toggle top-bar__toggle--icon is-active' : 'top-bar__toggle top-bar__toggle--icon'}
@@ -132,7 +113,7 @@ export function TopBar({
               const project = await readProjectFile(file);
               replaceProject(project);
             } catch (err) {
-              setStatusMessage(err instanceof Error ? err.message : 'Failed to open project');
+              console.error(err instanceof Error ? err.message : 'Failed to open project');
             } finally {
               e.target.value = '';
             }

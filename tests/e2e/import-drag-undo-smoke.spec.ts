@@ -72,7 +72,6 @@ test.describe('Import + Drag Undo Smoke', () => {
       buffer: Buffer.from(JSON.stringify(mixedImport, null, 2)),
     });
 
-    await expect(page.getByText('Project loaded (skipped 1 invalid object)')).toBeVisible();
     await expect(page.getByRole('button', { name: /Imported Demo Surface/ })).toBeVisible();
 
     await page.waitForTimeout(800);

@@ -142,21 +142,6 @@ input[type='color'] {
   min-width: 0;
 }
 
-.top-bar__status {
-  font-size: 0.8rem;
-  color: #f6dda1;
-  background: rgba(246, 221, 161, 0.08);
-  border: 1px solid rgba(246, 221, 161, 0.2);
-  border-radius: 999px;
-  padding: 0.15rem 0.5rem;
-  min-width: 0;
-  max-width: min(48rem, 42vw);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 0 1 auto;
-}
-
 .top-bar__toggle.is-active {
   border-color: rgba(97, 185, 255, 0.45);
   box-shadow: 0 0 0 1px rgba(97, 185, 255, 0.14) inset;

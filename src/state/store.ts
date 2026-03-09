@@ -38,7 +38,6 @@ interface AppStateShape {
   clipboardObject: SceneObject | null;
   ui: {
     inspectorTab: 'object' | 'material' | 'lighting' | 'scene' | 'render';
-    statusMessage: string | null;
   };
   renderDiagnostics: RenderDiagnostics;
   plotJobs: Record<UUID, PlotJobStatus>;
@@ -60,7 +59,6 @@ interface AppStateShape {
 interface AppActions {
   setInspectorTab: (tab: AppState['ui']['inspectorTab']) => void;
   selectObject: (id: UUID | null) => void;
-  setStatusMessage: (message: string | null) => void;
   addPlot: (template?: 'curve' | 'surface' | 'implicit') => void;
   addPointLight: () => void;
   updatePlotEquationText: (id: UUID, rawText: string) => void;
@@ -139,7 +137,6 @@ function initialState(): AppStateShape {
     clipboardObject: null,
     ui: {
       inspectorTab: 'object',
-      statusMessage: null,
     },
     renderDiagnostics: defaultRenderDiagnostics(),
     plotJobs: {},
@@ -355,12 +352,7 @@ function asProjectFile(state: AppStateShape): ProjectFileV1 {
   };
 }
 
-function normalizeImportedProject(project: ProjectFileV1): {
-  project: ProjectFileV1;
-  droppedLegacyQualitySettings: boolean;
-  inferredLegacySchemaVersion: boolean;
-  skippedInvalidObjects: number;
-} {
+function normalizeImportedProject(project: ProjectFileV1): ProjectFileV1 {
   const projectRecord = asRecord(project);
   if (!projectRecord) {
     throw new Error('Invalid project file: expected object');
@@ -385,34 +377,17 @@ function normalizeImportedProject(project: ProjectFileV1): {
   };
   const normalizedScene = normalizeSceneSettingsImport(sceneInput, ambientInput, directionalInput, shadowInput, sceneDefaults);
   const normalizedRender = normalizeRenderSettingsImport(mergedRender, renderInput, renderDefaults);
-  const droppedLegacyQualitySettings = [
-    'mode',
-    'qualityRenderer',
-    'qualitySamplesTarget',
-    'qualityResolutionScale',
-    'qualityMaxBounces',
-    'qualityClampFireflies',
-    'qualityEarlyExportBehavior',
-    'denoise',
-    'qualityRunning',
-    'qualityCurrentSamples',
-  ].some((key) => key in renderInput);
   const objectInputs = Array.isArray(projectRecord.objects) ? projectRecord.objects : [];
   const normalizedObjects = objectInputs
     .map((obj, index) => normalizeSceneObjectImport(obj, index))
     .filter((result): result is { object: SceneObject } => !!result)
     .map((result) => result.object);
   return {
-    project: {
-      schemaVersion: 1,
-      appVersion: typeof projectRecord.appVersion === 'string' ? projectRecord.appVersion : APP_VERSION,
-      scene: normalizedScene,
-      render: normalizedRender,
-      objects: normalizedObjects,
-    },
-    droppedLegacyQualitySettings,
-    inferredLegacySchemaVersion,
-    skippedInvalidObjects: objectInputs.length - normalizedObjects.length,
+    schemaVersion: 1,
+    appVersion: typeof projectRecord.appVersion === 'string' ? projectRecord.appVersion : APP_VERSION,
+    scene: normalizedScene,
+    render: normalizedRender,
+    objects: normalizedObjects,
   };
 }
 
@@ -422,14 +397,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   setInspectorTab: (tab) => set((state) => ({ ...state, ui: { ...state.ui, inspectorTab: tab } })),
 
   selectObject: (id) => set((state) => ({ ...state, selectedId: id })),
-
-  setStatusMessage: (message) =>
-    set((state) => {
-      if (state.ui.statusMessage === message) {
-        return state;
-      }
-      return { ...state, ui: { ...state.ui, statusMessage: message } };
-    }),
 
   addPlot: (template) =>
     set((state) => {
@@ -716,16 +683,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     const state = get();
     const selected = state.objects.find((obj) => obj.id === state.selectedId);
     if (!selected) {
-      get().setStatusMessage('Nothing selected to copy');
       return;
     }
     const json = JSON.stringify(selected);
     const plainText = selected.type === 'plot' ? selected.equation.source.rawText : selected.name;
     try {
       await maybeWriteClipboard(json, plainText);
-      set((s) => ({ ...s, clipboardObject: structuredClone(selected), ui: { ...s.ui, statusMessage: 'Copied selection' } }));
+      set((s) => ({ ...s, clipboardObject: structuredClone(selected) }));
     } catch {
-      set((s) => ({ ...s, clipboardObject: structuredClone(selected), ui: { ...s.ui, statusMessage: 'Copied internally (browser clipboard unavailable)' } }));
+      set((s) => ({ ...s, clipboardObject: structuredClone(selected) }));
     }
   },
 
@@ -739,7 +705,6 @@ export const useAppStore = create<AppState>((set, get) => ({
         selectedId: cloned.id,
         historyPast: [...s.historyPast, snapshotOf(s)],
         historyFuture: [],
-        ui: { ...s.ui, statusMessage: 'Pasted object' },
       }));
     };
 
@@ -773,7 +738,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       pasteFromObject(state.clipboardObject);
       return;
     }
-    get().setStatusMessage('Clipboard is empty');
   },
 
   newProject: () => set(() => ({ ...initialState() })),
@@ -782,9 +746,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const normalized = normalizeImportedProject(project);
     set((state) => ({
       ...state,
-      scene: normalized.project.scene,
-      render: normalized.project.render,
-      objects: normalized.project.objects,
+      scene: normalized.scene,
+      render: normalized.render,
+      objects: normalized.objects,
       selectedId: null,
       renderDiagnostics: defaultRenderDiagnostics(),
       plotJobs: {},
@@ -792,10 +756,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       historyFuture: [],
       activeObjectDragHistory: null,
       activeEquationParameterDrag: null,
-      ui: {
-        ...state.ui,
-        statusMessage: buildProjectLoadStatusMessage(normalized),
-      },
     }));
   },
 
@@ -940,27 +900,6 @@ function positionsEqual(
   b: { x: number; y: number; z: number } | null,
 ): boolean {
   return !!a && !!b && a.x === b.x && a.y === b.y && a.z === b.z;
-}
-
-function buildProjectLoadStatusMessage(normalized: {
-  droppedLegacyQualitySettings: boolean;
-  inferredLegacySchemaVersion: boolean;
-  skippedInvalidObjects: number;
-}): string {
-  if (!normalized.droppedLegacyQualitySettings && !normalized.inferredLegacySchemaVersion && normalized.skippedInvalidObjects === 0) {
-    return 'Project loaded';
-  }
-  const notes: string[] = [];
-  if (normalized.droppedLegacyQualitySettings) {
-    notes.push('removed legacy quality settings ignored');
-  }
-  if (normalized.inferredLegacySchemaVersion) {
-    notes.push('schema version inferred as 1');
-  }
-  if (normalized.skippedInvalidObjects > 0) {
-    notes.push(`skipped ${normalized.skippedInvalidObjects} invalid object${normalized.skippedInvalidObjects === 1 ? '' : 's'}`);
-  }
-  return notes.length > 0 ? `Project loaded (${notes.join('; ')})` : 'Project loaded';
 }
 
 function normalizeSceneSettingsImport(
