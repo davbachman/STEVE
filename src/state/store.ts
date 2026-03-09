@@ -49,6 +49,12 @@ interface AppStateShape {
     startPosition: { x: number; y: number; z: number };
     before: HistorySnapshot;
   } | null;
+  activeEquationParameterDrag: {
+    plotId: UUID;
+    parameterName: string;
+    startValue: number;
+    before: HistorySnapshot;
+  } | null;
 }
 
 interface AppActions {
@@ -70,6 +76,9 @@ interface AppActions {
   beginObjectDragHistory: (id: UUID) => void;
   commitObjectDragHistory: (id: UUID) => void;
   cancelObjectDragHistory: () => void;
+  beginEquationParameterDrag: (plotId: UUID, parameterName: string) => void;
+  commitEquationParameterDrag: (plotId: UUID, parameterName: string) => void;
+  cancelEquationParameterDrag: () => void;
   deleteSelected: () => void;
   copySelectedToClipboard: () => Promise<void>;
   pasteClipboard: () => Promise<void>;
@@ -138,6 +147,7 @@ function initialState(): AppStateShape {
     historyPast: [],
     historyFuture: [],
     activeObjectDragHistory: null,
+    activeEquationParameterDrag: null,
   };
 }
 
@@ -477,6 +487,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         const plot = draft.objects[idx] as PlotObject;
         plot.equation = updater(plot.equation);
       });
+      if (state.activeEquationParameterDrag?.plotId === id) {
+        return next;
+      }
       return {
         ...next,
         historyPast: [...state.historyPast, snapshotOf(state)],
@@ -642,6 +655,52 @@ export const useAppStore = create<AppState>((set, get) => ({
   cancelObjectDragHistory: () =>
     set((state) => (state.activeObjectDragHistory ? { ...state, activeObjectDragHistory: null } : state)),
 
+  beginEquationParameterDrag: (plotId, parameterName) =>
+    set((state) => {
+      const startValue = plotParameterValue(state.objects, plotId, parameterName);
+      if (startValue === null) {
+        return state;
+      }
+      if (
+        state.activeEquationParameterDrag
+        && state.activeEquationParameterDrag.plotId === plotId
+        && state.activeEquationParameterDrag.parameterName === parameterName
+      ) {
+        return state;
+      }
+      return {
+        ...state,
+        activeEquationParameterDrag: {
+          plotId,
+          parameterName,
+          startValue,
+          before: snapshotOf(state),
+        },
+      };
+    }),
+
+  commitEquationParameterDrag: (plotId, parameterName) =>
+    set((state) => {
+      const active = state.activeEquationParameterDrag;
+      if (!active) return state;
+      if (active.plotId !== plotId || active.parameterName !== parameterName) {
+        return { ...state, activeEquationParameterDrag: null };
+      }
+      const currentValue = plotParameterValue(state.objects, plotId, parameterName);
+      if (currentValue === null || currentValue === active.startValue) {
+        return { ...state, activeEquationParameterDrag: null };
+      }
+      return {
+        ...state,
+        activeEquationParameterDrag: null,
+        historyPast: [...state.historyPast, active.before],
+        historyFuture: [],
+      };
+    }),
+
+  cancelEquationParameterDrag: () =>
+    set((state) => (state.activeEquationParameterDrag ? { ...state, activeEquationParameterDrag: null } : state)),
+
   deleteSelected: () =>
     set((state) => {
       if (!state.selectedId) return state;
@@ -733,6 +792,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       historyPast: [],
       historyFuture: [],
       activeObjectDragHistory: null,
+      activeEquationParameterDrag: null,
       ui: {
         ...state.ui,
         statusMessage: buildProjectLoadStatusMessage(normalized),
@@ -754,6 +814,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         historyPast: state.historyPast.slice(0, -1),
         historyFuture: [snapshotOf(state), ...state.historyFuture],
         activeObjectDragHistory: null,
+        activeEquationParameterDrag: null,
       };
     }),
 
@@ -769,6 +830,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         historyPast: [...state.historyPast, snapshotOf(state)],
         historyFuture: state.historyFuture.slice(1),
         activeObjectDragHistory: null,
+        activeEquationParameterDrag: null,
       };
     }),
 
@@ -1249,6 +1311,15 @@ function asFiniteInteger(value: unknown): number | null {
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function plotParameterValue(objects: SceneObject[], plotId: UUID, parameterName: string): number | null {
+  const plot = objects.find((candidate): candidate is PlotObject => candidate.id === plotId && candidate.type === 'plot');
+  if (!plot) {
+    return null;
+  }
+  const parameter = plot.equation.parameters.find((candidate) => candidate.name === parameterName);
+  return typeof parameter?.value === 'number' ? parameter.value : null;
 }
 
 function asEnum<T extends string>(value: unknown, allowed: readonly T[]): T | null {

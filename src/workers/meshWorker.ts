@@ -63,7 +63,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
           },
         };
         if (isCanceled(req.objectId)) return;
-        postMesh(req.priority === 'preview' ? 'mesh_preview' : 'mesh_final', req.jobId, req.objectId, mesh);
+        postMesh(meshResponseTypeForPriority(req.priority), req.jobId, req.objectId, mesh);
         return;
       }
       case 'build_parametric_mesh': {
@@ -81,7 +81,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
           req.wireframeCellSize ?? 4,
         );
         if (isCanceled(req.objectId)) return;
-        postMesh(req.priority === 'preview' ? 'mesh_preview' : 'mesh_final', req.jobId, req.objectId, mesh);
+        postMesh(meshResponseTypeForPriority(req.priority), req.jobId, req.objectId, mesh);
         return;
       }
       case 'build_implicit_mesh': {
@@ -99,7 +99,7 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
           spec.quality,
         );
         if (isCanceled(req.objectId)) return;
-        postMesh(req.priority === 'preview' ? 'mesh_preview' : 'mesh_final', req.jobId, req.objectId, mesh);
+        postMesh(meshResponseTypeForPriority(req.priority), req.jobId, req.objectId, mesh);
         return;
       }
       case 'parse_and_classify':
@@ -141,6 +141,15 @@ function previewCurveSpec(
   spec: ParametricCurveSpec,
   priority: 'preview' | 'refine' | 'interactive' | 'background',
 ) {
+  if (priority === 'interactive') {
+    return {
+      ...spec,
+      tDomain: {
+        ...spec.tDomain,
+        samples: Math.max(16, Math.round(spec.tDomain.samples * 0.2)),
+      },
+    };
+  }
   if (priority !== 'preview') return spec;
   return {
     ...spec,
@@ -155,6 +164,16 @@ function previewSurfaceSpec(
   spec: ParametricSurfaceSpec | ExplicitSurfaceSpec,
   priority: 'preview' | 'refine' | 'interactive' | 'background',
 ): ParametricSurfaceSpec | ExplicitSurfaceSpec {
+  if (priority === 'interactive') {
+    return {
+      ...spec,
+      domain: {
+        ...spec.domain,
+        uSamples: Math.max(10, Math.round(spec.domain.uSamples * 0.25)),
+        vSamples: Math.max(10, Math.round(spec.domain.vSamples * 0.25)),
+      },
+    };
+  }
   if (priority !== 'preview') return spec;
   return {
     ...spec,
@@ -170,6 +189,9 @@ function previewImplicitSpec(
   spec: ImplicitSurfaceSpec,
   priority: 'preview' | 'refine' | 'interactive' | 'background',
 ): ImplicitSurfaceSpec {
+  if (priority === 'interactive') {
+    return { ...spec, quality: 'draft' };
+  }
   if (priority !== 'preview') return spec;
   const quality =
     spec.quality === 'high'
@@ -178,6 +200,10 @@ function previewImplicitSpec(
         ? 'draft'
         : 'draft';
   return { ...spec, quality };
+}
+
+function meshResponseTypeForPriority(priority: 'preview' | 'refine' | 'interactive' | 'background'): 'mesh_preview' | 'mesh_final' {
+  return priority === 'refine' || priority === 'background' ? 'mesh_final' : 'mesh_preview';
 }
 
 function emitMeshProgress(jobId: string, objectId: string, phase: string, progress: number): void {

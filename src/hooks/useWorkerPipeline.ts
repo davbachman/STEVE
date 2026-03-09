@@ -27,12 +27,23 @@ type WorkersRef = {
   mesh: Worker | null;
 };
 
+type MeshScheduleMode = 'interactive' | 'settled';
+
+type MeshTimerEntry = {
+  timer: number;
+  mode: MeshScheduleMode;
+  plot: PlotObject;
+};
+
+const INTERACTIVE_MESH_THROTTLE_MS = 32;
+
 export function useWorkerPipeline(): void {
   const objects = useAppStore((s) => s.objects);
+  const activeEquationParameterDrag = useAppStore((s) => s.activeEquationParameterDrag);
   const workersRef = useRef<WorkersRef>({ math: null, mesh: null });
   const sigsRef = useRef<Map<UUID, PlotSignatures>>(new Map());
   const parseTimerRef = useRef<Map<UUID, number>>(new Map());
-  const meshTimerRef = useRef<Map<UUID, number>>(new Map());
+  const meshTimerRef = useRef<Map<UUID, MeshTimerEntry>>(new Map());
   const latestParseJobRef = useRef<Map<UUID, string>>(new Map());
   const latestMeshPreviewJobRef = useRef<Map<UUID, string>>(new Map());
   const latestMeshFinalJobRef = useRef<Map<UUID, string>>(new Map());
@@ -71,7 +82,7 @@ export function useWorkerPipeline(): void {
         window.clearTimeout(timer);
       }
       for (const timer of meshTimers.values()) {
-        window.clearTimeout(timer);
+        window.clearTimeout(timer.timer);
       }
       parseTimers.clear();
       meshTimers.clear();
@@ -105,20 +116,29 @@ export function useWorkerPipeline(): void {
     for (const object of objects) {
       if (object.type !== 'plot') continue;
       ensureJobStateExists(object.id);
+      const isInteractive = activeEquationParameterDrag?.plotId === object.id;
       const nextSigs = {
         parse: object.equation.source.rawText,
-        mesh: buildMeshSignature(object),
+        mesh: buildMeshSignature(object, isInteractive),
       };
       const prev = sigsRef.current.get(object.id);
       if (!prev || prev.parse !== nextSigs.parse) {
         scheduleParse(workersRef.current, parseTimerRef.current, latestParseJobRef.current, jobMetaRef.current, object);
       }
       if (!prev || prev.mesh !== nextSigs.mesh) {
-        scheduleMesh(workersRef.current, meshTimerRef.current, latestMeshPreviewJobRef.current, latestMeshFinalJobRef.current, jobMetaRef.current, object);
+        scheduleMesh(
+          workersRef.current,
+          meshTimerRef.current,
+          latestMeshPreviewJobRef.current,
+          latestMeshFinalJobRef.current,
+          jobMetaRef.current,
+          object,
+          { interactive: isInteractive },
+        );
       }
       sigsRef.current.set(object.id, nextSigs);
     }
-  }, [objects]);
+  }, [activeEquationParameterDrag, objects]);
 }
 
 function scheduleParse(
@@ -159,15 +179,15 @@ function scheduleParse(
 
 function scheduleMesh(
   workers: WorkersRef,
-  timerMap: Map<UUID, number>,
+  timerMap: Map<UUID, MeshTimerEntry>,
   latestPreviewRef: Map<UUID, string>,
   latestFinalRef: Map<UUID, string>,
   jobMetaRef: Map<string, JobMeta>,
   plot: PlotObject,
+  options: { interactive: boolean },
 ): void {
-  clearTimer(timerMap, plot.id);
-
   if (plot.equation.source.parseStatus !== 'ok') {
+    clearTimer(timerMap, plot.id);
     useAppStore.getState().upsertPlotJobStatus(plot.id, {
       meshPhase: 'skipped',
       progress: 0,
@@ -176,6 +196,12 @@ function scheduleMesh(
     return;
   }
 
+  if (options.interactive) {
+    scheduleInteractiveMesh(timerMap, workers, latestPreviewRef, latestFinalRef, jobMetaRef, plot);
+    return;
+  }
+
+  clearTimer(timerMap, plot.id);
   useAppStore.getState().upsertPlotJobStatus(plot.id, {
     meshPhase: 'queued',
     progress: 0.03,
@@ -185,6 +211,7 @@ function scheduleMesh(
   });
 
   const timer = window.setTimeout(() => {
+    timerMap.delete(plot.id);
     postCancel(workers.mesh, plot.id);
     const previewJobId = newJobId();
     const finalJobId = newJobId();
@@ -200,70 +227,111 @@ function scheduleMesh(
       hasPreview: false,
     });
 
-    const [previewReq, finalReq] = buildMeshRequests(plot, previewJobId, finalJobId);
+    const [previewReq, finalReq] = buildSettledMeshRequests(plot, previewJobId, finalJobId);
     workers.mesh?.postMessage(previewReq);
     workers.mesh?.postMessage(finalReq);
   }, plot.equation.kind === 'implicit_surface' ? 220 : 140);
 
-  timerMap.set(plot.id, timer);
+  timerMap.set(plot.id, {
+    timer,
+    mode: 'settled',
+    plot,
+  });
 }
 
-function buildMeshRequests(plot: PlotObject, previewJobId: string, finalJobId: string): [WorkerRequest, WorkerRequest] {
+function scheduleInteractiveMesh(
+  timerMap: Map<UUID, MeshTimerEntry>,
+  workers: WorkersRef,
+  latestPreviewRef: Map<UUID, string>,
+  latestFinalRef: Map<UUID, string>,
+  jobMetaRef: Map<string, JobMeta>,
+  plot: PlotObject,
+): void {
+  const pending = timerMap.get(plot.id);
+  if (pending?.mode === 'interactive') {
+    pending.plot = plot;
+    timerMap.set(plot.id, pending);
+    return;
+  }
+
+  clearTimer(timerMap, plot.id);
+  useAppStore.getState().upsertPlotJobStatus(plot.id, {
+    meshPhase: 'queued',
+    progress: 0.03,
+    message: 'Interactive mesh queued',
+    hasPreview: false,
+    lastError: undefined,
+  });
+
+  const entry: MeshTimerEntry = {
+    timer: 0,
+    mode: 'interactive',
+    plot,
+  };
+  entry.timer = window.setTimeout(() => {
+    const latest = timerMap.get(plot.id);
+    if (!latest || latest.mode !== 'interactive') {
+      return;
+    }
+    timerMap.delete(plot.id);
+    postCancel(workers.mesh, plot.id);
+    const previewJobId = newJobId();
+    latestPreviewRef.set(plot.id, previewJobId);
+    latestFinalRef.delete(plot.id);
+    jobMetaRef.set(previewJobId, { objectId: plot.id, kind: 'mesh_preview', startedAt: performance.now() });
+
+    useAppStore.getState().upsertPlotJobStatus(plot.id, {
+      meshPhase: 'mesh_preview',
+      progress: 0.08,
+      message: 'Meshing interactive preview',
+      hasPreview: false,
+    });
+
+    workers.mesh?.postMessage(buildMeshRequest(latest.plot, previewJobId, 'interactive'));
+  }, INTERACTIVE_MESH_THROTTLE_MS);
+
+  timerMap.set(plot.id, entry);
+}
+
+function buildSettledMeshRequests(plot: PlotObject, previewJobId: string, finalJobId: string): [WorkerRequest, WorkerRequest] {
+  return [
+    buildMeshRequest(plot, previewJobId, 'preview'),
+    buildMeshRequest(plot, finalJobId, 'refine'),
+  ];
+}
+
+function buildMeshRequest(
+  plot: PlotObject,
+  jobId: string,
+  priority: 'preview' | 'refine' | 'interactive',
+): WorkerRequest {
   switch (plot.equation.kind) {
     case 'parametric_curve':
-      return [
-        {
-          type: 'build_curve_mesh',
-          jobId: previewJobId,
-          objectId: plot.id,
-          spec: plot.equation,
-          priority: 'preview',
-        },
-        {
-          type: 'build_curve_mesh',
-          jobId: finalJobId,
-          objectId: plot.id,
-          spec: plot.equation,
-          priority: 'refine',
-        },
-      ];
+      return {
+        type: 'build_curve_mesh',
+        jobId,
+        objectId: plot.id,
+        spec: plot.equation,
+        priority,
+      };
     case 'parametric_surface':
     case 'explicit_surface':
-      return [
-        {
-          type: 'build_parametric_mesh',
-          jobId: previewJobId,
-          objectId: plot.id,
-          spec: plot.equation,
-          priority: 'preview',
-          wireframeCellSize: plot.material.wireframeCellSize ?? 4,
-        },
-        {
-          type: 'build_parametric_mesh',
-          jobId: finalJobId,
-          objectId: plot.id,
-          spec: plot.equation,
-          priority: 'refine',
-          wireframeCellSize: plot.material.wireframeCellSize ?? 4,
-        },
-      ];
+      return {
+        type: 'build_parametric_mesh',
+        jobId,
+        objectId: plot.id,
+        spec: plot.equation,
+        priority,
+        wireframeCellSize: plot.material.wireframeCellSize ?? 4,
+      };
     case 'implicit_surface':
-      return [
-        {
-          type: 'build_implicit_mesh',
-          jobId: previewJobId,
-          objectId: plot.id,
-          spec: plot.equation,
-          priority: 'preview',
-        },
-        {
-          type: 'build_implicit_mesh',
-          jobId: finalJobId,
-          objectId: plot.id,
-          spec: plot.equation,
-          priority: 'refine',
-        },
-      ];
+      return {
+        type: 'build_implicit_mesh',
+        jobId,
+        objectId: plot.id,
+        spec: plot.equation,
+        priority,
+      };
   }
 }
 
@@ -384,17 +452,18 @@ function ensureJobStateExists(objectId: UUID): void {
   useAppStore.getState().upsertPlotJobStatus(objectId, {});
 }
 
-function buildMeshSignature(plot: PlotObject): string {
+function buildMeshSignature(plot: PlotObject, interactive: boolean): string {
   return JSON.stringify({
     equation: plot.equation,
+    interactive,
     wireframeCellSize: plot.material.wireframeCellSize ?? 4,
   });
 }
 
-function clearTimer(map: Map<UUID, number>, objectId: UUID): void {
+function clearTimer<T extends number | MeshTimerEntry>(map: Map<UUID, T>, objectId: UUID): void {
   const timer = map.get(objectId);
   if (timer !== undefined) {
-    window.clearTimeout(timer);
+    window.clearTimeout(typeof timer === 'number' ? timer : timer.timer);
     map.delete(objectId);
   }
 }

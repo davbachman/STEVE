@@ -446,6 +446,8 @@ function ImplicitEditor({ plot }: { plot: PlotObject }) {
 
 function EquationParameterEditor({ plot }: { plot: PlotObject }) {
   const updatePlotSpec = useAppStore((s) => s.updatePlotSpec);
+  const beginEquationParameterDrag = useAppStore((s) => s.beginEquationParameterDrag);
+  const commitEquationParameterDrag = useAppStore((s) => s.commitEquationParameterDrag);
   if (plot.equation.parameters.length === 0) {
     return null;
   }
@@ -461,6 +463,8 @@ function EquationParameterEditor({ plot }: { plot: PlotObject }) {
           max={parameter.max}
           step={parameter.step}
           value={parameter.value}
+          onDragStart={() => beginEquationParameterDrag(plot.id, parameter.name)}
+          onDragEnd={() => commitEquationParameterDrag(plot.id, parameter.name)}
           onChange={(value) =>
             updatePlotSpec(plot.id, (spec) => ({
               ...spec,
@@ -569,6 +573,8 @@ function RangeField({
   step,
   value,
   onChange,
+  onDragStart,
+  onDragEnd,
 }: {
   label: string;
   min: number;
@@ -576,12 +582,27 @@ function RangeField({
   step: number;
   value: number;
   onChange: (value: number) => void;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
 }) {
   return (
     <label className="range-field">
       <span>{label}</span>
       <div className="range-field__controls">
-        <input type="range" min={min} max={max} step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} />
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={(e) => {
+            onDragStart?.();
+            onChange(Number(e.target.value));
+          }}
+          onPointerUp={onDragEnd}
+          onPointerCancel={onDragEnd}
+          onBlur={onDragEnd}
+        />
         <input type="number" min={min} max={max} step={step} value={Number.isFinite(value) ? value : 0} onChange={(e) => onChange(Number(e.target.value))} />
       </div>
     </label>
