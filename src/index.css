@@ -41,6 +41,15 @@ button:hover {
   background: linear-gradient(180deg, #1d2a40, #152036);
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+button:disabled:hover {
+  background: linear-gradient(180deg, #182234, #111827);
+}
+
 input[type='number'],
 select,
 input[type='color'] {

@@ -1,7 +1,9 @@
 import { useRef } from 'react';
+import { exportPlotAsStl } from '../../persistence/meshExport';
 import { readProjectFile, saveProjectFile } from '../../persistence/projectFile';
 import { useAppStore } from '../../state/store';
 import type { ViewportApi } from '../../renderer/SceneController';
+import type { PlotObject } from '../../types/contracts';
 
 interface TopBarProps {
   viewportApi: ViewportApi | null;
@@ -22,8 +24,13 @@ export function TopBar({
   const exportProjectFile = useAppStore((s) => s.exportProjectFile);
   const replaceProject = useAppStore((s) => s.replaceProject);
   const newProject = useAppStore((s) => s.newProject);
+  const objects = useAppStore((s) => s.objects);
   const render = useAppStore((s) => s.render);
+  const selectedId = useAppStore((s) => s.selectedId);
   const updateRender = useAppStore((s) => s.updateRender);
+  const selectedPlot = selectedId
+    ? objects.find((obj): obj is PlotObject => obj.id === selectedId && obj.type === 'plot') ?? null
+    : null;
 
   const handleSaveProject = () => {
     void (async () => {
@@ -54,6 +61,22 @@ export function TopBar({
     })();
   };
 
+  const handleExportStl = () => {
+    if (!selectedPlot) {
+      return;
+    }
+    void (async () => {
+      try {
+        await exportPlotAsStl(selectedPlot);
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return;
+        }
+        console.error(error instanceof Error ? error.message : 'Failed to export STL');
+      }
+    })();
+  };
+
   return (
     <header className="top-bar">
       <div className="top-bar__group">
@@ -61,6 +84,7 @@ export function TopBar({
         <button onClick={handleSaveProject}>Save</button>
         <button onClick={() => fileInputRef.current?.click()}>Open</button>
         <button onClick={handleExportPng}>Export PNG</button>
+        <button onClick={handleExportStl} disabled={!selectedPlot}>Export STL</button>
       </div>
 
       <div className="top-bar__group top-bar__group--center">

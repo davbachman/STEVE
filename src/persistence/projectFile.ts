@@ -1,6 +1,6 @@
 import type { ProjectFileV1 } from '../types/contracts';
 
-interface SaveFilePickerType {
+export interface SaveFilePickerType {
   description?: string;
   accept: Record<string, string[]>;
 }
@@ -21,8 +21,7 @@ interface FileSystemFileHandleLike {
 
 type ShowSaveFilePickerLike = (options?: SaveFilePickerOptions) => Promise<FileSystemFileHandleLike>;
 
-export function downloadProjectFile(project: ProjectFileV1, filename = 'scene.3dplot.json'): void {
-  const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
+export function downloadBlobFile(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
@@ -33,27 +32,38 @@ export function downloadProjectFile(project: ProjectFileV1, filename = 'scene.3d
   URL.revokeObjectURL(url);
 }
 
-export async function saveProjectFile(project: ProjectFileV1, filename = 'scene.3dplot.json'): Promise<void> {
-  const json = JSON.stringify(project, null, 2);
+export async function saveBlobFile(blob: Blob, filename: string, fileType?: SaveFilePickerType): Promise<void> {
   const picker = (window as Window & { showSaveFilePicker?: ShowSaveFilePickerLike }).showSaveFilePicker;
   if (!picker) {
-    downloadProjectFile(project, filename);
+    downloadBlobFile(blob, filename);
     return;
   }
   const handle = await picker({
     suggestedName: filename,
-    types: [
-      {
-        description: '3D Plot project',
-        accept: {
-          'application/json': ['.json'],
-        },
-      },
-    ],
+    types: fileType ? [fileType] : undefined,
   });
   const writable = await handle.createWritable();
-  await writable.write(json);
+  await writable.write(blob);
   await writable.close();
+}
+
+export function downloadProjectFile(project: ProjectFileV1, filename = 'scene.3dplot.json'): void {
+  const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
+  downloadBlobFile(blob, filename);
+}
+
+export async function saveProjectFile(project: ProjectFileV1, filename = 'scene.3dplot.json'): Promise<void> {
+  const json = JSON.stringify(project, null, 2);
+  await saveBlobFile(
+    new Blob([json], { type: 'application/json' }),
+    filename,
+    {
+      description: '3D Plot project',
+      accept: {
+        'application/json': ['.json'],
+      },
+    },
+  );
 }
 
 export async function readProjectFile(file: File): Promise<ProjectFileV1> {
