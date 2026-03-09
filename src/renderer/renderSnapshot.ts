@@ -1,11 +1,9 @@
 import type { AppState } from '../state/store';
 import type {
   InteractiveReflectionSource,
-  PointShadowMode,
   PlotJobStatus,
   PlotObject,
   PointLightObject,
-  RenderSettings,
   SceneObject,
 } from '../types/contracts';
 
@@ -128,27 +126,6 @@ export function selectInteractiveReflectionSource(
     return 'fallback_ready';
   }
   return 'none';
-}
-
-export function resolveInteractivePointShadowBudget(
-  pointShadowMode: PointShadowMode,
-  pointShadowMaxLights: number,
-  interactiveQuality: RenderSettings['interactiveQuality'],
-): number {
-  const requestedLights = Math.max(0, Math.round(pointShadowMaxLights));
-  if (pointShadowMode === 'off' || requestedLights === 0) {
-    return 0;
-  }
-  if (pointShadowMode === 'on') {
-    return requestedLights;
-  }
-  if (interactiveQuality === 'performance') {
-    return 0;
-  }
-  if (interactiveQuality === 'balanced') {
-    return Math.min(requestedLights, 1);
-  }
-  return requestedLights;
 }
 
 export function resolveDirectionalShadowFrustumSize(scene: AppState['scene']): number {

@@ -19,7 +19,6 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
   const objects = useAppStore((s) => s.objects);
   const selectedId = useAppStore((s) => s.selectedId);
   const plotJobs = useAppStore((s) => s.plotJobs);
-  const diagnostics = useAppStore((s) => s.renderDiagnostics);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -101,28 +100,6 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
           <h3>WebGL2 Required</h3>
           <p>{error}</p>
           <p>Use a desktop browser with WebGL2 and floating color buffer support enabled.</p>
-        </div>
-      ) : null}
-      {render.showDiagnostics ? (
-        <div className="viewport-overlay viewport-overlay--diagnostics">
-          <div><strong>Renderer Diagnostics</strong></div>
-          <div>Backend: {diagnostics.backend}</div>
-          <div>WebGL2: {diagnostics.webglReady ? 'ready' : 'not ready'}</div>
-          <div>Plots: {diagnostics.plotCount}</div>
-          <div>Point lights: {diagnostics.pointLightCount}</div>
-          <div>Transparent plots: {diagnostics.transparentPlotCount}</div>
-          <div>Frame: {diagnostics.frameTimeMs.toFixed(1)} ms</div>
-          <div>FPS: {diagnostics.fps.toFixed(1)}</div>
-          <div>Shadow map: {diagnostics.shadowMapResolution}px</div>
-          <div>Shadow atlas: {(diagnostics.shadowAtlasUsage * 100).toFixed(0)}%</div>
-          <div>Opaque casters: {diagnostics.opaqueShadowCasters}</div>
-          <div>Transmittance casters: {diagnostics.transmittanceShadowCasters}</div>
-          <div>Point shadows: {diagnostics.pointShadowCount} ({diagnostics.pointShadowMode})</div>
-          <div>Reflection source: {diagnostics.reflectionSource}</div>
-          <div>Reflection probes: {diagnostics.activeProbeCount}</div>
-          <div>Probe refreshes: {diagnostics.reflectionProbeRefreshCount}</div>
-          <div>SSR hit rate: {(diagnostics.ssrHitRate * 100).toFixed(0)}%</div>
-          <div>Outline mode: {diagnostics.outlineMode}</div>
         </div>
       ) : null}
     </div>

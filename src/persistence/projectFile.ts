@@ -1,5 +1,26 @@
 import type { ProjectFileV1 } from '../types/contracts';
 
+interface SaveFilePickerType {
+  description?: string;
+  accept: Record<string, string[]>;
+}
+
+interface SaveFilePickerOptions {
+  suggestedName?: string;
+  types?: SaveFilePickerType[];
+}
+
+interface FileSystemWritableFileStreamLike {
+  write(data: Blob | BufferSource | string): Promise<void>;
+  close(): Promise<void>;
+}
+
+interface FileSystemFileHandleLike {
+  createWritable(): Promise<FileSystemWritableFileStreamLike>;
+}
+
+type ShowSaveFilePickerLike = (options?: SaveFilePickerOptions) => Promise<FileSystemFileHandleLike>;
+
 export function downloadProjectFile(project: ProjectFileV1, filename = 'scene.3dplot.json'): void {
   const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -10,6 +31,29 @@ export function downloadProjectFile(project: ProjectFileV1, filename = 'scene.3d
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+}
+
+export async function saveProjectFile(project: ProjectFileV1, filename = 'scene.3dplot.json'): Promise<void> {
+  const json = JSON.stringify(project, null, 2);
+  const picker = (window as Window & { showSaveFilePicker?: ShowSaveFilePickerLike }).showSaveFilePicker;
+  if (!picker) {
+    downloadProjectFile(project, filename);
+    return;
+  }
+  const handle = await picker({
+    suggestedName: filename,
+    types: [
+      {
+        description: '3D Plot project',
+        accept: {
+          'application/json': ['.json'],
+        },
+      },
+    ],
+  });
+  const writable = await handle.createWritable();
+  await writable.write(json);
+  await writable.close();
 }
 
 export async function readProjectFile(file: File): Promise<ProjectFileV1> {

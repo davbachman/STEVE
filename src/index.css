@@ -122,6 +122,13 @@ input[type='color'] {
   overflow: hidden;
 }
 
+.top-bar__sidebar-toggles {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex: 0 0 auto;
+}
+
 .top-bar__group label {
   display: inline-flex;
   align-items: center;

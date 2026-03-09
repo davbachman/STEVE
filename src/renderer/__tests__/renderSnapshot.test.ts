@@ -8,7 +8,6 @@ import {
   classifyPlotOpacity,
   createRendererSceneSnapshot,
   resolveDirectionalShadowFrustumSize,
-  resolveInteractivePointShadowBudget,
   selectInteractiveReflectionSource,
   shouldPlotCastInteractiveShadows,
   shouldShowPlotWireframe,
@@ -153,15 +152,6 @@ describe('renderSnapshot helpers', () => {
       externalEnvironmentUsable: false,
       fallbackEnvironmentUsable: false,
     })).toBe('none');
-  });
-
-  it('scales point-shadow budgets with mode and interactive quality', () => {
-    expect(resolveInteractivePointShadowBudget('off', 3, 'quality')).toBe(0);
-    expect(resolveInteractivePointShadowBudget('auto', 3, 'performance')).toBe(0);
-    expect(resolveInteractivePointShadowBudget('auto', 3, 'balanced')).toBe(1);
-    expect(resolveInteractivePointShadowBudget('auto', 3, 'quality')).toBe(3);
-    expect(resolveInteractivePointShadowBudget('on', 2, 'performance')).toBe(2);
-    expect(resolveInteractivePointShadowBudget('on', -2, 'quality')).toBe(0);
   });
 
   it('keeps hidden helper extents out of the directional shadow frustum', () => {

@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { downloadProjectFile, readProjectFile } from '../../persistence/projectFile';
+import { readProjectFile, saveProjectFile } from '../../persistence/projectFile';
 import { useAppStore } from '../../state/store';
 import type { ViewportApi } from '../../renderer/SceneController';
 
@@ -27,23 +27,44 @@ export function TopBar({
   const status = useAppStore((s) => s.ui.statusMessage);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
 
+  const handleSaveProject = () => {
+    void (async () => {
+      try {
+        await saveProjectFile(exportProjectFile());
+        setStatusMessage('Saved project');
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return;
+        }
+        setStatusMessage(error instanceof Error ? error.message : 'Failed to save project');
+      }
+    })();
+  };
+
+  const handleExportPng = () => {
+    void (async () => {
+      if (!viewportApi) {
+        setStatusMessage('Viewport not ready');
+        return;
+      }
+      try {
+        await viewportApi.exportPng();
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return;
+        }
+        setStatusMessage(error instanceof Error ? error.message : 'Failed to export PNG');
+      }
+    })();
+  };
+
   return (
     <header className="top-bar">
       <div className="top-bar__group">
         <button onClick={() => newProject()}>New</button>
-        <button onClick={() => downloadProjectFile(exportProjectFile())}>Save</button>
+        <button onClick={handleSaveProject}>Save</button>
         <button onClick={() => fileInputRef.current?.click()}>Open</button>
-        <button
-          onClick={() => {
-            if (!viewportApi) {
-              setStatusMessage('Viewport not ready');
-              return;
-            }
-            void viewportApi.exportPng();
-          }}
-        >
-          Export PNG
-        </button>
+        <button onClick={handleExportPng}>Export PNG</button>
       </div>
 
       <div className="top-bar__group top-bar__group--center">
@@ -61,25 +82,27 @@ export function TopBar({
       </div>
 
       <div className="top-bar__group top-bar__group--right">
-        <button
-          className={leftSidebarVisible ? 'top-bar__toggle top-bar__toggle--icon is-active' : 'top-bar__toggle top-bar__toggle--icon'}
-          onClick={onToggleLeftSidebar}
-          title={leftSidebarVisible ? 'Hide left panel' : 'Show left panel'}
-          aria-label={leftSidebarVisible ? 'Hide left panel' : 'Show left panel'}
-          aria-pressed={leftSidebarVisible}
-        >
-          <PanelToggleIcon side="left" />
-        </button>
-        <button
-          className={rightSidebarVisible ? 'top-bar__toggle top-bar__toggle--icon is-active' : 'top-bar__toggle top-bar__toggle--icon'}
-          onClick={onToggleRightSidebar}
-          title={rightSidebarVisible ? 'Hide right panel' : 'Show right panel'}
-          aria-label={rightSidebarVisible ? 'Hide right panel' : 'Show right panel'}
-          aria-pressed={rightSidebarVisible}
-        >
-          <PanelToggleIcon side="right" />
-        </button>
         {status ? <span className="top-bar__status" title={status}>{status}</span> : null}
+        <div className="top-bar__sidebar-toggles" aria-label="Sidebar visibility">
+          <button
+            className={leftSidebarVisible ? 'top-bar__toggle top-bar__toggle--icon is-active' : 'top-bar__toggle top-bar__toggle--icon'}
+            onClick={onToggleLeftSidebar}
+            title={leftSidebarVisible ? 'Hide left panel' : 'Show left panel'}
+            aria-label={leftSidebarVisible ? 'Hide left panel' : 'Show left panel'}
+            aria-pressed={leftSidebarVisible}
+          >
+            <PanelToggleIcon side="left" />
+          </button>
+          <button
+            className={rightSidebarVisible ? 'top-bar__toggle top-bar__toggle--icon is-active' : 'top-bar__toggle top-bar__toggle--icon'}
+            onClick={onToggleRightSidebar}
+            title={rightSidebarVisible ? 'Hide right panel' : 'Show right panel'}
+            aria-label={rightSidebarVisible ? 'Hide right panel' : 'Show right panel'}
+            aria-pressed={rightSidebarVisible}
+          >
+            <PanelToggleIcon side="right" />
+          </button>
+        </div>
       </div>
 
       <input

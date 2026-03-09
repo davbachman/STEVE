@@ -100,9 +100,6 @@ function createShadowRegressionScene(): ProjectFileV1 {
     castShadows: true,
   };
   scene.shadow = {
-    directionalShadowEnabled: true,
-    pointShadowMode: 'off',
-    pointShadowMaxLights: 2,
     shadowMapResolution: 2048,
     shadowSoftness: 0.55,
   };
@@ -138,9 +135,6 @@ function createPointShadowRegressionScene(): ProjectFileV1 {
   };
   project.scene.shadow = {
     ...project.scene.shadow,
-    directionalShadowEnabled: false,
-    pointShadowMode: 'on',
-    pointShadowMaxLights: 1,
     shadowMapResolution: 1536,
     shadowSoftness: 0.4,
   };
@@ -265,9 +259,6 @@ function createInteractiveRenderRegressionScene(): ProjectFileV1 {
     castShadows: true,
   };
   scene.shadow = {
-    directionalShadowEnabled: true,
-    pointShadowMode: 'off',
-    pointShadowMaxLights: 1,
     shadowMapResolution: 2048,
     shadowSoftness: 0.52,
   };
@@ -374,9 +365,6 @@ function createPhase5BPathMixedGeometryScene(): ProjectFileV1 {
   scene.gridVisible = false;
   scene.axesVisible = false;
   scene.shadow = {
-    directionalShadowEnabled: true,
-    pointShadowMode: 'auto',
-    pointShadowMaxLights: 1,
     shadowMapResolution: 1536,
     shadowSoftness: 0.45,
   };

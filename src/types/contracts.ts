@@ -153,12 +153,7 @@ export interface AmbientLightSettings {
   intensity: number;
 }
 
-export type PointShadowMode = 'off' | 'auto' | 'on';
-
 export interface ShadowSettings {
-  directionalShadowEnabled: boolean;
-  pointShadowMode: PointShadowMode;
-  pointShadowMaxLights: number;
   shadowMapResolution: number;
   shadowSoftness: number; // 0..1
 }
@@ -294,7 +289,6 @@ export interface RenderDiagnostics {
   outlineMode: 'screen_space_edges' | 'object_mask' | 'disabled';
   reflectionSource: 'none' | 'environment' | 'probe';
   reflectionProbeRefreshCount: number;
-  pointShadowMode: PointShadowMode;
 }
 
 export type InteractiveReflectionSource = 'probe_ready' | 'fallback_ready' | 'external_env' | 'none';

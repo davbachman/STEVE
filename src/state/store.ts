@@ -117,7 +117,6 @@ function defaultRenderDiagnostics(): RenderDiagnostics {
     outlineMode: 'disabled',
     reflectionSource: 'none',
     reflectionProbeRefreshCount: 0,
-    pointShadowMode: 'off',
   };
 }
 
@@ -437,12 +436,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       const past = [...state.historyPast, snapshotOf(state)];
       const actualPlot =
         template === 'curve'
-          ? createDefaultCurve(`Curve ${countPlots(state.objects) + 1}`)
+          ? createDefaultCurve(`Curve ${countPlotsByKind(state.objects, 'curve') + 1}`)
           : template === 'surface'
-            ? createDefaultSurface(`Surface ${countPlots(state.objects) + 1}`)
+            ? createDefaultSurface(`Surface ${countPlotsByKind(state.objects, 'surface') + 1}`)
             : template === 'implicit'
-              ? createDefaultImplicit(`Implicit ${countPlots(state.objects) + 1}`)
-              : createBlankPlot(`Surface ${countPlots(state.objects) + 1}`);
+              ? createDefaultImplicit(`Implicit ${countPlotsByKind(state.objects, 'implicit') + 1}`)
+              : createBlankPlot(`Surface ${countPlotsByKind(state.objects, 'surface') + 1}`);
       return {
         ...state,
         objects: [...state.objects, actualPlot],
@@ -454,7 +453,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   addPointLight: () =>
     set((state) => {
-      const light = createPointLight(`Point Light ${countLights(state.objects) + 1}`);
+      const light = createPointLight(`Point Light ${countPointLights(state.objects) + 1}`);
       return {
         ...state,
         objects: [...state.objects, light],
@@ -761,7 +760,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         } catch {
           // use text as equation
         }
-        const newPlot = createBlankPlot(`Surface ${countPlots(state.objects) + 1}`);
+        const newPlot = createBlankPlot(`Surface ${countPlotsByKind(state.objects, 'surface') + 1}`);
         newPlot.equation = makeExplicitSpec(trimmed);
         pasteFromObject(newPlot);
         return;
@@ -1003,13 +1002,6 @@ function normalizeSceneSettingsImport(
     },
     shadow: {
       ...defaults.shadow,
-      directionalShadowEnabled: asBoolean(shadowInput.directionalShadowEnabled) ?? defaults.shadow.directionalShadowEnabled,
-      pointShadowMode: asEnum(shadowInput.pointShadowMode, ['off', 'auto', 'on']) ?? defaults.shadow.pointShadowMode,
-      pointShadowMaxLights: clampNumber(
-        asFiniteInteger(shadowInput.pointShadowMaxLights) ?? defaults.shadow.pointShadowMaxLights,
-        0,
-        3,
-      ),
       shadowMapResolution: asFiniteInteger(shadowInput.shadowMapResolution) ?? defaults.shadow.shadowMapResolution,
       shadowSoftness: clampNumber(asFiniteNumber(shadowInput.shadowSoftness) ?? defaults.shadow.shadowSoftness, 0, 1),
     },
@@ -1242,11 +1234,22 @@ function normalizeEquationParameters(
   });
 }
 
-function countPlots(objects: SceneObject[]): number {
-  return objects.filter((obj) => obj.type === 'plot').length;
+function countPlotsByKind(objects: SceneObject[], kind: 'curve' | 'surface' | 'implicit'): number {
+  return objects.filter((obj) => {
+    if (obj.type !== 'plot') {
+      return false;
+    }
+    if (kind === 'curve') {
+      return obj.equation.kind === 'parametric_curve';
+    }
+    if (kind === 'implicit') {
+      return obj.equation.kind === 'implicit_surface';
+    }
+    return obj.equation.kind !== 'parametric_curve' && obj.equation.kind !== 'implicit_surface';
+  }).length;
 }
 
-function countLights(objects: SceneObject[]): number {
+function countPointLights(objects: SceneObject[]): number {
   return objects.filter((obj) => obj.type === 'point_light').length;
 }
 
@@ -1269,7 +1272,6 @@ function shallowDiagnosticsEqual(a: RenderDiagnostics, b: RenderDiagnostics): bo
     a.outlineMode === b.outlineMode &&
     a.reflectionSource === b.reflectionSource &&
     a.reflectionProbeRefreshCount === b.reflectionProbeRefreshCount &&
-    a.pointShadowMode === b.pointShadowMode &&
     a.reflectionSource === b.reflectionSource
   );
 }

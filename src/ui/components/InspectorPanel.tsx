@@ -228,41 +228,12 @@ function LightingTab({ selected }: { selected: PlotObject | PointLightObject | n
         onChange={(value) => updateScene({ directional: { ...scene.directional, direction: value } })}
       />
       <div className="inspector-note">Directional vector uses “light rays travel in this direction” semantics (points toward the scene).</div>
-      <label className="checkbox-row">
-        <input type="checkbox" checked={scene.directional.castShadows} onChange={(e) => updateScene({ directional: { ...scene.directional, castShadows: e.target.checked } })} />
-        Cast shadows
-      </label>
 
       <h3>Shadows</h3>
       <label className="checkbox-row">
-        <input
-          type="checkbox"
-          checked={scene.shadow.directionalShadowEnabled}
-          onChange={(e) => updateScene({ shadow: { ...scene.shadow, directionalShadowEnabled: e.target.checked } })}
-        />
-        Directional shadows enabled
+        <input type="checkbox" checked={scene.directional.castShadows} onChange={(e) => updateScene({ directional: { ...scene.directional, castShadows: e.target.checked } })} />
+        Directional shadows
       </label>
-      <label>
-        Point Shadows
-        <select
-          value={scene.shadow.pointShadowMode}
-          onChange={(e) =>
-            updateScene({ shadow: { ...scene.shadow, pointShadowMode: e.target.value as typeof scene.shadow.pointShadowMode } })
-          }
-        >
-          <option value="off">Off</option>
-          <option value="auto">Auto</option>
-          <option value="on">On (try)</option>
-        </select>
-      </label>
-      <RangeField
-        label="Point shadow max lights"
-        min={0}
-        max={3}
-        step={1}
-        value={scene.shadow.pointShadowMaxLights}
-        onChange={(v) => updateScene({ shadow: { ...scene.shadow, pointShadowMaxLights: Math.min(3, Math.round(v)) } })}
-      />
       <RangeField
         label="Shadow map resolution"
         min={256}
@@ -359,14 +330,6 @@ function RenderTab() {
         </select>
       </label>
       <RangeField label="Exposure" min={0.2} max={3} step={0.01} value={render.exposure} onChange={(v) => updateRender({ exposure: v })} />
-      <label>
-        Interactive Quality
-        <select value={render.interactiveQuality} onChange={(e) => updateRender({ interactiveQuality: e.target.value as typeof render.interactiveQuality })}>
-          <option value="performance">Performance</option>
-          <option value="balanced">Balanced</option>
-          <option value="quality">Quality</option>
-        </select>
-      </label>
       <label className="checkbox-row">
         <input type="checkbox" checked={render.showDiagnostics} onChange={(e) => updateRender({ showDiagnostics: e.target.checked })} />
         Render diagnostics overlay
@@ -378,7 +341,7 @@ function RenderTab() {
           <div>Plots: {diagnostics.plotCount}</div>
           <div>Point lights: {diagnostics.pointLightCount}</div>
           <div>Frame: {diagnostics.frameTimeMs.toFixed(1)} ms ({diagnostics.fps.toFixed(1)} fps)</div>
-          <div>Point shadows: {diagnostics.pointShadowCount} ({diagnostics.pointShadowMode})</div>
+          <div>Point shadows: {diagnostics.pointShadowCount}</div>
           <div>Shadow atlas usage: {(diagnostics.shadowAtlasUsage * 100).toFixed(0)}%</div>
           <div>Transmittance casters: {diagnostics.transmittanceShadowCasters}</div>
           <div>Opaque casters: {diagnostics.opaqueShadowCasters}</div>

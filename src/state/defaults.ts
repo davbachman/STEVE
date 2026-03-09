@@ -138,9 +138,6 @@ export const defaultSceneSettings = (): SceneSettings => ({
     castShadows: true,
   },
   shadow: {
-    directionalShadowEnabled: true,
-    pointShadowMode: 'auto',
-    pointShadowMaxLights: 2,
     shadowMapResolution: 2048,
     shadowSoftness: 0.6,
   },
@@ -254,5 +251,5 @@ export function createPointLight(name = 'Point Light', position = { x: 3, y: -3,
 }
 
 export function createDefaultObjects(): SceneObject[] {
-  return [createDefaultSurface('Ribbon Surface'), createDefaultCurve('Helix'), createPointLight('Warm Fill')];
+  return [createDefaultSurface('Surface 1'), createDefaultCurve('Curve 1'), createPointLight('Point Light 1')];
 }

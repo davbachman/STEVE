@@ -10,7 +10,6 @@ import {
   classifyInteractiveShadowMode,
   createRendererSceneSnapshot,
   resolveDirectionalShadowFrustumSize,
-  resolveInteractivePointShadowBudget,
   type RendererCameraLike,
   type RendererSceneSnapshot,
 } from './renderSnapshot';
@@ -324,7 +323,13 @@ export class SceneController {
   getApi(): ViewportApi {
     return {
       exportPng: async (filename = buildPngFileName()) => {
-        await exportCanvasPng(this.canvas, filename);
+        const gl = this.gl;
+        if (!gl) {
+          throw new Error('Viewport not ready');
+        }
+        this.resizeViewport();
+        this.renderScene();
+        await exportCanvasPng(gl, this.canvas, filename);
         useAppStore.getState().setStatusMessage('Exported PNG');
       },
     };
@@ -424,19 +429,11 @@ export class SceneController {
   }
 
   private collectActivePointShadowLights(
-    snapshot: RendererSceneSnapshot,
+    _snapshot: RendererSceneSnapshot,
     pointLights: ReadonlyArray<PointLightObject>,
   ): ActivePointShadowLight[] {
     const supportedShadowLights = Math.min(MAX_POINT_SHADOW_LIGHTS, this.supportedPointShadowLightCount());
-    const requestedLights = Math.min(
-      supportedShadowLights,
-      resolveInteractivePointShadowBudget(
-        snapshot.scene.shadow.pointShadowMode,
-        snapshot.scene.shadow.pointShadowMaxLights,
-        snapshot.render.interactiveQuality,
-      ),
-    );
-    if (requestedLights <= 0) {
+    if (supportedShadowLights <= 0) {
       return [];
     }
     const activeLights: ActivePointShadowLight[] = [];
@@ -450,7 +447,7 @@ export class SceneController {
         lightIndex: index,
         shadowSlot: activeLights.length,
       });
-      if (activeLights.length >= requestedLights) {
+      if (activeLights.length >= supportedShadowLights) {
         break;
       }
     }
@@ -463,7 +460,7 @@ export class SceneController {
   }
 
   private directionalShadowsEnabled(scene: RendererSceneSnapshot['scene']): boolean {
-    return scene.shadow.directionalShadowEnabled && scene.directional.castShadows;
+    return scene.directional.castShadows;
   }
 
   private syncPlots(snapshot: RendererSceneSnapshot): void {
@@ -1558,7 +1555,6 @@ export class SceneController {
       outlineMode: snapshot.selectedId ? 'screen_space_edges' : 'disabled',
       reflectionSource: reflectivePlots > 0 && probeReady ? 'probe' : 'environment',
       reflectionProbeRefreshCount: this.probeResources.refreshCount,
-      pointShadowMode: snapshot.scene.shadow.pointShadowMode,
     });
   }
 
@@ -3120,8 +3116,37 @@ function buildPngFileName(): string {
   return `plot-${stamp}.png`;
 }
 
-async function exportCanvasPng(canvas: HTMLCanvasElement, filename: string): Promise<void> {
-  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
+async function exportCanvasPng(
+  gl: WebGL2RenderingContext,
+  canvas: HTMLCanvasElement,
+  filename: string,
+): Promise<void> {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.finish();
+
+  const width = Math.max(1, canvas.width);
+  const height = Math.max(1, canvas.height);
+  const pixelCount = width * height * 4;
+  const pixels = new Uint8Array(pixelCount);
+  gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+
+  const exportCanvas = document.createElement('canvas');
+  exportCanvas.width = width;
+  exportCanvas.height = height;
+  const ctx = exportCanvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('Failed to create PNG export surface');
+  }
+  const imageData = ctx.createImageData(width, height);
+  const rowSize = width * 4;
+  for (let y = 0; y < height; y += 1) {
+    const srcOffset = (height - 1 - y) * rowSize;
+    const dstOffset = y * rowSize;
+    imageData.data.set(pixels.subarray(srcOffset, srcOffset + rowSize), dstOffset);
+  }
+  ctx.putImageData(imageData, 0, 0);
+
+  const blob = await new Promise<Blob | null>((resolve) => exportCanvas.toBlob(resolve, 'image/png'));
   if (!blob) {
     throw new Error('Failed to export PNG');
   }
