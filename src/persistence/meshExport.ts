@@ -1,7 +1,7 @@
 import { buildPlotGeometry } from '../renderer/plotGeometry';
 import type { PlotGeometry } from '../renderer/plotGeometry';
 import type { PlotObject, Vec3 } from '../types/contracts';
-import { saveBlobFile } from './projectFile';
+import { saveBlobFileWithDialog } from './projectFile';
 
 export async function exportPlotAsStl(plot: PlotObject): Promise<void> {
   const geometry = buildPlotGeometry(plot);
@@ -10,12 +10,13 @@ export async function exportPlotAsStl(plot: PlotObject): Promise<void> {
   }
 
   const stl = serializePlotGeometryAsAsciiStl(plot.name, geometry, plot.transform.position);
-  await saveBlobFile(
+  await saveBlobFileWithDialog(
     new Blob([stl], { type: 'model/stl' }),
     `${sanitizeFileStem(plot.name)}.stl`,
     {
       description: 'STL mesh',
       accept: {
+        'application/sla': ['.stl'],
         'model/stl': ['.stl'],
       },
     },

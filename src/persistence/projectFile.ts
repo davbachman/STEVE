@@ -47,6 +47,20 @@ export async function saveBlobFile(blob: Blob, filename: string, fileType?: Save
   await writable.close();
 }
 
+export async function saveBlobFileWithDialog(blob: Blob, filename: string, fileType?: SaveFilePickerType): Promise<void> {
+  const picker = (window as Window & { showSaveFilePicker?: ShowSaveFilePickerLike }).showSaveFilePicker;
+  if (!picker) {
+    throw new Error('This browser does not support choosing a save location for STL export');
+  }
+  const handle = await picker({
+    suggestedName: filename,
+    types: fileType ? [fileType] : undefined,
+  });
+  const writable = await handle.createWritable();
+  await writable.write(blob);
+  await writable.close();
+}
+
 export function downloadProjectFile(project: ProjectFileV1, filename = 'scene.3dplot.json'): void {
   const blob = new Blob([JSON.stringify(project, null, 2)], { type: 'application/json' });
   downloadBlobFile(blob, filename);
