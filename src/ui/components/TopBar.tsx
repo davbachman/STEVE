@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { readProjectFile, saveProjectFile } from '../../persistence/projectFile';
 import { useAppStore } from '../../state/store';
 import type { ViewportApi } from '../../renderer/SceneController';
@@ -24,7 +24,18 @@ export function TopBar({
   const newProject = useAppStore((s) => s.newProject);
   const render = useAppStore((s) => s.render);
   const updateRender = useAppStore((s) => s.updateRender);
+  const statusMessage = useAppStore((s) => s.ui.statusMessage);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
+
+  useEffect(() => {
+    if (!statusMessage) {
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      setStatusMessage(null);
+    }, 4500);
+    return () => window.clearTimeout(timer);
+  }, [setStatusMessage, statusMessage]);
 
   const handleSaveProject = () => {
     void (async () => {
@@ -81,6 +92,11 @@ export function TopBar({
       </div>
 
       <div className="top-bar__group top-bar__group--right">
+        {statusMessage ? (
+          <div className="top-bar__status" aria-live="polite">
+            {statusMessage}
+          </div>
+        ) : null}
         <div className="top-bar__sidebar-toggles" aria-label="Sidebar visibility">
           <button
             className={leftSidebarVisible ? 'top-bar__toggle top-bar__toggle--icon is-active' : 'top-bar__toggle top-bar__toggle--icon'}

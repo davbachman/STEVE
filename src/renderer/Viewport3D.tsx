@@ -16,6 +16,7 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
 
   const scene = useAppStore((s) => s.scene);
   const render = useAppStore((s) => s.render);
+  const renderDiagnostics = useAppStore((s) => s.renderDiagnostics);
   const objects = useAppStore((s) => s.objects);
   const selectedId = useAppStore((s) => s.selectedId);
   const plotJobs = useAppStore((s) => s.plotJobs);
@@ -100,6 +101,24 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
           <h3>WebGL2 Required</h3>
           <p>{error}</p>
           <p>Use a desktop browser with WebGL2 and floating color buffer support enabled.</p>
+        </div>
+      ) : null}
+      {!error && render.showDiagnostics ? (
+        <div className="viewport-overlay viewport-overlay--diagnostics" aria-live="polite">
+          <div>Renderer Diagnostics</div>
+          <div>Backend: {renderDiagnostics.backend}</div>
+          <div>WebGL2: {renderDiagnostics.webglReady ? 'ready' : 'not ready'}</div>
+          <div>Plots: {renderDiagnostics.plotCount}</div>
+          <div>Point lights: {renderDiagnostics.pointLightCount}</div>
+          <div>Frame: {renderDiagnostics.frameTimeMs.toFixed(1)} ms ({renderDiagnostics.fps.toFixed(1)} fps)</div>
+          <div>Point shadows: {renderDiagnostics.pointShadowCount}</div>
+          <div>Shadow atlas usage: {(renderDiagnostics.shadowAtlasUsage * 100).toFixed(0)}%</div>
+          <div>Transmittance casters: {renderDiagnostics.transmittanceShadowCasters}</div>
+          <div>Opaque casters: {renderDiagnostics.opaqueShadowCasters}</div>
+          <div>Reflection source: {renderDiagnostics.reflectionSource}</div>
+          <div>Reflection probes: {renderDiagnostics.activeProbeCount} | refreshes {renderDiagnostics.reflectionProbeRefreshCount}</div>
+          <div>SSR hit rate: {(renderDiagnostics.ssrHitRate * 100).toFixed(0)}%</div>
+          <div>Outline mode: {renderDiagnostics.outlineMode}</div>
         </div>
       ) : null}
     </div>

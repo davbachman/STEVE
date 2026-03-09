@@ -1,10 +1,17 @@
-https://davbachman.github.io/STEVE/
+# 3D Plot Render
 
-## Instructions
-1. Open the app link above.
-2. Add plots from the left panel (`Curve`, `Surface`, `Implicit`, or `Plot`).
-3. Edit equations in the equation editor and use the inspector to tune material, lighting, bounds, and render settings.
-4. Orbit with right mouse drag, pan with `Shift` + right mouse drag, and drag selected objects with left mouse drag (`Shift` + left drag for Z).
-5. Use `Save`/`Open` for project files and `Export PNG` for renders.
+Browser-only interactive 3D graphing app for parametric curves, parametric surfaces, implicit surfaces, and explicit single-axis surfaces.
 
-Created by David Bachman with GPT 5.3 codex
+## Development
+1. Install dependencies with `npm install`.
+2. Start the app with `npm run dev`.
+3. Build for production with `npm run build`.
+4. Run unit tests with `npm run test:run`.
+5. Run Playwright checks with `npm run test:e2e`.
+
+## Usage
+1. Add plots from the left panel with `+ Curve`, `+ Surface`, `+ Implicit`, or `+ Light`.
+2. Edit the selected plot in the equation dock.
+3. Use the inspector to adjust object transforms, materials, lighting, scene settings, and render diagnostics.
+4. Orbit with right drag, pan with `Shift` + right drag, and drag selected objects with left drag (`Shift` + left drag for Z).
+5. Save projects as JSON or export the viewport as a PNG.

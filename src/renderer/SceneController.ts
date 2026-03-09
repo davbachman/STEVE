@@ -250,7 +250,6 @@ export class SceneController {
     this.createFullscreenResources(gl);
     this.attachInputHandlers();
     this.resizeViewport();
-    this.exposeDebugHandles();
     this.animationFrame = window.requestAnimationFrame(this.renderFrame);
     useAppStore.getState().setRenderDiagnostics({
       backend: 'webgl2',
@@ -313,9 +312,6 @@ export class SceneController {
     }
     this.plotVisuals.clear();
     this.pointLightVisuals.clear();
-    if (typeof window !== 'undefined') {
-      delete (window as Window & { __plotRenderSceneController?: unknown }).__plotRenderSceneController;
-    }
     this.gl = null;
     this.renderPrograms = null;
   }
@@ -1782,13 +1778,6 @@ export class SceneController {
       }
     }
     return bestId ? { id: bestId, distance: bestDistance } : null;
-  }
-
-  private exposeDebugHandles(): void {
-    if (typeof window === 'undefined') {
-      return;
-    }
-    (window as Window & { __plotRenderSceneController?: unknown }).__plotRenderSceneController = this;
   }
 
   private ensureRenderTargets(width: number, height: number): void {

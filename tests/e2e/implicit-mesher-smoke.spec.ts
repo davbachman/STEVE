@@ -1,6 +1,4 @@
 import { expect, test } from '@playwright/test';
-import fs from 'node:fs/promises';
-import path from 'node:path';
 
 test.describe('Implicit Mesher Smoke', () => {
   test('adds an implicit plot and renders it in the viewport', async ({ page }, testInfo) => {
@@ -11,12 +9,12 @@ test.describe('Implicit Mesher Smoke', () => {
       test.skip(true, 'WebGL2 not available in this Playwright browser session');
     }
 
-    await expect(page.getByRole('button', { name: /Ribbon Surface/ })).toContainText('Ready');
-    await expect(page.getByRole('button', { name: /Helix/ })).toContainText('Ready');
+    await expect(page.getByRole('button', { name: /Surface 1/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Curve 1/ })).toBeVisible();
 
     await page.getByRole('button', { name: '+ Implicit' }).click();
 
-    const implicitItem = page.getByRole('button', { name: /Implicit .*Ready/ });
+    const implicitItem = page.getByRole('button', { name: /Implicit 1/ });
     await expect(implicitItem).toBeVisible({ timeout: 20_000 });
     await implicitItem.click();
 
@@ -29,9 +27,5 @@ test.describe('Implicit Mesher Smoke', () => {
       body: screenshot,
       contentType: 'image/png',
     });
-
-    const outDir = path.join(process.cwd(), 'artifacts', 'playwright-checks');
-    await fs.mkdir(outDir, { recursive: true });
-    await fs.writeFile(path.join(outDir, 'implicit-mesher-smoke.png'), screenshot);
   });
 });

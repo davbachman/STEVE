@@ -30,7 +30,7 @@ export function ObjectListPanel() {
         <div className="panel__actions panel__actions--stack">
           <button onClick={() => addPlot('curve')}>+ Curve</button>
           <button onClick={() => addPlot('surface')}>+ Surface</button>
-          <button onClick={() => addPlot('implicit')}>+ Equation</button>
+          <button onClick={() => addPlot('implicit')}>+ Implicit</button>
           <button onClick={() => addPointLight()}>+ Light</button>
         </div>
       </div>

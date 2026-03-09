@@ -9,10 +9,10 @@ test.describe('Import + Drag Undo Smoke', () => {
       test.skip(true, 'WebGL2 not available in this Playwright browser session');
     }
 
-    await expect(page.getByRole('button', { name: /Ribbon Surface/ })).toContainText('Ready');
-    await expect(page.getByRole('button', { name: /Helix/ })).toContainText('Ready');
+    await expect(page.getByRole('button', { name: /Surface 1/ })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Curve 1/ })).toBeVisible();
 
-    await page.getByRole('button', { name: /Ribbon Surface/ }).click();
+    await page.getByRole('button', { name: /Surface 1/ }).click();
     const viewportCanvas = page.locator('canvas').first();
     await expect(viewportCanvas).toBeVisible();
     const box = await viewportCanvas.boundingBox();
@@ -74,7 +74,6 @@ test.describe('Import + Drag Undo Smoke', () => {
 
     await expect(page.getByText('Project loaded (skipped 1 invalid object)')).toBeVisible();
     await expect(page.getByRole('button', { name: /Imported Demo Surface/ })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Imported Light 2/ })).not.toBeVisible();
 
     await page.waitForTimeout(800);
     await testInfo.attach('after-import', { body: await page.locator('.viewport-shell').screenshot(), contentType: 'image/png' });

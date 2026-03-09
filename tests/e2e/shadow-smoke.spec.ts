@@ -15,27 +15,24 @@ test.describe('WebGL2 Shadow Smoke', () => {
 
     await page.getByRole('button', { name: 'Render' }).click();
     await page.getByLabel('Render diagnostics overlay').check();
-    await expect(page.getByText('Renderer Diagnostics')).toBeVisible();
+    await expect(page.locator('.viewport-overlay--diagnostics')).toContainText('Renderer Diagnostics');
 
     await page.getByRole('button', { name: 'Lighting' }).click();
-    await page.getByLabel('Point Shadows').selectOption('on');
     await setRangeField(page, 'Shadow map resolution', '1024');
     await setRangeField(page, 'Shadow softness', '0.55');
-    await page.getByLabel('Directional shadows enabled').check();
-    await page.getByLabel('Cast shadows').nth(0).check(); // directional cast shadows
+    await page.getByLabel('Directional shadows').check();
     await setRangeField(page, 'Intensity', '0.05', { occurrence: 0 }); // ambient intensity
     await setRangeField(page, 'Intensity', '1.8', { occurrence: 1 }); // directional intensity
 
     await page.getByRole('button', { name: 'Scene' }).click();
     await page.getByLabel('XY grid').check();
-    await page.getByLabel('Grid shadow receiver').check();
-    await page.getByLabel('Ground plane').uncheck();
+    await page.getByLabel('Ground plane').check();
 
     await page.getByRole('button', { name: 'Render' }).click();
     const diagnosticsOverlay = page.locator('.viewport-overlay--diagnostics');
     await expect(diagnosticsOverlay).toBeVisible();
     await expect(diagnosticsOverlay.getByText(/Backend: webgl2/i)).toBeVisible();
-    await expect(diagnosticsOverlay.getByText(/Shadow atlas:/i)).toBeVisible();
+    await expect(diagnosticsOverlay.getByText(/Shadow atlas usage:/i)).toBeVisible();
 
     // Give the WebGL renderer a moment to refresh shadow maps after control changes.
     await page.waitForTimeout(1200);
