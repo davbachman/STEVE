@@ -24,7 +24,6 @@ export function TopBar({
   const newProject = useAppStore((s) => s.newProject);
   const render = useAppStore((s) => s.render);
   const updateRender = useAppStore((s) => s.updateRender);
-  const status = useAppStore((s) => s.ui.statusMessage);
   const setStatusMessage = useAppStore((s) => s.setStatusMessage);
 
   const handleSaveProject = () => {
@@ -82,7 +81,6 @@ export function TopBar({
       </div>
 
       <div className="top-bar__group top-bar__group--right">
-        {status ? <span className="top-bar__status" title={status}>{status}</span> : null}
         <div className="top-bar__sidebar-toggles" aria-label="Sidebar visibility">
           <button
             className={leftSidebarVisible ? 'top-bar__toggle top-bar__toggle--icon is-active' : 'top-bar__toggle top-bar__toggle--icon'}
