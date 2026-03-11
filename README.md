@@ -1,10 +1,10 @@
-# S.T.E.V.E.
+# ST.E.V.E.
 
 **STudio for Equation Visualization and Experimentation**
 
 Created by David Bachman and GPT 5.4.
 
-S.T.E.V.E. is a browser-only interactive 3D graphing app for exploring mathematical objects as editable scene elements. It supports parametric curves, parametric surfaces, implicit surfaces, explicit single-axis surfaces, and movable point lights inside the same scene.
+ST.E.V.E. is a browser-only interactive 3D graphing app for exploring mathematical objects as editable scene elements. It supports parametric curves, parametric surfaces, implicit surfaces, explicit single-axis surfaces, and movable point lights inside the same scene.
 
 ## What It Does
 
@@ -20,7 +20,7 @@ S.T.E.V.E. is a browser-only interactive 3D graphing app for exploring mathemati
 
 1. Create objects from the left panel with `+ Curve`, `+ Surface`, `+ Implicit`, and `+ Light`.
 2. Select an object from the object list to edit it. Plot objects open in the equation editor, and lights open in the inspector.
-3. Enter or revise the equation for the selected plot. S.T.E.V.E. classifies the expression and updates the preview and mesh when the expression is valid.
+3. Enter or revise the equation for the selected plot. ST.E.V.E. classifies the expression and updates the preview and mesh when the expression is valid.
 4. Use the right inspector tabs to change object name, position, domain bounds, sampling density, material settings, lighting, scene options, and render settings.
 5. Navigate the viewport with right-drag to orbit and `Shift` + right-drag to pan. Drag selected objects with left-drag, and use `Shift` + left-drag to constrain object dragging along Z.
 6. Toggle visibility for plots and light gizmos from the object list to isolate parts of a scene while editing.
