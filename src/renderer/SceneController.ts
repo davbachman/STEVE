@@ -130,6 +130,15 @@ interface ProgramBundle {
   uniforms: Record<string, WebGLUniformLocation | null>;
 }
 
+interface ContourUniformState {
+  xEnabled: boolean;
+  xSpacing: number;
+  yEnabled: boolean;
+  ySpacing: number;
+  zEnabled: boolean;
+  zSpacing: number;
+}
+
 type DragState =
   | {
       objectId: string;
@@ -455,7 +464,7 @@ export class SceneController {
   }
 
   private directionalShadowsEnabled(scene: RendererSceneSnapshot['scene']): boolean {
-    return scene.directional.castShadows;
+    return scene.directional.enabled && scene.directional.castShadows;
   }
 
   private syncPlots(snapshot: RendererSceneSnapshot): void {
@@ -856,18 +865,12 @@ export class SceneController {
     gl.depthFunc(gl.LESS);
 
     if (!this.supportsFloatColorBuffers) {
-      this.bindTransparentMeshPass(snapshot, pointLights, pointShadowLights);
-      for (const plotSnapshot of snapshot.plots) {
-        const opacity = clamp01(plotSnapshot.plot.material.opacity);
-        if (!plotSnapshot.plot.visible || opacity >= 0.999 || opacity <= 0.001) {
-          continue;
-        }
-        const probeUsage = this.prepareProbeForPlot(snapshot, plotSnapshot.plot);
-        if (probeUsage.refreshed) {
-          this.bindTransparentMeshPass(snapshot, pointLights, pointShadowLights);
-        }
-        this.drawShadedMesh(plotSnapshot.plot, this.renderPrograms!.mesh, true, probeUsage.useProbe);
-      }
+      const cameraPosition = this.getCameraPosition();
+      const transparentPlots = snapshot.plots.filter(({ plot }) => {
+        const opacity = clamp01(plot.material.opacity);
+        return plot.visible && opacity > 0.001 && opacity < 0.999;
+      }).sort((a, b) => transparentSortDistance(b.plot, cameraPosition) - transparentSortDistance(a.plot, cameraPosition));
+      this.renderTransparentPlots(snapshot, pointLights, pointShadowLights, transparentPlots);
       if (snapshot.scene.groundPlaneVisible && snapshot.scene.groundPlaneReflective) {
         this.drawGroundPlane(snapshot.scene, this.renderPrograms!.mesh, true, false);
       }
@@ -882,7 +885,6 @@ export class SceneController {
     pointShadowLights: ReadonlyArray<ActivePointShadowLight>,
   ): void {
     const gl = this.gl!;
-    this.bindTransparentMeshPass(snapshot, pointLights, pointShadowLights);
     const cameraPosition = this.getCameraPosition();
     const transparentPlots = snapshot.plots
       .filter(({ plot }) => {
@@ -890,13 +892,7 @@ export class SceneController {
         return plot.visible && opacity > 0.001 && opacity < 0.999;
       })
       .sort((a, b) => transparentSortDistance(b.plot, cameraPosition) - transparentSortDistance(a.plot, cameraPosition));
-    for (const plotSnapshot of transparentPlots) {
-      const probeUsage = this.prepareProbeForPlot(snapshot, plotSnapshot.plot);
-      if (probeUsage.refreshed) {
-        this.bindTransparentMeshPass(snapshot, pointLights, pointShadowLights);
-      }
-      this.drawShadedMesh(plotSnapshot.plot, this.renderPrograms!.mesh, true, probeUsage.useProbe);
-    }
+    this.renderTransparentPlots(snapshot, pointLights, pointShadowLights, transparentPlots);
     if (snapshot.scene.groundPlaneVisible && snapshot.scene.groundPlaneReflective) {
       this.drawGroundPlane(snapshot.scene, this.renderPrograms!.mesh, true, false);
     }
@@ -905,6 +901,29 @@ export class SceneController {
     gl.disable(gl.BLEND);
     gl.enable(gl.CULL_FACE);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  private renderTransparentPlots(
+    snapshot: RendererSceneSnapshot,
+    pointLights: ReadonlyArray<PointLightObject>,
+    pointShadowLights: ReadonlyArray<ActivePointShadowLight>,
+    transparentPlots: ReadonlyArray<RendererSceneSnapshot['plots'][number]>,
+  ): void {
+    const gl = this.gl!;
+    this.bindTransparentMeshPass(snapshot, pointLights, pointShadowLights);
+    for (const plotSnapshot of transparentPlots) {
+      const probeUsage = this.prepareProbeForPlot(snapshot, plotSnapshot.plot);
+      if (probeUsage.refreshed) {
+        this.bindTransparentMeshPass(snapshot, pointLights, pointShadowLights);
+      }
+      // Transparent double-sided shells render more stably back-to-front when we split back and front faces.
+      gl.enable(gl.CULL_FACE);
+      gl.cullFace(gl.FRONT);
+      this.drawShadedMesh(plotSnapshot.plot, this.renderPrograms!.mesh, true, probeUsage.useProbe);
+      gl.cullFace(gl.BACK);
+      this.drawShadedMesh(plotSnapshot.plot, this.renderPrograms!.mesh, true, probeUsage.useProbe);
+    }
+    gl.disable(gl.CULL_FACE);
   }
 
   private compositeScene(snapshot: RendererSceneSnapshot): void {
@@ -1194,6 +1213,14 @@ export class SceneController {
     gl.uniform1f(program.uniforms.u_opacity, opacity);
     gl.uniform1f(program.uniforms.u_reflectiveness, scene.groundPlaneReflective ? 0.82 : 0.02);
     gl.uniform1f(program.uniforms.u_roughness, clamp(scene.groundPlaneRoughness, 0.04, 1));
+    this.bindContourUniforms(program, {
+      xEnabled: false,
+      xSpacing: 1,
+      yEnabled: false,
+      ySpacing: 1,
+      zEnabled: false,
+      zSpacing: 1,
+    });
     gl.uniform1i(program.uniforms.u_isTransparentPass, transparentPass ? 1 : 0);
     gl.uniform1i(program.uniforms.u_useProbe, useProbe ? 1 : 0);
     gl.uniform3fv(program.uniforms.u_probeCenter, useProbe ? this.probeResources.center : this.emptyProbeCenter);
@@ -1220,6 +1247,7 @@ export class SceneController {
     gl.uniform1f(program.uniforms.u_opacity, clamp01(plot.material.opacity));
     gl.uniform1f(program.uniforms.u_reflectiveness, clamp01(plot.material.reflectiveness));
     gl.uniform1f(program.uniforms.u_roughness, clamp(plot.material.roughness, 0.04, 1));
+    this.bindContourUniforms(program, contourUniformState(plot));
     gl.uniform1i(program.uniforms.u_isTransparentPass, transparentPass ? 1 : 0);
     gl.uniform1i(program.uniforms.u_useProbe, useProbe ? 1 : 0);
     gl.uniform3fv(program.uniforms.u_probeCenter, useProbe ? this.probeResources.center : this.emptyProbeCenter);
@@ -1280,8 +1308,14 @@ export class SceneController {
     gl.uniformMatrix4fv(program.uniforms.u_projection, false, this.projectionMatrix);
     gl.uniformMatrix4fv(program.uniforms.u_lightMatrix, false, this.lightViewProjection);
     gl.uniform3fv(program.uniforms.u_cameraPos, cameraPosition);
-    gl.uniform3fv(program.uniforms.u_ambientColor, hexToRgb(scene.ambient.color).map((value) => value * scene.ambient.intensity));
-    gl.uniform3fv(program.uniforms.u_dirColor, hexToRgb(scene.directional.color).map((value) => value * scene.directional.intensity));
+    gl.uniform3fv(
+      program.uniforms.u_ambientColor,
+      hexToRgb(scene.ambient.color).map((value) => value * (scene.ambient.enabled ? scene.ambient.intensity : 0)),
+    );
+    gl.uniform3fv(
+      program.uniforms.u_dirColor,
+      hexToRgb(scene.directional.color).map((value) => value * (scene.directional.enabled ? scene.directional.intensity : 0)),
+    );
     gl.uniform3f(program.uniforms.u_dirDirection, scene.directional.direction.x, scene.directional.direction.y, scene.directional.direction.z);
     gl.uniform1i(program.uniforms.u_pointCount, pointLights.length);
     const pointPositions = new Float32Array(MAX_POINT_LIGHTS * 3);
@@ -1400,8 +1434,10 @@ export class SceneController {
       scene.groundPlaneColor,
       round3(clamp(scene.groundPlaneRoughness, 0, 1)),
       scene.groundPlaneReflective ? 1 : 0,
+      scene.ambient.enabled ? 1 : 0,
       scene.ambient.color,
       round3(scene.ambient.intensity),
+      scene.directional.enabled ? 1 : 0,
       scene.directional.color,
       round3(scene.directional.intensity),
       round3(scene.directional.direction.x),
@@ -1467,8 +1503,14 @@ export class SceneController {
     gl.uniformMatrix4fv(program.uniforms.u_view, false, this.probeViewMatrix);
     gl.uniformMatrix4fv(program.uniforms.u_projection, false, this.probeProjectionMatrix);
     gl.uniform3fv(program.uniforms.u_cameraPos, this.probeResources.center);
-    gl.uniform3fv(program.uniforms.u_ambientColor, hexToRgb(scene.ambient.color).map((value) => value * scene.ambient.intensity));
-    gl.uniform3fv(program.uniforms.u_dirColor, hexToRgb(scene.directional.color).map((value) => value * scene.directional.intensity));
+    gl.uniform3fv(
+      program.uniforms.u_ambientColor,
+      hexToRgb(scene.ambient.color).map((value) => value * (scene.ambient.enabled ? scene.ambient.intensity : 0)),
+    );
+    gl.uniform3fv(
+      program.uniforms.u_dirColor,
+      hexToRgb(scene.directional.color).map((value) => value * (scene.directional.enabled ? scene.directional.intensity : 0)),
+    );
     gl.uniform3f(program.uniforms.u_dirDirection, scene.directional.direction.x, scene.directional.direction.y, scene.directional.direction.z);
     gl.uniform1i(program.uniforms.u_pointCount, 0);
     gl.uniform1iv(program.uniforms.u_pointShadowSlot, new Int32Array(MAX_POINT_LIGHTS).fill(-1));
@@ -1509,12 +1551,23 @@ export class SceneController {
     gl.uniform1f(program.uniforms.u_opacity, clamp01(plot.material.opacity));
     gl.uniform1f(program.uniforms.u_reflectiveness, clamp01(plot.material.reflectiveness));
     gl.uniform1f(program.uniforms.u_roughness, clamp(plot.material.roughness, 0.04, 1));
+    this.bindContourUniforms(program, contourUniformState(plot));
     gl.uniform1i(program.uniforms.u_isTransparentPass, transparentPass ? 1 : 0);
     gl.uniform1i(program.uniforms.u_useProbe, useProbe ? 1 : 0);
     gl.uniform3fv(program.uniforms.u_probeCenter, useProbe ? this.probeResources.center : this.emptyProbeCenter);
     gl.bindVertexArray(visual.buffers.vao);
     gl.drawElements(gl.TRIANGLES, visual.buffers.indexCount, gl.UNSIGNED_INT, 0);
     gl.bindVertexArray(null);
+  }
+
+  private bindContourUniforms(program: ProgramBundle, state: ContourUniformState): void {
+    const gl = this.gl!;
+    gl.uniform1i(program.uniforms.u_xContoursVisible, state.xEnabled ? 1 : 0);
+    gl.uniform1f(program.uniforms.u_xContourSpacing, state.xSpacing);
+    gl.uniform1i(program.uniforms.u_yContoursVisible, state.yEnabled ? 1 : 0);
+    gl.uniform1f(program.uniforms.u_yContourSpacing, state.ySpacing);
+    gl.uniform1i(program.uniforms.u_zContoursVisible, state.zEnabled ? 1 : 0);
+    gl.uniform1f(program.uniforms.u_zContourSpacing, state.zSpacing);
   }
 
   private syncRenderDiagnostics(
@@ -1981,6 +2034,12 @@ function createPrograms(gl: WebGL2RenderingContext): RenderPrograms {
     'u_opacity',
     'u_reflectiveness',
     'u_roughness',
+    'u_xContoursVisible',
+    'u_xContourSpacing',
+    'u_yContoursVisible',
+    'u_yContourSpacing',
+    'u_zContoursVisible',
+    'u_zContourSpacing',
     'u_ambientColor',
     'u_dirColor',
     'u_dirDirection',
@@ -2109,6 +2168,12 @@ uniform vec3 u_baseColor;
 uniform float u_opacity;
 uniform float u_reflectiveness;
 uniform float u_roughness;
+uniform int u_xContoursVisible;
+uniform float u_xContourSpacing;
+uniform int u_yContoursVisible;
+uniform float u_yContourSpacing;
+uniform int u_zContoursVisible;
+uniform float u_zContourSpacing;
 uniform vec3 u_ambientColor;
 uniform vec3 u_dirColor;
 uniform vec3 u_dirDirection;
@@ -2318,6 +2383,40 @@ vec3 applyLighting(vec3 N, vec3 V) {
   }
   return color;
 }
+
+float contourAxisMask(float value, float spacing) {
+  float safeSpacing = max(spacing, 0.1);
+  float distanceToBand = abs(mod(value + safeSpacing * 0.5, safeSpacing) - safeSpacing * 0.5);
+  float pixelSpan = max(fwidth(value), 0.0001);
+  float halfWidth = pixelSpan * 0.7;
+  return 1.0 - smoothstep(halfWidth, halfWidth + pixelSpan, distanceToBand);
+}
+
+float resolveContourMask() {
+  if (!gl_FrontFacing) {
+    return 0.0;
+  }
+  float contourMask = 0.0;
+  if (u_xContoursVisible == 1) {
+    contourMask = max(contourMask, contourAxisMask(v_worldPosition.x, u_xContourSpacing));
+  }
+  if (u_yContoursVisible == 1) {
+    contourMask = max(contourMask, contourAxisMask(v_worldPosition.y, u_yContourSpacing));
+  }
+  if (u_zContoursVisible == 1) {
+    contourMask = max(contourMask, contourAxisMask(v_worldPosition.z, u_zContourSpacing));
+  }
+  return contourMask;
+}
+
+vec3 applyContours(vec3 baseColor) {
+  float contourMask = resolveContourMask();
+  if (contourMask <= 0.0) {
+    return baseColor;
+  }
+  vec3 contourColor = baseColor * 0.18;
+  return mix(baseColor, contourColor, clamp(contourMask * 0.92, 0.0, 0.92));
+}
 `;
 
 const meshFragmentShaderSource = `#version 300 es
@@ -2327,7 +2426,7 @@ out vec4 outColor;
 void main() {
   vec3 N = normalize(gl_FrontFacing ? v_worldNormal : -v_worldNormal);
   vec3 V = normalize(u_cameraPos - v_worldPosition);
-  vec3 color = applyLighting(N, V);
+  vec3 color = applyContours(applyLighting(N, V));
   float alpha = u_isTransparentPass == 1 ? clamp(u_opacity, 0.0, 0.995) : 1.0;
   outColor = vec4(color, alpha);
 }
@@ -2340,7 +2439,7 @@ out vec4 outColor;
 void main() {
   vec3 N = normalize(gl_FrontFacing ? v_worldNormal : -v_worldNormal);
   vec3 V = normalize(u_cameraPos - v_worldPosition);
-  vec3 color = applyLighting(N, V);
+  vec3 color = applyContours(applyLighting(N, V));
   float alpha = clamp(u_opacity, 0.0, 0.995);
   float weight = max(0.05, alpha * 8.0 + pow(max(0.0, 1.0 - u_roughness), 2.0));
   outColor = vec4(color * alpha, alpha) * weight;
@@ -2960,6 +3059,27 @@ function buildGridLines(extent: number, spacing: number): { positions: Float32Ar
     positions.push(-safeExtent, value, 0.0025, safeExtent, value, 0.0025);
   }
   return { positions: new Float32Array(positions) };
+}
+
+function contourUniformState(plot: PlotObject): ContourUniformState {
+  if (plot.equation.kind === 'parametric_curve') {
+    return {
+      xEnabled: false,
+      xSpacing: 1,
+      yEnabled: false,
+      ySpacing: 1,
+      zEnabled: false,
+      zSpacing: 1,
+    };
+  }
+  return {
+    xEnabled: Boolean(plot.material.xContoursVisible),
+    xSpacing: clamp(plot.material.xContourSpacing ?? 1, 0.1, 5),
+    yEnabled: Boolean(plot.material.yContoursVisible),
+    ySpacing: clamp(plot.material.yContourSpacing ?? 1, 0.1, 5),
+    zEnabled: Boolean(plot.material.zContoursVisible),
+    zSpacing: clamp(plot.material.zContourSpacing ?? 1, 0.1, 5),
+  };
 }
 
 function buildAxesLines(length: number): { positions: Float32Array } {

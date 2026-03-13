@@ -34,6 +34,12 @@ describe('project import normalization', () => {
             ior: 1.45,
             reflectiveness: 0.35,
             roughness: 0.4,
+            xContoursVisible: true,
+            xContourSpacing: 8,
+            yContoursVisible: true,
+            yContourSpacing: -3,
+            zContoursVisible: true,
+            zContourSpacing: 0.75,
           },
         },
         { id: 'broken-1', type: 'unknown' },
@@ -51,6 +57,12 @@ describe('project import normalization', () => {
     }
     expect(state.objects[0].equation.source.rawText).toBe('z = cos(x) * sin(y)');
     expect('ior' in state.objects[0].material).toBe(false);
+    expect(state.objects[0].material.xContoursVisible).toBe(true);
+    expect(state.objects[0].material.xContourSpacing).toBe(5);
+    expect(state.objects[0].material.yContoursVisible).toBe(true);
+    expect(state.objects[0].material.yContourSpacing).toBe(1);
+    expect(state.objects[0].material.zContoursVisible).toBe(true);
+    expect(state.objects[0].material.zContourSpacing).toBe(0.75);
     expect(state.selectedId).toBeNull();
   });
 
@@ -93,6 +105,37 @@ describe('project import normalization', () => {
     expect(plot.equation.parameters).toEqual([
       { name: 'a', value: 3, min: -6, max: 6, step: 0.25 },
     ]);
+  });
+
+  it('imports ambient and directional enabled flags', () => {
+    const project = baseProject({
+      scene: {
+        ambient: {
+          enabled: false,
+          color: '#123456',
+          intensity: 0.4,
+        },
+        directional: {
+          enabled: false,
+          color: '#abcdef',
+          intensity: 1.8,
+          direction: { x: 0.5, y: -0.2, z: -1 },
+          castShadows: true,
+        },
+      },
+    });
+
+    useAppStore.getState().replaceProject(project as never);
+    const state = useAppStore.getState();
+
+    expect(state.scene.ambient.enabled).toBe(false);
+    expect(state.scene.ambient.color).toBe('#123456');
+    expect(state.scene.ambient.intensity).toBe(0.4);
+    expect(state.scene.directional.enabled).toBe(false);
+    expect(state.scene.directional.color).toBe('#abcdef');
+    expect(state.scene.directional.intensity).toBe(1.8);
+    expect(state.scene.directional.direction).toEqual({ x: 0.5, y: -0.2, z: -1 });
+    expect(state.scene.directional.castShadows).toBe(true);
   });
 
   it('drops legacy implicit iso values during import', () => {

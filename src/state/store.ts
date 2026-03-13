@@ -929,11 +929,13 @@ function normalizeSceneSettingsImport(
     defaultGraphBounds: normalizeBounds3D(sceneInput.defaultGraphBounds, defaults.defaultGraphBounds),
     ambient: {
       ...defaults.ambient,
+      enabled: asBoolean(ambientInput.enabled) ?? defaults.ambient.enabled,
       color: asNonEmptyString(ambientInput.color) ?? defaults.ambient.color,
       intensity: asFiniteNumber(ambientInput.intensity) ?? defaults.ambient.intensity,
     },
     directional: {
       ...defaults.directional,
+      enabled: asBoolean(directionalInput.enabled) ?? defaults.directional.enabled,
       direction: normalizeVec3(directionalInput.direction, defaults.directional.direction),
       color: asNonEmptyString(directionalInput.color) ?? defaults.directional.color,
       intensity: asFiniteNumber(directionalInput.intensity) ?? defaults.directional.intensity,
@@ -1021,6 +1023,12 @@ function normalizeMaterialImport(
     presetName: asNonEmptyString(materialInput.presetName) ?? fallback.presetName,
     wireframeVisible: asBoolean(materialInput.wireframeVisible) ?? fallback.wireframeVisible,
     wireframeCellSize: positiveFiniteNumber(materialInput.wireframeCellSize) ?? fallback.wireframeCellSize,
+    xContoursVisible: asBoolean(materialInput.xContoursVisible) ?? fallback.xContoursVisible,
+    xContourSpacing: clampNumber(positiveFiniteNumber(materialInput.xContourSpacing) ?? fallback.xContourSpacing ?? 1, 0.1, 5),
+    yContoursVisible: asBoolean(materialInput.yContoursVisible) ?? fallback.yContoursVisible,
+    yContourSpacing: clampNumber(positiveFiniteNumber(materialInput.yContourSpacing) ?? fallback.yContourSpacing ?? 1, 0.1, 5),
+    zContoursVisible: asBoolean(materialInput.zContoursVisible) ?? fallback.zContoursVisible,
+    zContourSpacing: clampNumber(positiveFiniteNumber(materialInput.zContourSpacing) ?? fallback.zContourSpacing ?? 1, 0.1, 5),
   };
 }
 

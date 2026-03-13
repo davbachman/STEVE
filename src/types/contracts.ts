@@ -85,6 +85,12 @@ export interface MaterialParams {
   presetName?: string;
   wireframeVisible?: boolean;
   wireframeCellSize?: number;
+  xContoursVisible?: boolean;
+  xContourSpacing?: number;
+  yContoursVisible?: boolean;
+  yContourSpacing?: number;
+  zContoursVisible?: boolean;
+  zContourSpacing?: number;
 }
 
 export interface ParametricCurveSpec extends BaseEquationSpec {
@@ -142,6 +148,7 @@ export interface PointLightObject {
 }
 
 export interface DirectionalLightSettings {
+  enabled: boolean;
   direction: Vec3;
   color: string;
   intensity: number;
@@ -149,6 +156,7 @@ export interface DirectionalLightSettings {
 }
 
 export interface AmbientLightSettings {
+  enabled: boolean;
   color: string;
   intensity: number;
 }

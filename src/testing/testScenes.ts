@@ -92,8 +92,9 @@ function createShadowRegressionScene(): ProjectFileV1 {
   scene.gridSpacing = 1;
   scene.gridLineOpacity = 0.55;
   scene.axesVisible = false;
-  scene.ambient = { color: '#fff7ef', intensity: 0.06 };
+  scene.ambient = { enabled: true, color: '#fff7ef', intensity: 0.06 };
   scene.directional = {
+    enabled: true,
     direction: { x: -0.5, y: 0.25, z: -1.0 },
     color: '#fff6ea',
     intensity: 2.1,
@@ -138,7 +139,7 @@ function createPointShadowRegressionScene(): ProjectFileV1 {
     shadowMapResolution: 1536,
     shadowSoftness: 0.4,
   };
-  project.scene.ambient = { color: '#fff8f0', intensity: 0.03 };
+  project.scene.ambient = { enabled: true, color: '#fff8f0', intensity: 0.03 };
   project.render = {
     ...project.render,
     interactiveQuality: 'quality',
@@ -251,8 +252,9 @@ function createInteractiveRenderRegressionScene(): ProjectFileV1 {
   scene.groundPlaneVisible = false;
   scene.gridVisible = false;
   scene.axesVisible = false;
-  scene.ambient = { color: '#fff7ef', intensity: 0.05 };
+  scene.ambient = { enabled: true, color: '#fff7ef', intensity: 0.05 };
   scene.directional = {
+    enabled: true,
     direction: { x: -0.52, y: 0.18, z: -1.0 },
     color: '#fff5eb',
     intensity: 2.15,
@@ -354,8 +356,9 @@ function createPhase5BPathMixedGeometryScene(): ProjectFileV1 {
   scene.gradientTopColor = '#111827';
   scene.gradientBottomColor = '#06080e';
   scene.backgroundColor = '#0b1020';
-  scene.ambient = { color: '#e9f2ff', intensity: 0.04 };
+  scene.ambient = { enabled: true, color: '#e9f2ff', intensity: 0.04 };
   scene.directional = {
+    enabled: true,
     direction: { x: -0.55, y: 0.25, z: -1 },
     color: '#fff4e9',
     intensity: 1.5,

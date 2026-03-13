@@ -158,6 +158,9 @@ function MaterialTab({ selected }: { selected: PlotObject | PointLightObject | n
   const updatePlotMaterial = useAppStore((s) => s.updatePlotMaterial);
   const applyPreset = useAppStore((s) => s.applyMaterialPreset);
   if (!selected || selected.type !== 'plot') return <EmptyState text="Select a plot to edit material" />;
+  const supportsWireframe = selected.equation.kind === 'parametric_surface' || selected.equation.kind === 'explicit_surface';
+  const supportsContours = selected.equation.kind !== 'parametric_curve';
+  const clampContourSpacing = (value: number) => Number.isFinite(value) ? Math.min(5, Math.max(0.1, value)) : 0.1;
 
   return (
     <div className="inspector-section">
@@ -179,7 +182,8 @@ function MaterialTab({ selected }: { selected: PlotObject | PointLightObject | n
       <RangeField label="Opacity" min={0} max={1} step={0.01} value={selected.material.opacity} onChange={(v) => updatePlotMaterial(selected.id, { opacity: v })} />
       <RangeField label="Reflectiveness" min={0} max={1} step={0.01} value={selected.material.reflectiveness} onChange={(v) => updatePlotMaterial(selected.id, { reflectiveness: v })} />
       <RangeField label="Roughness" min={0} max={1} step={0.01} value={selected.material.roughness} onChange={(v) => updatePlotMaterial(selected.id, { roughness: v })} />
-      {(selected.equation.kind === 'parametric_surface' || selected.equation.kind === 'explicit_surface') ? (
+      {(supportsWireframe || supportsContours) ? <h3>Surface Decorations</h3> : null}
+      {supportsWireframe ? (
         <>
           <label className="checkbox-row">
             <input
@@ -189,14 +193,74 @@ function MaterialTab({ selected }: { selected: PlotObject | PointLightObject | n
             />
             Wireframe grid
           </label>
-          <RangeField
-            label="Wire cell step"
-            min={1}
-            max={20}
-            step={1}
-            value={selected.material.wireframeCellSize ?? 4}
-            onChange={(v) => updatePlotMaterial(selected.id, { wireframeCellSize: Math.round(v) })}
-          />
+          {selected.material.wireframeVisible ? (
+            <RangeField
+              label="Wire cell step"
+              min={1}
+              max={20}
+              step={1}
+              value={selected.material.wireframeCellSize ?? 4}
+              onChange={(v) => updatePlotMaterial(selected.id, { wireframeCellSize: Math.round(v) })}
+            />
+          ) : null}
+        </>
+      ) : null}
+      {supportsContours ? (
+        <>
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={Boolean(selected.material.zContoursVisible)}
+              onChange={(e) => updatePlotMaterial(selected.id, { zContoursVisible: e.target.checked })}
+            />
+            Z contours
+          </label>
+          {selected.material.zContoursVisible ? (
+            <RangeField
+              label="Z contour spacing"
+              min={0.1}
+              max={5}
+              step={0.1}
+              value={selected.material.zContourSpacing ?? 1}
+              onChange={(v) => updatePlotMaterial(selected.id, { zContourSpacing: clampContourSpacing(v) })}
+            />
+          ) : null}
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={Boolean(selected.material.yContoursVisible)}
+              onChange={(e) => updatePlotMaterial(selected.id, { yContoursVisible: e.target.checked })}
+            />
+            Y contours
+          </label>
+          {selected.material.yContoursVisible ? (
+            <RangeField
+              label="Y contour spacing"
+              min={0.1}
+              max={5}
+              step={0.1}
+              value={selected.material.yContourSpacing ?? 1}
+              onChange={(v) => updatePlotMaterial(selected.id, { yContourSpacing: clampContourSpacing(v) })}
+            />
+          ) : null}
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={Boolean(selected.material.xContoursVisible)}
+              onChange={(e) => updatePlotMaterial(selected.id, { xContoursVisible: e.target.checked })}
+            />
+            X contours
+          </label>
+          {selected.material.xContoursVisible ? (
+            <RangeField
+              label="X contour spacing"
+              min={0.1}
+              max={5}
+              step={0.1}
+              value={selected.material.xContourSpacing ?? 1}
+              onChange={(v) => updatePlotMaterial(selected.id, { xContourSpacing: clampContourSpacing(v) })}
+            />
+          ) : null}
         </>
       ) : null}
     </div>
@@ -209,47 +273,74 @@ function LightingTab({ selected }: { selected: PlotObject | PointLightObject | n
 
   return (
     <div className="inspector-section">
-      <h3>Ambient</h3>
-      <label>
-        Color
-        <input type="color" value={scene.ambient.color} onChange={(e) => updateScene({ ambient: { ...scene.ambient, color: e.target.value } })} />
-      </label>
-      <RangeField label="Intensity" min={0} max={2} step={0.01} value={scene.ambient.intensity} onChange={(v) => updateScene({ ambient: { ...scene.ambient, intensity: v } })} />
-
-      <h3>Directional</h3>
-      <label>
-        Color
-        <input type="color" value={scene.directional.color} onChange={(e) => updateScene({ directional: { ...scene.directional, color: e.target.value } })} />
-      </label>
-      <RangeField label="Intensity" min={0} max={4} step={0.01} value={scene.directional.intensity} onChange={(v) => updateScene({ directional: { ...scene.directional, intensity: v } })} />
-      <NumberTriplet
-        label="Direction (points toward scene)"
-        value={scene.directional.direction}
-        onChange={(value) => updateScene({ directional: { ...scene.directional, direction: value } })}
-      />
-      <div className="inspector-note">Directional vector uses “light rays travel in this direction” semantics (points toward the scene).</div>
-
-      <h3>Shadows</h3>
+      <h3>General Lighting</h3>
       <label className="checkbox-row">
-        <input type="checkbox" checked={scene.directional.castShadows} onChange={(e) => updateScene({ directional: { ...scene.directional, castShadows: e.target.checked } })} />
-        Directional shadows
+        <input
+          type="checkbox"
+          checked={scene.ambient.enabled}
+          onChange={(e) => updateScene({ ambient: { ...scene.ambient, enabled: e.target.checked } })}
+        />
+        Ambient light
       </label>
-      <RangeField
-        label="Shadow map resolution"
-        min={256}
-        max={4096}
-        step={256}
-        value={scene.shadow.shadowMapResolution}
-        onChange={(v) => updateScene({ shadow: { ...scene.shadow, shadowMapResolution: Math.round(v) } })}
-      />
-      <RangeField
-        label="Shadow softness"
-        min={0}
-        max={1}
-        step={0.01}
-        value={scene.shadow.shadowSoftness}
-        onChange={(v) => updateScene({ shadow: { ...scene.shadow, shadowSoftness: v } })}
-      />
+      {scene.ambient.enabled ? (
+        <>
+          <label>
+            Color
+            <input type="color" value={scene.ambient.color} onChange={(e) => updateScene({ ambient: { ...scene.ambient, color: e.target.value } })} />
+          </label>
+          <RangeField label="Intensity" min={0} max={2} step={0.01} value={scene.ambient.intensity} onChange={(v) => updateScene({ ambient: { ...scene.ambient, intensity: v } })} />
+        </>
+      ) : null}
+
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={scene.directional.enabled}
+          onChange={(e) => updateScene({ directional: { ...scene.directional, enabled: e.target.checked } })}
+        />
+        Directional light
+      </label>
+      {scene.directional.enabled ? (
+        <>
+          <label>
+            Color
+            <input type="color" value={scene.directional.color} onChange={(e) => updateScene({ directional: { ...scene.directional, color: e.target.value } })} />
+          </label>
+          <RangeField label="Intensity" min={0} max={4} step={0.01} value={scene.directional.intensity} onChange={(v) => updateScene({ directional: { ...scene.directional, intensity: v } })} />
+          <NumberTriplet
+            label="Direction (points toward scene)"
+            value={scene.directional.direction}
+            onChange={(value) => updateScene({ directional: { ...scene.directional, direction: value } })}
+          />
+          <div className="inspector-note">Directional vector uses “light rays travel in this direction” semantics (points toward the scene).</div>
+
+          <h3>Shadows</h3>
+          <label className="checkbox-row">
+            <input type="checkbox" checked={scene.directional.castShadows} onChange={(e) => updateScene({ directional: { ...scene.directional, castShadows: e.target.checked } })} />
+            Directional shadows
+          </label>
+          {scene.directional.castShadows ? (
+            <>
+              <RangeField
+                label="Shadow map resolution"
+                min={256}
+                max={4096}
+                step={256}
+                value={scene.shadow.shadowMapResolution}
+                onChange={(v) => updateScene({ shadow: { ...scene.shadow, shadowMapResolution: Math.round(v) } })}
+              />
+              <RangeField
+                label="Shadow softness"
+                min={0}
+                max={1}
+                step={0.01}
+                value={scene.shadow.shadowSoftness}
+                onChange={(v) => updateScene({ shadow: { ...scene.shadow, shadowSoftness: v } })}
+              />
+            </>
+          ) : null}
+        </>
+      ) : null}
 
       {selected?.type === 'point_light' ? (
         <div className="inspector-note">Selected point light can also be edited in the Object tab.</div>
@@ -287,28 +378,38 @@ function SceneTab() {
         <input type="checkbox" checked={scene.groundPlaneVisible} onChange={(e) => updateScene({ groundPlaneVisible: e.target.checked })} />
         Ground plane
       </label>
-      <RangeField label="Ground Size" min={1} max={80} step={1} value={scene.groundPlaneSize} onChange={(v) => updateScene({ groundPlaneSize: v })} />
-      <label>
-        Ground Color
-        <input type="color" value={scene.groundPlaneColor} onChange={(e) => updateScene({ groundPlaneColor: e.target.value })} />
-      </label>
-      <RangeField label="Ground Roughness" min={0} max={1} step={0.01} value={scene.groundPlaneRoughness} onChange={(v) => updateScene({ groundPlaneRoughness: v })} />
-      <label className="checkbox-row">
-        <input type="checkbox" checked={scene.groundPlaneReflective} onChange={(e) => updateScene({ groundPlaneReflective: e.target.checked })} />
-        Ground reflection
-      </label>
+      {scene.groundPlaneVisible ? (
+        <>
+          <RangeField label="Ground Size" min={1} max={80} step={1} value={scene.groundPlaneSize} onChange={(v) => updateScene({ groundPlaneSize: v })} />
+          <label>
+            Ground Color
+            <input type="color" value={scene.groundPlaneColor} onChange={(e) => updateScene({ groundPlaneColor: e.target.value })} />
+          </label>
+          <RangeField label="Ground Roughness" min={0} max={1} step={0.01} value={scene.groundPlaneRoughness} onChange={(v) => updateScene({ groundPlaneRoughness: v })} />
+          <label className="checkbox-row">
+            <input type="checkbox" checked={scene.groundPlaneReflective} onChange={(e) => updateScene({ groundPlaneReflective: e.target.checked })} />
+            Ground reflection
+          </label>
+        </>
+      ) : null}
       <label className="checkbox-row">
         <input type="checkbox" checked={scene.gridVisible} onChange={(e) => updateScene({ gridVisible: e.target.checked })} />
         XY grid
       </label>
-      <RangeField label="Grid Extent" min={1} max={80} step={1} value={scene.gridExtent} onChange={(v) => updateScene({ gridExtent: v })} />
-      <RangeField label="Grid Spacing" min={0.1} max={10} step={0.1} value={scene.gridSpacing} onChange={(v) => updateScene({ gridSpacing: v })} />
-      <RangeField label="Grid Opacity" min={0} max={1} step={0.01} value={scene.gridLineOpacity} onChange={(v) => updateScene({ gridLineOpacity: v })} />
+      {scene.gridVisible ? (
+        <>
+          <RangeField label="Grid Extent" min={1} max={80} step={1} value={scene.gridExtent} onChange={(v) => updateScene({ gridExtent: v })} />
+          <RangeField label="Grid Spacing" min={0.1} max={10} step={0.1} value={scene.gridSpacing} onChange={(v) => updateScene({ gridSpacing: v })} />
+          <RangeField label="Grid Opacity" min={0} max={1} step={0.01} value={scene.gridLineOpacity} onChange={(v) => updateScene({ gridLineOpacity: v })} />
+        </>
+      ) : null}
       <label className="checkbox-row">
         <input type="checkbox" checked={scene.axesVisible} onChange={(e) => updateScene({ axesVisible: e.target.checked })} />
         Axes
       </label>
-      <RangeField label="Axes Length" min={1} max={30} step={0.5} value={scene.axesLength} onChange={(v) => updateScene({ axesLength: v })} />
+      {scene.axesVisible ? (
+        <RangeField label="Axes Length" min={1} max={30} step={0.5} value={scene.axesLength} onChange={(v) => updateScene({ axesLength: v })} />
+      ) : null}
       <BoundsEditor />
     </div>
   );
