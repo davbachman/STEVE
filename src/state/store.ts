@@ -1016,19 +1016,23 @@ function normalizeMaterialImport(
   if (!materialInput) return { ...fallback };
   return {
     ...fallback,
-    baseColor: asNonEmptyString(materialInput.baseColor) ?? fallback.baseColor,
+    baseColor: asHexColor(materialInput.baseColor) ?? fallback.baseColor,
     opacity: clampNumber(asFiniteNumber(materialInput.opacity) ?? fallback.opacity, 0, 1),
     reflectiveness: clampNumber(asFiniteNumber(materialInput.reflectiveness) ?? fallback.reflectiveness, 0, 1),
     roughness: clampNumber(asFiniteNumber(materialInput.roughness) ?? fallback.roughness, 0, 1),
     presetName: asNonEmptyString(materialInput.presetName) ?? fallback.presetName,
     wireframeVisible: asBoolean(materialInput.wireframeVisible) ?? fallback.wireframeVisible,
     wireframeCellSize: positiveFiniteNumber(materialInput.wireframeCellSize) ?? fallback.wireframeCellSize,
+    wireframeColor: asHexColor(materialInput.wireframeColor) ?? fallback.wireframeColor,
     xContoursVisible: asBoolean(materialInput.xContoursVisible) ?? fallback.xContoursVisible,
     xContourSpacing: clampNumber(positiveFiniteNumber(materialInput.xContourSpacing) ?? fallback.xContourSpacing ?? 1, 0.1, 5),
+    xContourColor: asHexColor(materialInput.xContourColor) ?? fallback.xContourColor,
     yContoursVisible: asBoolean(materialInput.yContoursVisible) ?? fallback.yContoursVisible,
     yContourSpacing: clampNumber(positiveFiniteNumber(materialInput.yContourSpacing) ?? fallback.yContourSpacing ?? 1, 0.1, 5),
+    yContourColor: asHexColor(materialInput.yContourColor) ?? fallback.yContourColor,
     zContoursVisible: asBoolean(materialInput.zContoursVisible) ?? fallback.zContoursVisible,
     zContourSpacing: clampNumber(positiveFiniteNumber(materialInput.zContourSpacing) ?? fallback.zContourSpacing ?? 1, 0.1, 5),
+    zContourColor: asHexColor(materialInput.zContourColor) ?? fallback.zContourColor,
   };
 }
 
@@ -1238,6 +1242,22 @@ function shallowPlotJobEqual(a: PlotJobStatus, b: PlotJobStatus): boolean {
 
 function asNonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value : null;
+}
+
+function asHexColor(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  const match = /^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.exec(trimmed);
+  if (!match) {
+    return null;
+  }
+  const digits = match[1];
+  const normalized = digits.length === 3
+    ? digits.split('').map((digit) => `${digit}${digit}`).join('')
+    : digits;
+  return `#${normalized.toLowerCase()}`;
 }
 
 function asBoolean(value: unknown): boolean | null {

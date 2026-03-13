@@ -112,6 +112,7 @@ interface SimpleMeshBuffer {
 
 interface RenderPrograms {
   mesh: ProgramBundle;
+  contour: ProgramBundle;
   transparentAccum: ProgramBundle;
   transparentReveal: ProgramBundle;
   shadow: ProgramBundle;
@@ -133,10 +134,13 @@ interface ProgramBundle {
 interface ContourUniformState {
   xEnabled: boolean;
   xSpacing: number;
+  xColor: string;
   yEnabled: boolean;
   ySpacing: number;
+  yColor: string;
   zEnabled: boolean;
   zSpacing: number;
+  zColor: string;
 }
 
 type DragState =
@@ -306,6 +310,7 @@ export class SceneController {
       deleteVertexArray(gl, this.fullscreenVao);
       if (this.renderPrograms) {
         deleteProgramBundle(gl, this.renderPrograms.mesh);
+        deleteProgramBundle(gl, this.renderPrograms.contour);
         deleteProgramBundle(gl, this.renderPrograms.transparentAccum);
         deleteProgramBundle(gl, this.renderPrograms.transparentReveal);
         deleteProgramBundle(gl, this.renderPrograms.shadow);
@@ -401,6 +406,7 @@ export class SceneController {
     this.renderTransparentScene(snapshot, pointLights, pointShadowLights);
     this.renderSceneAxes(snapshot);
     this.compositeScene(snapshot);
+    this.renderTransparentContourOverlays(snapshot);
     this.renderSelectionMask(snapshot);
     this.renderSelectionOutline();
     this.renderSelectedFeatureEdges(snapshot);
@@ -926,6 +932,33 @@ export class SceneController {
     gl.disable(gl.CULL_FACE);
   }
 
+  private renderTransparentContourOverlays(
+    snapshot: RendererSceneSnapshot,
+  ): void {
+    const gl = this.gl!;
+    const transparentPlots = snapshot.plots.filter(({ plot }) => {
+      const opacity = clamp01(plot.material.opacity);
+      return plot.visible && opacity > 0.001 && opacity < 0.999;
+    });
+    const contourPlots = transparentPlots.filter(({ plot }) => plotHasContours(plot));
+    if (contourPlots.length === 0) {
+      return;
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, this.renderTargets.width, this.renderTargets.height);
+    gl.useProgram(this.renderPrograms!.contour.program);
+    gl.uniformMatrix4fv(this.renderPrograms!.contour.uniforms.u_view, false, this.viewMatrix);
+    gl.uniformMatrix4fv(this.renderPrograms!.contour.uniforms.u_projection, false, this.projectionMatrix);
+    gl.disable(gl.DEPTH_TEST);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.blendEquation(gl.FUNC_ADD);
+    gl.disable(gl.CULL_FACE);
+    for (const plotSnapshot of contourPlots) {
+      this.drawContourMesh(plotSnapshot.plot, this.renderPrograms!.contour);
+    }
+  }
+
   private compositeScene(snapshot: RendererSceneSnapshot): void {
     const gl = this.gl!;
     const targets = this.renderTargets;
@@ -1122,13 +1155,26 @@ export class SceneController {
       plot.transform.position.z,
     ));
     gl.uniformMatrix4fv(this.renderPrograms!.line.uniforms.u_model, false, model);
-    gl.uniform4f(this.renderPrograms!.line.uniforms.u_color, 0, 0, 0, 0.22);
+    const wireframeColor = hexToRgb(plot.material.wireframeColor ?? '#000000');
+    gl.uniform4f(
+      this.renderPrograms!.line.uniforms.u_color,
+      wireframeColor[0],
+      wireframeColor[1],
+      wireframeColor[2],
+      0.22,
+    );
     for (const [offsetX, offsetY] of [[-0.9, 0], [0.9, 0], [0, -0.9], [0, 0.9]] as const) {
       this.setLineScreenOffset(offsetX, offsetY);
       visual.buffers.wireLines.forEach((line) => drawLineBuffer(gl, line));
     }
     this.setLineScreenOffset(0, 0);
-    gl.uniform4f(this.renderPrograms!.line.uniforms.u_color, 0, 0, 0, 0.84);
+    gl.uniform4f(
+      this.renderPrograms!.line.uniforms.u_color,
+      wireframeColor[0],
+      wireframeColor[1],
+      wireframeColor[2],
+      0.84,
+    );
     visual.buffers.wireLines.forEach((line) => drawLineBuffer(gl, line));
     gl.depthMask(true);
     gl.depthFunc(gl.LESS);
@@ -1216,10 +1262,13 @@ export class SceneController {
     this.bindContourUniforms(program, {
       xEnabled: false,
       xSpacing: 1,
+      xColor: '#000000',
       yEnabled: false,
       ySpacing: 1,
+      yColor: '#000000',
       zEnabled: false,
       zSpacing: 1,
+      zColor: '#000000',
     });
     gl.uniform1i(program.uniforms.u_isTransparentPass, transparentPass ? 1 : 0);
     gl.uniform1i(program.uniforms.u_useProbe, useProbe ? 1 : 0);
@@ -1560,14 +1609,38 @@ export class SceneController {
     gl.bindVertexArray(null);
   }
 
+  private drawContourMesh(plot: PlotObject, program: ProgramBundle): void {
+    const gl = this.gl!;
+    const visual = this.plotVisuals.get(plot.id);
+    if (!visual?.buffers.vao || visual.buffers.indexCount <= 0 || !plotHasContours(plot)) {
+      return;
+    }
+    const model = mat4.fromTranslation(mat4.create(), vec3.fromValues(
+      plot.transform.position.x,
+      plot.transform.position.y,
+      plot.transform.position.z,
+    ));
+    const normalMatrix = mat3.normalFromMat4(mat3.create(), model) ?? mat3.create();
+    gl.uniformMatrix4fv(program.uniforms.u_model, false, model);
+    gl.uniformMatrix3fv(program.uniforms.u_normalMatrix, false, normalMatrix);
+    gl.uniform3fv(program.uniforms.u_baseColor, hexToRgb(plot.material.baseColor));
+    this.bindContourUniforms(program, contourUniformState(plot));
+    gl.bindVertexArray(visual.buffers.vao);
+    gl.drawElements(gl.TRIANGLES, visual.buffers.indexCount, gl.UNSIGNED_INT, 0);
+    gl.bindVertexArray(null);
+  }
+
   private bindContourUniforms(program: ProgramBundle, state: ContourUniformState): void {
     const gl = this.gl!;
     gl.uniform1i(program.uniforms.u_xContoursVisible, state.xEnabled ? 1 : 0);
     gl.uniform1f(program.uniforms.u_xContourSpacing, state.xSpacing);
+    gl.uniform3fv(program.uniforms.u_xContourColor, hexToRgb(state.xColor));
     gl.uniform1i(program.uniforms.u_yContoursVisible, state.yEnabled ? 1 : 0);
     gl.uniform1f(program.uniforms.u_yContourSpacing, state.ySpacing);
+    gl.uniform3fv(program.uniforms.u_yContourColor, hexToRgb(state.yColor));
     gl.uniform1i(program.uniforms.u_zContoursVisible, state.zEnabled ? 1 : 0);
     gl.uniform1f(program.uniforms.u_zContourSpacing, state.zSpacing);
+    gl.uniform3fv(program.uniforms.u_zContourColor, hexToRgb(state.zColor));
   }
 
   private syncRenderDiagnostics(
@@ -2036,10 +2109,13 @@ function createPrograms(gl: WebGL2RenderingContext): RenderPrograms {
     'u_roughness',
     'u_xContoursVisible',
     'u_xContourSpacing',
+    'u_xContourColor',
     'u_yContoursVisible',
     'u_yContourSpacing',
+    'u_yContourColor',
     'u_zContoursVisible',
     'u_zContourSpacing',
+    'u_zContourColor',
     'u_ambientColor',
     'u_dirColor',
     'u_dirDirection',
@@ -2073,6 +2149,22 @@ function createPrograms(gl: WebGL2RenderingContext): RenderPrograms {
 
   return {
     mesh: createProgramBundle(gl, meshVertexShaderSource, meshFragmentShaderSource, sharedMeshUniforms),
+    contour: createProgramBundle(gl, contourVertexShaderSource, contourFragmentShaderSource, [
+      'u_model',
+      'u_view',
+      'u_projection',
+      'u_normalMatrix',
+      'u_baseColor',
+      'u_xContoursVisible',
+      'u_xContourSpacing',
+      'u_xContourColor',
+      'u_yContoursVisible',
+      'u_yContourSpacing',
+      'u_yContourColor',
+      'u_zContoursVisible',
+      'u_zContourSpacing',
+      'u_zContourColor',
+    ]),
     transparentAccum: createProgramBundle(gl, meshVertexShaderSource, transparentAccumFragmentShaderSource, sharedMeshUniforms),
     transparentReveal: createProgramBundle(gl, meshVertexShaderSource, transparentRevealFragmentShaderSource, sharedMeshUniforms),
     shadow: createProgramBundle(gl, shadowVertexShaderSource, shadowFragmentShaderSource, [
@@ -2160,6 +2252,27 @@ void main() {
 }
 `;
 
+const contourVertexShaderSource = `#version 300 es
+precision highp float;
+layout(location = 0) in vec3 a_position;
+layout(location = 1) in vec3 a_normal;
+
+uniform mat4 u_model;
+uniform mat4 u_view;
+uniform mat4 u_projection;
+uniform mat3 u_normalMatrix;
+
+out vec3 v_worldPosition;
+out vec3 v_worldNormal;
+
+void main() {
+  vec4 world = u_model * vec4(a_position, 1.0);
+  v_worldPosition = world.xyz;
+  v_worldNormal = normalize(u_normalMatrix * a_normal);
+  gl_Position = u_projection * u_view * world;
+}
+`;
+
 const meshLightingPreamble = `
 precision highp float;
 
@@ -2170,10 +2283,13 @@ uniform float u_reflectiveness;
 uniform float u_roughness;
 uniform int u_xContoursVisible;
 uniform float u_xContourSpacing;
+uniform vec3 u_xContourColor;
 uniform int u_yContoursVisible;
 uniform float u_yContourSpacing;
+uniform vec3 u_yContourColor;
 uniform int u_zContoursVisible;
 uniform float u_zContourSpacing;
+uniform vec3 u_zContourColor;
 uniform vec3 u_ambientColor;
 uniform vec3 u_dirColor;
 uniform vec3 u_dirDirection;
@@ -2392,30 +2508,29 @@ float contourAxisMask(float value, float spacing) {
   return 1.0 - smoothstep(halfWidth, halfWidth + pixelSpan, distanceToBand);
 }
 
-float resolveContourMask() {
-  if (!gl_FrontFacing) {
-    return 0.0;
+vec4 resolveContourOverlay() {
+  float xMask = u_xContoursVisible == 1 ? contourAxisMask(v_worldPosition.x, u_xContourSpacing) : 0.0;
+  float yMask = u_yContoursVisible == 1 ? contourAxisMask(v_worldPosition.y, u_yContourSpacing) : 0.0;
+  float zMask = u_zContoursVisible == 1 ? contourAxisMask(v_worldPosition.z, u_zContourSpacing) : 0.0;
+  float weight = xMask + yMask + zMask;
+  if (weight <= 0.0) {
+    return vec4(0.0);
   }
-  float contourMask = 0.0;
-  if (u_xContoursVisible == 1) {
-    contourMask = max(contourMask, contourAxisMask(v_worldPosition.x, u_xContourSpacing));
-  }
-  if (u_yContoursVisible == 1) {
-    contourMask = max(contourMask, contourAxisMask(v_worldPosition.y, u_yContourSpacing));
-  }
-  if (u_zContoursVisible == 1) {
-    contourMask = max(contourMask, contourAxisMask(v_worldPosition.z, u_zContourSpacing));
-  }
-  return contourMask;
+  vec3 color = (
+    u_xContourColor * xMask
+    + u_yContourColor * yMask
+    + u_zContourColor * zMask
+  ) / weight;
+  float mask = max(max(xMask, yMask), zMask);
+  return vec4(color, mask);
 }
 
 vec3 applyContours(vec3 baseColor) {
-  float contourMask = resolveContourMask();
-  if (contourMask <= 0.0) {
+  vec4 contour = resolveContourOverlay();
+  if (contour.a <= 0.0) {
     return baseColor;
   }
-  vec3 contourColor = baseColor * 0.18;
-  return mix(baseColor, contourColor, clamp(contourMask * 0.92, 0.0, 0.92));
+  return mix(baseColor, contour.rgb, clamp(contour.a * 0.92, 0.0, 0.92));
 }
 `;
 
@@ -2426,7 +2541,8 @@ out vec4 outColor;
 void main() {
   vec3 N = normalize(gl_FrontFacing ? v_worldNormal : -v_worldNormal);
   vec3 V = normalize(u_cameraPos - v_worldPosition);
-  vec3 color = applyContours(applyLighting(N, V));
+  vec3 litColor = applyLighting(N, V);
+  vec3 color = u_isTransparentPass == 1 ? litColor : applyContours(litColor);
   float alpha = u_isTransparentPass == 1 ? clamp(u_opacity, 0.0, 0.995) : 1.0;
   outColor = vec4(color, alpha);
 }
@@ -2439,7 +2555,7 @@ out vec4 outColor;
 void main() {
   vec3 N = normalize(gl_FrontFacing ? v_worldNormal : -v_worldNormal);
   vec3 V = normalize(u_cameraPos - v_worldPosition);
-  vec3 color = applyContours(applyLighting(N, V));
+  vec3 color = applyLighting(N, V);
   float alpha = clamp(u_opacity, 0.0, 0.995);
   float weight = max(0.05, alpha * 8.0 + pow(max(0.0, 1.0 - u_roughness), 2.0));
   outColor = vec4(color * alpha, alpha) * weight;
@@ -2453,6 +2569,60 @@ out vec4 outColor;
 void main() {
   float alpha = clamp(u_opacity, 0.0, 0.995);
   outColor = vec4(alpha);
+}
+`;
+
+const contourFragmentShaderSource = `#version 300 es
+precision highp float;
+
+uniform vec3 u_baseColor;
+uniform int u_xContoursVisible;
+uniform float u_xContourSpacing;
+uniform vec3 u_xContourColor;
+uniform int u_yContoursVisible;
+uniform float u_yContourSpacing;
+uniform vec3 u_yContourColor;
+uniform int u_zContoursVisible;
+uniform float u_zContourSpacing;
+uniform vec3 u_zContourColor;
+
+in vec3 v_worldPosition;
+in vec3 v_worldNormal;
+
+out vec4 outColor;
+
+float contourAxisMask(float value, float spacing) {
+  float safeSpacing = max(spacing, 0.1);
+  float distanceToBand = abs(mod(value + safeSpacing * 0.5, safeSpacing) - safeSpacing * 0.5);
+  float pixelSpan = max(fwidth(value), 0.0001);
+  float halfWidth = pixelSpan * 0.7;
+  return 1.0 - smoothstep(halfWidth, halfWidth + pixelSpan, distanceToBand);
+}
+
+vec4 resolveContourOverlay() {
+  float xMask = u_xContoursVisible == 1 ? contourAxisMask(v_worldPosition.x, u_xContourSpacing) : 0.0;
+  float yMask = u_yContoursVisible == 1 ? contourAxisMask(v_worldPosition.y, u_yContourSpacing) : 0.0;
+  float zMask = u_zContoursVisible == 1 ? contourAxisMask(v_worldPosition.z, u_zContourSpacing) : 0.0;
+  float weight = xMask + yMask + zMask;
+  if (weight <= 0.0) {
+    return vec4(0.0);
+  }
+  vec3 color = (
+    u_xContourColor * xMask
+    + u_yContourColor * yMask
+    + u_zContourColor * zMask
+  ) / weight;
+  float mask = max(max(xMask, yMask), zMask);
+  return vec4(color, mask);
+}
+
+void main() {
+  vec4 contour = resolveContourOverlay();
+  float alpha = clamp(contour.a * 0.84, 0.0, 0.84);
+  if (alpha <= 0.001) {
+    discard;
+  }
+  outColor = vec4(contour.rgb, alpha);
 }
 `;
 
@@ -3066,20 +3236,31 @@ function contourUniformState(plot: PlotObject): ContourUniformState {
     return {
       xEnabled: false,
       xSpacing: 1,
+      xColor: '#000000',
       yEnabled: false,
       ySpacing: 1,
+      yColor: '#000000',
       zEnabled: false,
       zSpacing: 1,
+      zColor: '#000000',
     };
   }
   return {
     xEnabled: Boolean(plot.material.xContoursVisible),
     xSpacing: clamp(plot.material.xContourSpacing ?? 1, 0.1, 5),
+    xColor: plot.material.xContourColor ?? '#000000',
     yEnabled: Boolean(plot.material.yContoursVisible),
     ySpacing: clamp(plot.material.yContourSpacing ?? 1, 0.1, 5),
+    yColor: plot.material.yContourColor ?? '#000000',
     zEnabled: Boolean(plot.material.zContoursVisible),
     zSpacing: clamp(plot.material.zContourSpacing ?? 1, 0.1, 5),
+    zColor: plot.material.zContourColor ?? '#000000',
   };
+}
+
+function plotHasContours(plot: PlotObject): boolean {
+  const state = contourUniformState(plot);
+  return state.xEnabled || state.yEnabled || state.zEnabled;
 }
 
 function buildAxesLines(length: number): { positions: Float32Array } {

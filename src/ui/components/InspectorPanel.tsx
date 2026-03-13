@@ -194,14 +194,24 @@ function MaterialTab({ selected }: { selected: PlotObject | PointLightObject | n
             Wireframe grid
           </label>
           {selected.material.wireframeVisible ? (
-            <RangeField
-              label="Wire cell step"
-              min={1}
-              max={20}
-              step={1}
-              value={selected.material.wireframeCellSize ?? 4}
-              onChange={(v) => updatePlotMaterial(selected.id, { wireframeCellSize: Math.round(v) })}
-            />
+            <>
+              <label>
+                Wireframe color
+                <input
+                  type="color"
+                  value={selected.material.wireframeColor ?? '#000000'}
+                  onChange={(e) => updatePlotMaterial(selected.id, { wireframeColor: e.target.value })}
+                />
+              </label>
+              <RangeField
+                label="Wire cell step"
+                min={1}
+                max={20}
+                step={1}
+                value={selected.material.wireframeCellSize ?? 4}
+                onChange={(v) => updatePlotMaterial(selected.id, { wireframeCellSize: Math.round(v) })}
+              />
+            </>
           ) : null}
         </>
       ) : null}
@@ -216,14 +226,24 @@ function MaterialTab({ selected }: { selected: PlotObject | PointLightObject | n
             Z contours
           </label>
           {selected.material.zContoursVisible ? (
-            <RangeField
-              label="Z contour spacing"
-              min={0.1}
-              max={5}
-              step={0.1}
-              value={selected.material.zContourSpacing ?? 1}
-              onChange={(v) => updatePlotMaterial(selected.id, { zContourSpacing: clampContourSpacing(v) })}
-            />
+            <>
+              <label>
+                Z contour color
+                <input
+                  type="color"
+                  value={selected.material.zContourColor ?? '#000000'}
+                  onChange={(e) => updatePlotMaterial(selected.id, { zContourColor: e.target.value })}
+                />
+              </label>
+              <RangeField
+                label="Z contour spacing"
+                min={0.1}
+                max={5}
+                step={0.1}
+                value={selected.material.zContourSpacing ?? 1}
+                onChange={(v) => updatePlotMaterial(selected.id, { zContourSpacing: clampContourSpacing(v) })}
+              />
+            </>
           ) : null}
           <label className="checkbox-row">
             <input
@@ -234,14 +254,24 @@ function MaterialTab({ selected }: { selected: PlotObject | PointLightObject | n
             Y contours
           </label>
           {selected.material.yContoursVisible ? (
-            <RangeField
-              label="Y contour spacing"
-              min={0.1}
-              max={5}
-              step={0.1}
-              value={selected.material.yContourSpacing ?? 1}
-              onChange={(v) => updatePlotMaterial(selected.id, { yContourSpacing: clampContourSpacing(v) })}
-            />
+            <>
+              <label>
+                Y contour color
+                <input
+                  type="color"
+                  value={selected.material.yContourColor ?? '#000000'}
+                  onChange={(e) => updatePlotMaterial(selected.id, { yContourColor: e.target.value })}
+                />
+              </label>
+              <RangeField
+                label="Y contour spacing"
+                min={0.1}
+                max={5}
+                step={0.1}
+                value={selected.material.yContourSpacing ?? 1}
+                onChange={(v) => updatePlotMaterial(selected.id, { yContourSpacing: clampContourSpacing(v) })}
+              />
+            </>
           ) : null}
           <label className="checkbox-row">
             <input
@@ -252,14 +282,24 @@ function MaterialTab({ selected }: { selected: PlotObject | PointLightObject | n
             X contours
           </label>
           {selected.material.xContoursVisible ? (
-            <RangeField
-              label="X contour spacing"
-              min={0.1}
-              max={5}
-              step={0.1}
-              value={selected.material.xContourSpacing ?? 1}
-              onChange={(v) => updatePlotMaterial(selected.id, { xContourSpacing: clampContourSpacing(v) })}
-            />
+            <>
+              <label>
+                X contour color
+                <input
+                  type="color"
+                  value={selected.material.xContourColor ?? '#000000'}
+                  onChange={(e) => updatePlotMaterial(selected.id, { xContourColor: e.target.value })}
+                />
+              </label>
+              <RangeField
+                label="X contour spacing"
+                min={0.1}
+                max={5}
+                step={0.1}
+                value={selected.material.xContourSpacing ?? 1}
+                onChange={(v) => updatePlotMaterial(selected.id, { xContourSpacing: clampContourSpacing(v) })}
+              />
+            </>
           ) : null}
         </>
       ) : null}

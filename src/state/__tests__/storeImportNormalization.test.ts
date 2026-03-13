@@ -34,12 +34,16 @@ describe('project import normalization', () => {
             ior: 1.45,
             reflectiveness: 0.35,
             roughness: 0.4,
+            wireframeColor: '#123',
             xContoursVisible: true,
             xContourSpacing: 8,
+            xContourColor: '#abcdef',
             yContoursVisible: true,
             yContourSpacing: -3,
+            yContourColor: 'not-a-color',
             zContoursVisible: true,
             zContourSpacing: 0.75,
+            zContourColor: '#456789',
           },
         },
         { id: 'broken-1', type: 'unknown' },
@@ -57,12 +61,16 @@ describe('project import normalization', () => {
     }
     expect(state.objects[0].equation.source.rawText).toBe('z = cos(x) * sin(y)');
     expect('ior' in state.objects[0].material).toBe(false);
+    expect(state.objects[0].material.wireframeColor).toBe('#112233');
     expect(state.objects[0].material.xContoursVisible).toBe(true);
     expect(state.objects[0].material.xContourSpacing).toBe(5);
+    expect(state.objects[0].material.xContourColor).toBe('#abcdef');
     expect(state.objects[0].material.yContoursVisible).toBe(true);
     expect(state.objects[0].material.yContourSpacing).toBe(1);
+    expect(state.objects[0].material.yContourColor).toBe('#000000');
     expect(state.objects[0].material.zContoursVisible).toBe(true);
     expect(state.objects[0].material.zContourSpacing).toBe(0.75);
+    expect(state.objects[0].material.zContourColor).toBe('#456789');
     expect(state.selectedId).toBeNull();
   });
 

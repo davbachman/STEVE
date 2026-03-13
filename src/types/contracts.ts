@@ -85,12 +85,16 @@ export interface MaterialParams {
   presetName?: string;
   wireframeVisible?: boolean;
   wireframeCellSize?: number;
+  wireframeColor?: string;
   xContoursVisible?: boolean;
   xContourSpacing?: number;
+  xContourColor?: string;
   yContoursVisible?: boolean;
   yContourSpacing?: number;
+  yContourColor?: string;
   zContoursVisible?: boolean;
   zContourSpacing?: number;
+  zContourColor?: string;
 }
 
 export interface ParametricCurveSpec extends BaseEquationSpec {
