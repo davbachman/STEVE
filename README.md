@@ -4,7 +4,7 @@
 
 Created by David Bachman with GPT-5 Codex
 
-To learn more about David Bachman and his work visit https://pzacad.pitzer.edu/~dbachman/ and subscribe to his AI substack *Entropy Bonus* at profbachman.substack.com
+To learn more about David Bachman and his work visit https://pzacad.pitzer.edu/~dbachman/ and subscribe to his AI substack *Entropy Bonus* at https://profbachman.substack.com
 
 ST.E.V.E. is a browser-only interactive 3D graphing app for exploring mathematical objects as editable scene elements. It supports parametric curves, parametric surfaces, implicit surfaces, explicit single-axis surfaces, and movable point lights inside the same scene.
 
