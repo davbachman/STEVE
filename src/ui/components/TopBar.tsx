@@ -5,6 +5,8 @@ import { useAppStore } from '../../state/store';
 import type { ViewportApi } from '../../renderer/SceneController';
 import type { PlotObject } from '../../types/contracts';
 
+const APP_GITHUB_URL = 'https://github.com/davbachman/STEVE';
+
 interface TopBarProps {
   viewportApi: ViewportApi | null;
   leftSidebarVisible: boolean;
@@ -77,9 +79,19 @@ export function TopBar({
     })();
   };
 
+  const handleOpenAbout = () => {
+    const opened = window.open(APP_GITHUB_URL, '_blank', 'noopener,noreferrer');
+    if (opened) {
+      opened.opener = null;
+      return;
+    }
+    window.location.assign(APP_GITHUB_URL);
+  };
+
   return (
     <header className="top-bar">
       <div className="top-bar__group">
+        <button onClick={handleOpenAbout}>About</button>
         <button onClick={() => newProject()}>New</button>
         <button onClick={handleSaveProject}>Save</button>
         <button onClick={() => fileInputRef.current?.click()}>Open</button>
