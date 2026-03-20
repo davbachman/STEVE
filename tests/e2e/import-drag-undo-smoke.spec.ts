@@ -9,9 +9,7 @@ test.describe('Import + Drag Undo Smoke', () => {
       test.skip(true, 'WebGL2 not available in this Playwright browser session');
     }
 
-    await expect(page.getByRole('button', { name: /Surface 1/ })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Curve 1/ })).toBeVisible();
-
+    await page.getByRole('button', { name: '+ Surface' }).click();
     await page.getByRole('button', { name: /Surface 1/ }).click();
     const viewportCanvas = page.locator('canvas').first();
     await expect(viewportCanvas).toBeVisible();

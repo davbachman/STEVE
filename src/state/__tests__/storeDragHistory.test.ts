@@ -5,9 +5,20 @@ import type { PlotObject } from '../../types/contracts';
 function firstPlot(): PlotObject {
   const plot = useAppStore.getState().objects.find((obj): obj is PlotObject => obj.type === 'plot');
   if (!plot) {
-    throw new Error('Expected default plot in initial scene');
+    throw new Error('Expected a plot in the scene');
   }
   return plot;
+}
+
+function addSurfacePlot(): PlotObject {
+  const store = useAppStore.getState();
+  store.addPlot('surface');
+  useAppStore.setState((state) => ({
+    ...state,
+    historyPast: [],
+    historyFuture: [],
+  }));
+  return firstPlot();
 }
 
 describe('store drag history', () => {
@@ -17,7 +28,7 @@ describe('store drag history', () => {
 
   it('coalesces drag movement into a single undo entry', () => {
     const store = useAppStore.getState();
-    const plot = firstPlot();
+    const plot = addSurfacePlot();
     const start = { ...plot.transform.position };
 
     store.selectObject(plot.id);
@@ -46,7 +57,7 @@ describe('store drag history', () => {
 
   it('does not create a history entry for a click without movement', () => {
     const store = useAppStore.getState();
-    const plot = firstPlot();
+    const plot = addSurfacePlot();
 
     store.beginObjectDragHistory(plot.id);
     store.commitObjectDragHistory(plot.id);
