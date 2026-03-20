@@ -1,15 +1,11 @@
 /// <reference lib="webworker" />
 
-import { compilePlotObject } from '../math/compile';
-import { computeMeshBounds } from '../math/mesh/geometry';
-import { buildImplicitMeshFromScalarField } from '../math/mesh/implicitMarchingTetra';
-import { buildSurfaceMesh, sampleCurve } from '../math/mesh/parametric';
+import { buildSerializedEquationMesh } from '../math/mesh/plotMesh';
 import type {
   ExplicitSurfaceSpec,
   ImplicitSurfaceSpec,
   ParametricCurveSpec,
   ParametricSurfaceSpec,
-  PlotObject,
   SerializedMesh,
   WorkerRequest,
   WorkerResponse,
@@ -33,35 +29,9 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
       case 'build_curve_mesh': {
         emitMeshProgress(req.jobId, req.objectId, 'compile_curve', 0.1);
         const spec = previewCurveSpec(req.spec, req.priority);
-        const compiled = compileSpecAsPlot(spec);
-        if (compiled.kind !== 'curve') {
-          throw new Error('Expected curve compilation');
-        }
         if (isCanceled(req.objectId)) return;
         emitMeshProgress(req.jobId, req.objectId, 'sample_curve', 0.6);
-        const sample = sampleCurve(spec.tDomain.min, spec.tDomain.max, spec.tDomain.samples, (t) => compiled.fn(t));
-        const path = new Float32Array(sample.points.length * 3);
-        for (let i = 0; i < sample.points.length; i += 1) {
-          const p = sample.points[i];
-          path[i * 3] = p.x;
-          path[i * 3 + 1] = p.y;
-          path[i * 3 + 2] = p.z;
-        }
-        const mesh: SerializedMesh = {
-          positions: new Float32Array(0),
-          indices: new Uint32Array(0),
-          curvePath: path,
-          bounds: computeMeshBounds(path),
-          boundaryEdges: new Float32Array(0),
-          featureEdges: new Float32Array(0),
-          topology: {
-            isClosedManifold: false,
-            hasBoundaryEdges: false,
-            hasFeatureEdges: false,
-            boundaryEdgeCount: 0,
-            featureEdgeCount: 0,
-          },
-        };
+        const mesh = buildSerializedEquationMesh(spec);
         if (isCanceled(req.objectId)) return;
         postMesh(meshResponseTypeForPriority(req.priority), req.jobId, req.objectId, mesh);
         return;
@@ -69,17 +39,11 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
       case 'build_parametric_mesh': {
         emitMeshProgress(req.jobId, req.objectId, 'compile_surface', 0.12);
         const spec = previewSurfaceSpec(req.spec, req.priority);
-        const compiled = compileSpecAsPlot(spec);
-        if (compiled.kind !== 'surface') {
-          throw new Error('Expected surface compilation');
-        }
         if (isCanceled(req.objectId)) return;
         emitMeshProgress(req.jobId, req.objectId, 'mesh_surface', 0.65);
-        const mesh = buildSurfaceMesh(
-          compiled.spec.domain,
-          (u, v) => compiled.fn(u, v),
-          req.wireframeCellSize ?? 4,
-        );
+        const mesh = buildSerializedEquationMesh(spec, {
+          wireframeCellSize: req.wireframeCellSize ?? 4,
+        });
         if (isCanceled(req.objectId)) return;
         postMesh(meshResponseTypeForPriority(req.priority), req.jobId, req.objectId, mesh);
         return;
@@ -87,17 +51,9 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
       case 'build_implicit_mesh': {
         emitMeshProgress(req.jobId, req.objectId, 'compile_implicit', 0.08);
         const spec = previewImplicitSpec(req.spec, req.priority);
-        const compiled = compileSpecAsPlot(spec);
-        if (compiled.kind !== 'implicit') {
-          throw new Error('Expected implicit compilation');
-        }
         if (isCanceled(req.objectId)) return;
         emitMeshProgress(req.jobId, req.objectId, 'mesh_implicit', 0.6);
-        const mesh = buildImplicitMeshFromScalarField(
-          spec.bounds,
-          (x, y, z) => compiled.fn(x, y, z),
-          spec.quality,
-        );
+        const mesh = buildSerializedEquationMesh(spec);
         if (isCanceled(req.objectId)) return;
         postMesh(meshResponseTypeForPriority(req.priority), req.jobId, req.objectId, mesh);
         return;
@@ -116,26 +72,6 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
     self.postMessage(res);
   }
 };
-
-function compileSpecAsPlot(
-  spec: ParametricCurveSpec | ParametricSurfaceSpec | ExplicitSurfaceSpec | ImplicitSurfaceSpec,
-) {
-  const plot = {
-    id: 'worker',
-    name: 'worker',
-    type: 'plot',
-    visible: true,
-    transform: { position: { x: 0, y: 0, z: 0 } },
-    equation: spec,
-    material: {
-      baseColor: '#ffffff',
-      opacity: 1,
-      reflectiveness: 0,
-      roughness: 0.5,
-    },
-  } as unknown as PlotObject;
-  return compilePlotObject(plot);
-}
 
 function previewCurveSpec(
   spec: ParametricCurveSpec,
@@ -235,9 +171,14 @@ function collectTransferables(mesh: SerializedMesh): Transferable[] {
   if (mesh.normals) pushTransferableBuffer(buffers, mesh.normals.buffer);
   if (mesh.uvs) pushTransferableBuffer(buffers, mesh.uvs.buffer);
   if (mesh.curvePath) pushTransferableBuffer(buffers, mesh.curvePath.buffer);
+  for (const curvePath of mesh.curvePaths ?? []) {
+    pushTransferableBuffer(buffers, curvePath.buffer);
+  }
   for (const line of mesh.lines ?? []) {
     pushTransferableBuffer(buffers, line.buffer);
   }
+  if (mesh.boundaryEdges) pushTransferableBuffer(buffers, mesh.boundaryEdges.buffer);
+  if (mesh.featureEdges) pushTransferableBuffer(buffers, mesh.featureEdges.buffer);
   return buffers;
 }
 

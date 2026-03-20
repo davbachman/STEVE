@@ -1,8 +1,6 @@
 import { vec3 } from 'gl-matrix';
-import { compilePlotObject } from '../math/compile';
-import { buildImplicitMeshFromScalarField } from '../math/mesh/implicitMarchingTetra';
-import { computeMeshBounds, computeVertexNormals, extractMeshEdges } from '../math/mesh/geometry';
-import { buildSurfaceMesh, sampleCurve } from '../math/mesh/parametric';
+import { computeMeshBounds, computeVertexNormals, extractMeshEdges, mergeSerializedMeshes } from '../math/mesh/geometry';
+import { buildSerializedPlotMesh } from '../math/mesh/plotMesh';
 import { getRuntimePlotMesh } from '../workers/runtimeMeshCache';
 import type { PlotObject, SerializedMesh, Vec3 } from '../types/contracts';
 
@@ -24,78 +22,56 @@ export interface RayHit {
 }
 
 export function buildPlotGeometry(plot: PlotObject): PlotGeometry {
-  const runtimeMesh = getRuntimePlotMesh(plot.id);
-  if (runtimeMesh) {
-    return toPlotGeometry(plot, runtimeMesh);
-  }
-
-  const compiled = compilePlotObject(plot);
-  if (compiled.kind === 'curve') {
-    const sample = sampleCurve(
-      compiled.spec.tDomain.min,
-      compiled.spec.tDomain.max,
-      compiled.spec.tDomain.samples,
-      (t) => compiled.fn(t),
-    );
-    const curvePath = new Float32Array(sample.points.length * 3);
-    for (let i = 0; i < sample.points.length; i += 1) {
-      const point = sample.points[i];
-      const base = i * 3;
-      curvePath[base] = point.x;
-      curvePath[base + 1] = point.y;
-      curvePath[base + 2] = point.z;
-    }
-    return toPlotGeometry(plot, {
-      positions: new Float32Array(0),
-      indices: new Uint32Array(0),
-      curvePath,
-      bounds: computeMeshBounds(curvePath),
-      boundaryEdges: new Float32Array(0),
-      featureEdges: new Float32Array(0),
-      topology: {
-        isClosedManifold: false,
-        hasBoundaryEdges: false,
-        hasFeatureEdges: false,
-        boundaryEdgeCount: 0,
-        featureEdgeCount: 0,
-      },
-    });
-  }
-  if (compiled.kind === 'surface') {
-    return toPlotGeometry(plot, buildSurfaceMesh(
-      compiled.spec.domain,
-      (u, v) => compiled.fn(u, v),
-      plot.material.wireframeCellSize ?? 4,
-    ));
-  }
-  return toPlotGeometry(plot, buildImplicitMeshFromScalarField(
-    compiled.spec.bounds,
-    (x, y, z) => compiled.fn(x, y, z),
-    compiled.spec.quality,
-  ));
+  return toPlotGeometry(plot, getRuntimePlotMesh(plot.id) ?? buildSerializedPlotMesh(plot));
 }
 
 export function toPlotGeometry(plot: PlotObject, meshData: SerializedMesh): PlotGeometry {
-  if (meshData.curvePath && meshData.curvePath.length >= 6) {
-    const tubeMesh = plot.equation.kind === 'parametric_curve' && plot.equation.renderAsTube
-      ? buildTubeMeshFromCurvePath(meshData.curvePath, plot.equation.tubeRadius, 12)
-      : buildPolylineRibbonMesh(meshData.curvePath, Math.max(0.02, plot.equation.kind === 'parametric_curve' ? plot.equation.tubeRadius * 0.35 : 0.02));
+  const curvePaths = collectCurvePaths(meshData);
+  if (curvePaths.length > 0) {
+    const renderedCurveMesh = mergeSerializedMeshes(
+      curvePaths
+        .filter((curvePath) => curvePath.length >= 6)
+        .map((curvePath) => (
+          plot.equation.kind === 'parametric_curve' && plot.equation.renderAsTube
+            ? buildTubeMeshFromCurvePath(curvePath, plot.equation.tubeRadius, 12)
+            : buildPolylineRibbonMesh(curvePath, Math.max(0.02, plot.equation.kind === 'parametric_curve' ? plot.equation.tubeRadius * 0.35 : 0.02))
+        )),
+    );
+    if (renderedCurveMesh.positions.length === 0) {
+      return {
+        positions: new Float32Array(0),
+        normals: new Float32Array(0),
+        indices: new Uint32Array(0),
+        bounds: meshData.bounds ?? computeMeshBounds([]),
+        boundaryEdges: new Float32Array(0),
+        featureEdges: new Float32Array(0),
+        wireLines: [],
+        topology: meshData.topology ?? {
+          isClosedManifold: false,
+          hasBoundaryEdges: false,
+          hasFeatureEdges: false,
+          boundaryEdgeCount: 0,
+          featureEdgeCount: 0,
+        },
+        curvePath: curvePaths.length === 1 ? curvePaths[0] : null,
+      };
+    }
     return {
-      positions: tubeMesh.positions,
-      normals: tubeMesh.normals ?? new Float32Array(0),
-      indices: tubeMesh.indices,
-      bounds: tubeMesh.bounds ?? computeMeshBounds(tubeMesh.positions),
-      boundaryEdges: tubeMesh.boundaryEdges ?? new Float32Array(0),
-      featureEdges: tubeMesh.featureEdges ?? new Float32Array(0),
-      wireLines: [],
-      topology: tubeMesh.topology ?? {
+      positions: renderedCurveMesh.positions,
+      normals: renderedCurveMesh.normals ?? new Float32Array(0),
+      indices: renderedCurveMesh.indices,
+      bounds: renderedCurveMesh.bounds ?? computeMeshBounds(renderedCurveMesh.positions),
+      boundaryEdges: renderedCurveMesh.boundaryEdges ?? new Float32Array(0),
+      featureEdges: renderedCurveMesh.featureEdges ?? new Float32Array(0),
+      wireLines: renderedCurveMesh.lines ?? [],
+      topology: renderedCurveMesh.topology ?? {
         isClosedManifold: false,
         hasBoundaryEdges: false,
         hasFeatureEdges: false,
         boundaryEdgeCount: 0,
         featureEdgeCount: 0,
       },
-      curvePath: meshData.curvePath,
+      curvePath: curvePaths.length === 1 ? curvePaths[0] : null,
     };
   }
 
@@ -124,6 +100,13 @@ export function toPlotGeometry(plot: PlotObject, meshData: SerializedMesh): Plot
     topology: meshData.topology ?? edgeData.topology,
     curvePath: meshData.curvePath ?? null,
   };
+}
+
+function collectCurvePaths(meshData: SerializedMesh): Float32Array[] {
+  if (meshData.curvePaths && meshData.curvePaths.length > 0) {
+    return meshData.curvePaths;
+  }
+  return meshData.curvePath ? [meshData.curvePath] : [];
 }
 
 export function intersectRayWithPlotGeometry(

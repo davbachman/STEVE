@@ -684,6 +684,39 @@ input[type='color'] {
   align-items: center;
 }
 
+.equation-parameter {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 12px;
+  background: rgba(11, 16, 26, 0.6);
+}
+
+.equation-parameter__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  color: #dbe7f8;
+  font-size: 0.87rem;
+}
+
+.equation-parameter__mode {
+  padding: 0.28rem 0.55rem;
+  font-size: 0.78rem;
+}
+
+.equation-parameter__mode--active {
+  border-color: rgba(97, 185, 255, 0.45);
+  box-shadow: 0 0 0 1px rgba(97, 185, 255, 0.14) inset;
+}
+
+.equation-parameter__discrete {
+  display: grid;
+  gap: 0.45rem;
+}
+
 .control-grid {
   display: grid;
   gap: 0.45rem;
