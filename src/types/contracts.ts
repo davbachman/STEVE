@@ -297,13 +297,10 @@ export interface RenderDiagnostics {
   transmittanceShadowCasters: number;
   pointShadowCount: number;
   activeProbeCount: number;
-  ssrHitRate: number;
   outlineMode: 'screen_space_edges' | 'object_mask' | 'disabled';
   reflectionSource: 'none' | 'environment' | 'probe';
   reflectionProbeRefreshCount: number;
 }
-
-export type InteractiveReflectionSource = 'probe_ready' | 'fallback_ready' | 'external_env' | 'none';
 
 export type PlotJobPhase = 'idle' | 'queued' | 'parsing' | 'mesh_preview' | 'mesh_final' | 'ready' | 'error' | 'skipped';
 

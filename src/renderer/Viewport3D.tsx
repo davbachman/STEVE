@@ -117,7 +117,6 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
           <div>Opaque casters: {renderDiagnostics.opaqueShadowCasters}</div>
           <div>Reflection source: {renderDiagnostics.reflectionSource}</div>
           <div>Reflection probes: {renderDiagnostics.activeProbeCount} | refreshes {renderDiagnostics.reflectionProbeRefreshCount}</div>
-          <div>SSR hit rate: {(renderDiagnostics.ssrHitRate * 100).toFixed(0)}%</div>
           <div>Outline mode: {renderDiagnostics.outlineMode}</div>
         </div>
       ) : null}

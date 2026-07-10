@@ -81,9 +81,6 @@ interface RenderTargets {
   sceneFramebuffer: WebGLFramebuffer | null;
   sceneColor: WebGLTexture | null;
   sceneDepth: WebGLTexture | null;
-  oitFramebuffer: WebGLFramebuffer | null;
-  oitAccum: WebGLTexture | null;
-  oitReveal: WebGLTexture | null;
   maskFramebuffer: WebGLFramebuffer | null;
   maskTexture: WebGLTexture | null;
   maskDepth: WebGLTexture | null;
@@ -113,8 +110,6 @@ interface SimpleMeshBuffer {
 interface RenderPrograms {
   mesh: ProgramBundle;
   contour: ProgramBundle;
-  transparentAccum: ProgramBundle;
-  transparentReveal: ProgramBundle;
   shadow: ProgramBundle;
   transShadow: ProgramBundle;
   pointShadow: ProgramBundle;
@@ -311,8 +306,6 @@ export class SceneController {
       if (this.renderPrograms) {
         deleteProgramBundle(gl, this.renderPrograms.mesh);
         deleteProgramBundle(gl, this.renderPrograms.contour);
-        deleteProgramBundle(gl, this.renderPrograms.transparentAccum);
-        deleteProgramBundle(gl, this.renderPrograms.transparentReveal);
         deleteProgramBundle(gl, this.renderPrograms.shadow);
         deleteProgramBundle(gl, this.renderPrograms.transShadow);
         deleteProgramBundle(gl, this.renderPrograms.pointShadow);
@@ -869,20 +862,6 @@ export class SceneController {
     gl.disable(gl.BLEND);
     gl.depthMask(true);
     gl.depthFunc(gl.LESS);
-
-    if (!this.supportsFloatColorBuffers) {
-      const cameraPosition = this.getCameraPosition();
-      const transparentPlots = snapshot.plots.filter(({ plot }) => {
-        const opacity = clamp01(plot.material.opacity);
-        return plot.visible && opacity > 0.001 && opacity < 0.999;
-      }).sort((a, b) => transparentSortDistance(b.plot, cameraPosition) - transparentSortDistance(a.plot, cameraPosition));
-      this.renderTransparentPlots(snapshot, pointLights, pointShadowLights, transparentPlots);
-      if (snapshot.scene.groundPlaneVisible && snapshot.scene.groundPlaneReflective) {
-        this.drawGroundPlane(snapshot.scene, this.renderPrograms!.mesh, true, false);
-      }
-      gl.disable(gl.BLEND);
-      gl.depthMask(true);
-    }
   }
 
   private renderTransparentScene(
@@ -971,11 +950,7 @@ export class SceneController {
     gl.useProgram(this.renderPrograms!.composite.program);
     gl.bindVertexArray(this.fullscreenVao);
     bindTexture(gl, targets.sceneColor, 0, gl.TEXTURE_2D);
-    bindTexture(gl, targets.oitAccum, 1, gl.TEXTURE_2D);
-    bindTexture(gl, targets.oitReveal, 2, gl.TEXTURE_2D);
     gl.uniform1i(this.renderPrograms!.composite.uniforms.u_sceneColor, 0);
-    gl.uniform1i(this.renderPrograms!.composite.uniforms.u_accum, 1);
-    gl.uniform1i(this.renderPrograms!.composite.uniforms.u_reveal, 2);
     gl.uniform1i(this.renderPrograms!.composite.uniforms.u_toneMapping, toneMappingMode(snapshot.render.toneMapping));
     gl.uniform1f(this.renderPrograms!.composite.uniforms.u_exposure, clamp(snapshot.render.exposure, 0.01, 5));
     gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -1672,7 +1647,6 @@ export class SceneController {
       transmittanceShadowCasters,
       pointShadowCount,
       activeProbeCount: reflectivePlots > 0 && probeReady ? 1 : 0,
-      ssrHitRate: 0,
       outlineMode: snapshot.selectedId ? 'screen_space_edges' : 'disabled',
       reflectionSource: reflectivePlots > 0 && probeReady ? 'probe' : 'environment',
       reflectionProbeRefreshCount: this.probeResources.refreshCount,
@@ -1920,13 +1894,6 @@ export class SceneController {
       { attachment: gl.COLOR_ATTACHMENT0, texture: sceneColor, target: gl.TEXTURE_2D },
       { attachment: gl.DEPTH_ATTACHMENT, texture: sceneDepth, target: gl.TEXTURE_2D },
     ]);
-    const oitAccum = createColorTexture(gl, width, height, hdrColorFormat.internalFormat, hdrColorFormat.format, hdrColorFormat.type);
-    const oitReveal = createColorTexture(gl, width, height, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
-    const oitFramebuffer = createFramebuffer(gl, [
-      { attachment: gl.COLOR_ATTACHMENT0, texture: oitAccum, target: gl.TEXTURE_2D },
-      { attachment: gl.COLOR_ATTACHMENT1, texture: oitReveal, target: gl.TEXTURE_2D },
-      { attachment: gl.DEPTH_ATTACHMENT, texture: sceneDepth, target: gl.TEXTURE_2D },
-    ]);
     const maskTexture = createColorTexture(gl, width, height, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, gl.NEAREST);
     const maskDepth = createDepthTexture(gl, width, height);
     const maskFramebuffer = createFramebuffer(gl, [
@@ -1939,9 +1906,6 @@ export class SceneController {
       sceneFramebuffer,
       sceneColor,
       sceneDepth,
-      oitFramebuffer,
-      oitAccum,
-      oitReveal,
       maskFramebuffer,
       maskTexture,
       maskDepth,
@@ -1950,12 +1914,9 @@ export class SceneController {
 
   private deleteRenderTargets(gl: WebGL2RenderingContext): void {
     deleteFramebuffer(gl, this.renderTargets.sceneFramebuffer);
-    deleteFramebuffer(gl, this.renderTargets.oitFramebuffer);
     deleteFramebuffer(gl, this.renderTargets.maskFramebuffer);
     deleteTexture(gl, this.renderTargets.sceneColor);
     deleteTexture(gl, this.renderTargets.sceneDepth);
-    deleteTexture(gl, this.renderTargets.oitAccum);
-    deleteTexture(gl, this.renderTargets.oitReveal);
     deleteTexture(gl, this.renderTargets.maskTexture);
     deleteTexture(gl, this.renderTargets.maskDepth);
     this.renderTargets = emptyRenderTargets();
@@ -2165,8 +2126,6 @@ function createPrograms(gl: WebGL2RenderingContext): RenderPrograms {
       'u_zContourSpacing',
       'u_zContourColor',
     ]),
-    transparentAccum: createProgramBundle(gl, meshVertexShaderSource, transparentAccumFragmentShaderSource, sharedMeshUniforms),
-    transparentReveal: createProgramBundle(gl, meshVertexShaderSource, transparentRevealFragmentShaderSource, sharedMeshUniforms),
     shadow: createProgramBundle(gl, shadowVertexShaderSource, shadowFragmentShaderSource, [
       'u_model',
       'u_lightMatrix',
@@ -2214,8 +2173,6 @@ function createPrograms(gl: WebGL2RenderingContext): RenderPrograms {
     ]),
     composite: createProgramBundle(gl, fullscreenVertexShaderSource, compositeFragmentShaderSource, [
       'u_sceneColor',
-      'u_accum',
-      'u_reveal',
       'u_toneMapping',
       'u_exposure',
     ]),
@@ -2548,30 +2505,6 @@ void main() {
 }
 `;
 
-const transparentAccumFragmentShaderSource = `#version 300 es
-${meshLightingPreamble}
-out vec4 outColor;
-
-void main() {
-  vec3 N = normalize(gl_FrontFacing ? v_worldNormal : -v_worldNormal);
-  vec3 V = normalize(u_cameraPos - v_worldPosition);
-  vec3 color = applyLighting(N, V);
-  float alpha = clamp(u_opacity, 0.0, 0.995);
-  float weight = max(0.05, alpha * 8.0 + pow(max(0.0, 1.0 - u_roughness), 2.0));
-  outColor = vec4(color * alpha, alpha) * weight;
-}
-`;
-
-const transparentRevealFragmentShaderSource = `#version 300 es
-${meshLightingPreamble}
-out vec4 outColor;
-
-void main() {
-  float alpha = clamp(u_opacity, 0.0, 0.995);
-  outColor = vec4(alpha);
-}
-`;
-
 const contourFragmentShaderSource = `#version 300 es
 precision highp float;
 
@@ -2804,8 +2737,6 @@ void main() {
 const compositeFragmentShaderSource = `#version 300 es
 precision highp float;
 uniform sampler2D u_sceneColor;
-uniform sampler2D u_accum;
-uniform sampler2D u_reveal;
 uniform int u_toneMapping;
 uniform float u_exposure;
 in vec2 v_uv;
@@ -3492,9 +3423,6 @@ function emptyRenderTargets(): RenderTargets {
     sceneFramebuffer: null,
     sceneColor: null,
     sceneDepth: null,
-    oitFramebuffer: null,
-    oitAccum: null,
-    oitReveal: null,
     maskFramebuffer: null,
     maskTexture: null,
     maskDepth: null,

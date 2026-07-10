@@ -1,6 +1,5 @@
 import type { AppState } from '../state/store';
 import type {
-  InteractiveReflectionSource,
   PlotJobStatus,
   PlotObject,
   PointLightObject,
@@ -56,11 +55,6 @@ export interface RendererSceneSnapshot {
   camera: RendererCameraSnapshot | null;
 }
 
-export interface ReflectionSourceOptions {
-  externalEnvironmentUsable: boolean;
-  fallbackEnvironmentUsable: boolean;
-}
-
 export interface RendererCameraLike {
   alpha: number;
   beta: number;
@@ -114,18 +108,6 @@ export function classifyInteractiveShadowMode(plot: PlotObject): InteractiveShad
 
 export function shouldPlotCastInteractiveShadows(plot: PlotObject): boolean {
   return classifyInteractiveShadowMode(plot) !== 'none';
-}
-
-export function selectInteractiveReflectionSource(
-  options: ReflectionSourceOptions,
-): InteractiveReflectionSource {
-  if (options.externalEnvironmentUsable) {
-    return 'external_env';
-  }
-  if (options.fallbackEnvironmentUsable) {
-    return 'fallback_ready';
-  }
-  return 'none';
 }
 
 export function resolveDirectionalShadowFrustumSize(scene: AppState['scene']): number {

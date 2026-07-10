@@ -488,7 +488,6 @@ function RenderTab() {
           <div>Opaque casters: {diagnostics.opaqueShadowCasters}</div>
           <div>Reflection source: {diagnostics.reflectionSource}</div>
           <div>Reflection probes: {diagnostics.activeProbeCount} | refreshes {diagnostics.reflectionProbeRefreshCount}</div>
-          <div>SSR hit rate: {(diagnostics.ssrHitRate * 100).toFixed(0)}%</div>
           <div>Outline mode: {diagnostics.outlineMode}</div>
         </div>
       ) : null}

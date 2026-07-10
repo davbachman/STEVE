@@ -111,7 +111,6 @@ function defaultRenderDiagnostics(): RenderDiagnostics {
     transmittanceShadowCasters: 0,
     pointShadowCount: 0,
     activeProbeCount: 0,
-    ssrHitRate: 0,
     outlineMode: 'disabled',
     reflectionSource: 'none',
     reflectionProbeRefreshCount: 0,
@@ -1219,11 +1218,9 @@ function shallowDiagnosticsEqual(a: RenderDiagnostics, b: RenderDiagnostics): bo
     a.transmittanceShadowCasters === b.transmittanceShadowCasters &&
     a.pointShadowCount === b.pointShadowCount &&
     a.activeProbeCount === b.activeProbeCount &&
-    a.ssrHitRate === b.ssrHitRate &&
     a.outlineMode === b.outlineMode &&
     a.reflectionSource === b.reflectionSource &&
-    a.reflectionProbeRefreshCount === b.reflectionProbeRefreshCount &&
-    a.reflectionSource === b.reflectionSource
+    a.reflectionProbeRefreshCount === b.reflectionProbeRefreshCount
   );
 }
 

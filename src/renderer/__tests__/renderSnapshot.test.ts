@@ -8,7 +8,6 @@ import {
   classifyPlotOpacity,
   createRendererSceneSnapshot,
   resolveDirectionalShadowFrustumSize,
-  selectInteractiveReflectionSource,
   shouldPlotCastInteractiveShadows,
   shouldShowPlotWireframe,
 } from '../renderSnapshot';
@@ -135,23 +134,6 @@ describe('renderSnapshot helpers', () => {
       castsInteractiveShadows: true,
       interactiveShadowMode: 'attenuated',
     });
-  });
-
-  it('prefers external environments, then fallback, then none', () => {
-    expect(selectInteractiveReflectionSource({
-      externalEnvironmentUsable: true,
-      fallbackEnvironmentUsable: true,
-    })).toBe('external_env');
-
-    expect(selectInteractiveReflectionSource({
-      externalEnvironmentUsable: false,
-      fallbackEnvironmentUsable: true,
-    })).toBe('fallback_ready');
-
-    expect(selectInteractiveReflectionSource({
-      externalEnvironmentUsable: false,
-      fallbackEnvironmentUsable: false,
-    })).toBe('none');
   });
 
   it('keeps hidden helper extents out of the directional shadow frustum', () => {
