@@ -214,6 +214,7 @@ export class SceneController {
   private frameIndex = 0;
   private planarReflection: PlanarReflectionTargets = emptyPlanarReflectionTargets();
   private planarReflectionReady = false;
+  private orthographicProjection = false;
   private fullscreenVao: WebGLVertexArrayObject | null = null;
   private fullscreenBuffer: WebGLBuffer | null = null;
   private groundMesh: SimpleMeshBuffer | null = null;
@@ -399,6 +400,7 @@ export class SceneController {
     if (!this.gl) {
       return;
     }
+    this.orthographicProjection = state.scene.cameraProjection === 'orthographic';
     const snapshot = createRendererSceneSnapshot(state, this.getCameraSnapshot());
     this.latestSnapshot = snapshot;
     this.syncBackground(snapshot);
@@ -2024,11 +2026,26 @@ export class SceneController {
     const aspect = this.canvas.width > 0 ? this.canvas.width / Math.max(1, this.canvas.height) : 1;
     const position = this.getCameraPosition();
     mat4.lookAt(this.viewMatrix, position, this.camera.target, this.camera.upVector);
-    mat4.perspective(this.projectionMatrix, this.camera.fov, aspect, this.camera.minZ, this.camera.maxZ);
+    if (this.orthographicProjection) {
+      const { halfWidth, halfHeight } = this.getOrthoExtents();
+      mat4.ortho(this.projectionMatrix, -halfWidth, halfWidth, -halfHeight, halfHeight, this.camera.minZ, this.camera.maxZ);
+    } else {
+      mat4.perspective(this.projectionMatrix, this.camera.fov, aspect, this.camera.minZ, this.camera.maxZ);
+    }
+  }
+
+  private getOrthoExtents(): { halfWidth: number; halfHeight: number } {
+    // Match the perspective frustum's height at the orbit target so toggling
+    // projections keeps the subject at the same apparent size, and radius
+    // (wheel zoom) keeps working as a zoom control.
+    const aspect = this.canvas.width > 0 ? this.canvas.width / Math.max(1, this.canvas.height) : 1;
+    const halfHeight = Math.max(0.01, this.camera.radius * Math.tan(this.camera.fov / 2));
+    return { halfWidth: halfHeight * aspect, halfHeight };
   }
 
   private getCameraSnapshot(): RendererCameraLike {
     const position = this.getCameraPosition();
+    const orthoExtents = this.orthographicProjection ? this.getOrthoExtents() : null;
     return {
       alpha: this.camera.alpha,
       beta: this.camera.beta,
@@ -2039,11 +2056,11 @@ export class SceneController {
       fov: this.camera.fov,
       minZ: this.camera.minZ,
       maxZ: this.camera.maxZ,
-      mode: this.camera.mode,
-      orthoLeft: null,
-      orthoRight: null,
-      orthoTop: null,
-      orthoBottom: null,
+      mode: this.orthographicProjection ? 1 : 0,
+      orthoLeft: orthoExtents ? -orthoExtents.halfWidth : null,
+      orthoRight: orthoExtents ? orthoExtents.halfWidth : null,
+      orthoTop: orthoExtents ? orthoExtents.halfHeight : null,
+      orthoBottom: orthoExtents ? -orthoExtents.halfHeight : null,
     };
   }
 

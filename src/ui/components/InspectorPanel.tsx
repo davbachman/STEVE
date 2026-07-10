@@ -1,5 +1,10 @@
 import { useState } from 'react';
-import { updateEquationParameterValue } from '../../math/parameters';
+import {
+  DEFAULT_PARAMETER_ANIMATION_SPEED,
+  MAX_PARAMETER_ANIMATION_SPEED,
+  MIN_PARAMETER_ANIMATION_SPEED,
+  updateEquationParameterValue,
+} from '../../math/parameters';
 import { materialPresets } from '../../state/defaults';
 import { useAppStore } from '../../state/store';
 import type { PlotObject, PointLightObject } from '../../types/contracts';
@@ -419,6 +424,16 @@ function SceneTab() {
     <div className="inspector-section">
       <h3>Scene</h3>
       <label>
+        Camera Projection
+        <select
+          value={scene.cameraProjection}
+          onChange={(e) => updateScene({ cameraProjection: e.target.value as 'perspective' | 'orthographic' })}
+        >
+          <option value="perspective">Perspective</option>
+          <option value="orthographic">Orthographic</option>
+        </select>
+      </label>
+      <label>
         Background Mode
         <select value={scene.backgroundMode} onChange={(e) => updateScene({ backgroundMode: e.target.value as 'solid' | 'gradient' })}>
           <option value="solid">Solid</option>
@@ -574,6 +589,7 @@ function EquationParameterEditor({ plot }: { plot: PlotObject }) {
   const updatePlotSpec = useAppStore((s) => s.updatePlotSpec);
   const beginEquationParameterDrag = useAppStore((s) => s.beginEquationParameterDrag);
   const commitEquationParameterDrag = useAppStore((s) => s.commitEquationParameterDrag);
+  const setParameterAnimation = useAppStore((s) => s.setParameterAnimation);
   if (plot.equation.parameters.length === 0) {
     return null;
   }
@@ -582,22 +598,45 @@ function EquationParameterEditor({ plot }: { plot: PlotObject }) {
     <div className="inspector-section">
       <h3>Constants</h3>
       {plot.equation.parameters.map((parameter) => (
-        <RangeField
-          key={parameter.name}
-          label={parameter.name}
-          min={parameter.min}
-          max={parameter.max}
-          step={parameter.step}
-          value={parameter.value}
-          onDragStart={() => beginEquationParameterDrag(plot.id, parameter.name)}
-          onDragEnd={() => commitEquationParameterDrag(plot.id, parameter.name)}
-          onChange={(value) =>
-            updatePlotSpec(plot.id, (spec) => ({
-              ...spec,
-              parameters: updateEquationParameterValue(spec.parameters, parameter.name, value),
-            }))
-          }
-        />
+        <div key={parameter.name} className="parameter-editor">
+          <div className="parameter-editor__value">
+            <RangeField
+              label={parameter.name}
+              min={parameter.min}
+              max={parameter.max}
+              step={parameter.step}
+              value={parameter.value}
+              onDragStart={() => beginEquationParameterDrag(plot.id, parameter.name)}
+              onDragEnd={() => commitEquationParameterDrag(plot.id, parameter.name)}
+              onChange={(value) =>
+                updatePlotSpec(plot.id, (spec) => ({
+                  ...spec,
+                  parameters: updateEquationParameterValue(spec.parameters, parameter.name, value),
+                }))
+              }
+            />
+            <button
+              type="button"
+              className="parameter-editor__play"
+              title={parameter.animating ? `Pause ${parameter.name}` : `Animate ${parameter.name} between its min and max`}
+              aria-label={parameter.animating ? `Pause ${parameter.name}` : `Animate ${parameter.name}`}
+              aria-pressed={Boolean(parameter.animating)}
+              onClick={() => setParameterAnimation(plot.id, parameter.name, { animating: !parameter.animating })}
+            >
+              {parameter.animating ? '⏸' : '▶'}
+            </button>
+          </div>
+          {parameter.animating ? (
+            <RangeField
+              label={`${parameter.name} speed`}
+              min={MIN_PARAMETER_ANIMATION_SPEED}
+              max={MAX_PARAMETER_ANIMATION_SPEED}
+              step={0.01}
+              value={parameter.animationSpeed ?? DEFAULT_PARAMETER_ANIMATION_SPEED}
+              onChange={(value) => setParameterAnimation(plot.id, parameter.name, { animationSpeed: value })}
+            />
+          ) : null}
+        </div>
       ))}
     </div>
   );

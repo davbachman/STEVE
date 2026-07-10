@@ -116,7 +116,10 @@ export function useWorkerPipeline(): void {
     for (const object of objects) {
       if (object.type !== 'plot') continue;
       ensureJobStateExists(object.id);
-      const isInteractive = activeEquationParameterDrag?.plotId === object.id;
+      // Animated parameters stream value changes every frame, so they take the
+      // same throttled interactive path as an active slider drag.
+      const isInteractive = activeEquationParameterDrag?.plotId === object.id
+        || object.equation.parameters.some((parameter) => parameter.animating);
       const nextSigs = {
         parse: object.equation.source.rawText,
         mesh: buildMeshSignature(object, isInteractive),

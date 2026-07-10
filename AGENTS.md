@@ -14,6 +14,8 @@ Current product direction is interactive rendering only. The Babylon and legacy 
 ## Core Capabilities
 - Multi-object 3D scenes with plot objects and point lights
 - Equation editing with live parse/classification and LaTeX preview
+- Animated equation constants (per-parameter play/pause and speed, ping-pong between bounds)
+- Perspective and orthographic camera projections
 - Interactive PBR materials, lighting, shadows, reflections (per-plot probes plus a planar ground mirror), and screen-space refraction
 - Object selection/dragging and inspector editing
 - Local save/load and PNG/STL export
@@ -52,6 +54,7 @@ Current product direction is interactive rendering only. The Babylon and legacy 
 
   - `hooks/`
     - `useWorkerPipeline.ts`: parse/mesh job orchestration
+    - `useParameterAnimation.ts`: rAF driver for animated equation constants
 
   - `renderer/`
     - `Viewport3D.tsx`: canvas host and renderer overlays

@@ -4,6 +4,49 @@ const DEFAULT_PARAMETER_VALUE = 1;
 const DEFAULT_PARAMETER_RANGE = 10;
 const DEFAULT_PARAMETER_STEP = 0.1;
 
+export const DEFAULT_PARAMETER_ANIMATION_SPEED = 0.25;
+export const MIN_PARAMETER_ANIMATION_SPEED = 0.02;
+export const MAX_PARAMETER_ANIMATION_SPEED = 2;
+
+export interface ParameterAnimationStep {
+  value: number;
+  direction: 1 | -1;
+}
+
+/**
+ * Advance an animated parameter by dtSeconds, bouncing between min and max.
+ * Speed is a fraction of the range per second, so a speed of 0.25 sweeps
+ * min→max in four seconds regardless of the range width.
+ */
+export function advanceAnimatedParameter(
+  parameter: EquationParameter,
+  dtSeconds: number,
+  direction: 1 | -1,
+): ParameterAnimationStep {
+  const range = parameter.max - parameter.min;
+  if (!Number.isFinite(range) || range <= 0 || !Number.isFinite(dtSeconds) || dtSeconds < 0) {
+    return { value: parameter.value, direction };
+  }
+  const speed = clampAnimationSpeed(parameter.animationSpeed);
+  let value = parameter.value + direction * speed * range * dtSeconds;
+  let nextDirection = direction;
+  if (value >= parameter.max) {
+    value = parameter.max;
+    nextDirection = -1;
+  } else if (value <= parameter.min) {
+    value = parameter.min;
+    nextDirection = 1;
+  }
+  return { value, direction: nextDirection };
+}
+
+export function clampAnimationSpeed(speed: number | undefined): number {
+  if (typeof speed !== 'number' || !Number.isFinite(speed)) {
+    return DEFAULT_PARAMETER_ANIMATION_SPEED;
+  }
+  return Math.min(MAX_PARAMETER_ANIMATION_SPEED, Math.max(MIN_PARAMETER_ANIMATION_SPEED, speed));
+}
+
 export function createEquationParameter(name: string): EquationParameter {
   return {
     name,

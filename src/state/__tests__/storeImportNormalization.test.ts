@@ -118,6 +118,43 @@ describe('project import normalization', () => {
     ]);
   });
 
+  it('imports parameter animation settings and camera projection', () => {
+    const project = baseProject({
+      scene: { cameraProjection: 'orthographic' },
+      objects: [
+        {
+          ...createBlankPlot('Animated Plot'),
+          equation: {
+            kind: 'explicit_surface',
+            source: { rawText: 'z = a*sin(x)' },
+            parameters: [
+              { name: 'a', value: 2, min: -6, max: 6, step: 0.25, animating: true, animationSpeed: 99 },
+            ],
+          },
+        },
+      ],
+    });
+
+    useAppStore.getState().replaceProject(project as never);
+    const state = useAppStore.getState();
+    expect(state.scene.cameraProjection).toBe('orthographic');
+    const plot = state.objects[0];
+    if (plot?.type !== 'plot') {
+      throw new Error('Expected imported plot');
+    }
+    expect(plot.equation.parameters[0]).toMatchObject({
+      name: 'a',
+      value: 2,
+      animating: true,
+      animationSpeed: 2,
+    });
+  });
+
+  it('defaults camera projection to perspective for legacy projects', () => {
+    useAppStore.getState().replaceProject(baseProject() as never);
+    expect(useAppStore.getState().scene.cameraProjection).toBe('perspective');
+  });
+
   it('imports ambient and directional enabled flags', () => {
     const project = baseProject({
       scene: {

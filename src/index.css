@@ -677,6 +677,23 @@ input[type='color'] {
   gap: 0.25rem;
 }
 
+.parameter-editor {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.parameter-editor__value {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.4rem;
+  align-items: end;
+}
+
+.parameter-editor__play {
+  padding: 0.3rem 0.55rem;
+  line-height: 1;
+}
+
 .range-field__controls {
   display: grid;
   grid-template-columns: 1fr 6.5rem;

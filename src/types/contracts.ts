@@ -70,6 +70,10 @@ export interface EquationParameter {
   min: number;
   max: number;
   step: number;
+  /** Sweep this parameter between min and max automatically (ping-pong). */
+  animating?: boolean;
+  /** Sweep speed as a fraction of the min→max range per second. */
+  animationSpeed?: number;
 }
 
 export interface BaseEquationSpec {
@@ -175,6 +179,7 @@ export interface ShadowSettings {
 }
 
 export interface SceneSettings {
+  cameraProjection: 'perspective' | 'orthographic';
   backgroundMode: 'solid' | 'gradient';
   backgroundColor: string;
   gradientTopColor: string;

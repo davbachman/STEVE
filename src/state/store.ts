@@ -15,7 +15,7 @@ import type {
   UUID,
 } from '../types/contracts';
 import { analyzeEquationText } from '../math/classifier';
-import { syncEquationParameters } from '../math/parameters';
+import { clampAnimationSpeed, syncEquationParameters } from '../math/parameters';
 import {
   APP_VERSION,
   createBlankPlot,
@@ -77,6 +77,8 @@ interface AppActions {
   beginEquationParameterDrag: (plotId: UUID, parameterName: string) => void;
   commitEquationParameterDrag: (plotId: UUID, parameterName: string) => void;
   cancelEquationParameterDrag: () => void;
+  setParameterAnimation: (plotId: UUID, parameterName: string, patch: { animating?: boolean; animationSpeed?: number }) => void;
+  applyParameterAnimationValues: (updates: ReadonlyArray<{ plotId: UUID; parameterName: string; value: number }>) => void;
   deleteSelected: () => void;
   copySelectedToClipboard: () => Promise<void>;
   pasteClipboard: () => Promise<void>;
@@ -666,6 +668,40 @@ export const useAppStore = create<AppState>((set, get) => ({
   cancelEquationParameterDrag: () =>
     set((state) => (state.activeEquationParameterDrag ? { ...state, activeEquationParameterDrag: null } : state)),
 
+  // Play/pause and speed are runtime toggles, not document edits, so neither
+  // this nor the per-frame animation ticks touch undo history.
+  setParameterAnimation: (plotId, parameterName, patch) =>
+    set((state) => {
+      const idx = state.objects.findIndex((obj) => obj.id === plotId && obj.type === 'plot');
+      if (idx === -1) return state;
+      const plot = state.objects[idx] as PlotObject;
+      if (!plot.equation.parameters.some((parameter) => parameter.name === parameterName)) {
+        return state;
+      }
+      return produce(state, (draft) => {
+        const draftPlot = draft.objects[idx] as PlotObject;
+        draftPlot.equation.parameters = draftPlot.equation.parameters.map((parameter) =>
+          parameter.name === parameterName ? { ...parameter, ...patch } : parameter,
+        );
+      });
+    }),
+
+  applyParameterAnimationValues: (updates) =>
+    set((state) => {
+      if (updates.length === 0) return state;
+      return produce(state, (draft) => {
+        for (const update of updates) {
+          const plot = draft.objects.find(
+            (obj): obj is PlotObject => obj.id === update.plotId && obj.type === 'plot',
+          );
+          if (!plot) continue;
+          plot.equation.parameters = plot.equation.parameters.map((parameter) =>
+            parameter.name === update.parameterName ? { ...parameter, value: update.value } : parameter,
+          );
+        }
+      });
+    }),
+
   deleteSelected: () =>
     set((state) => {
       if (!state.selectedId) return state;
@@ -910,6 +946,7 @@ function normalizeSceneSettingsImport(
 ): SceneSettings {
   return {
     ...defaults,
+    cameraProjection: asEnum(sceneInput.cameraProjection, ['perspective', 'orthographic']) ?? defaults.cameraProjection,
     backgroundMode: asEnum(sceneInput.backgroundMode, ['solid', 'gradient']) ?? defaults.backgroundMode,
     backgroundColor: asNonEmptyString(sceneInput.backgroundColor) ?? defaults.backgroundColor,
     gradientTopColor: asNonEmptyString(sceneInput.gradientTopColor) ?? defaults.gradientTopColor,
@@ -1176,12 +1213,15 @@ function normalizeEquationParameters(
     const rawMax = asFiniteNumber(record.max);
     const min = rawMin ?? Math.min(parameter.min, value);
     const max = rawMax ?? Math.max(parameter.max, value);
+    const animationSpeed = asFiniteNumber(record.animationSpeed) ?? parameter.animationSpeed;
     return {
       ...parameter,
       value,
       min: Math.min(min, max, value),
       max: Math.max(min, max, value),
       step: positiveFiniteNumber(record.step) ?? parameter.step,
+      animating: asBoolean(record.animating) ?? parameter.animating,
+      animationSpeed: animationSpeed === undefined ? undefined : clampAnimationSpeed(animationSpeed),
     };
   });
 }

@@ -234,6 +234,7 @@ export const materialPresets: Record<string, MaterialParams> = {
 export const defaultMaterial = (): MaterialParams => ({ ...materialPresets['Glossy Plastic'] });
 
 export const defaultSceneSettings = (): SceneSettings => ({
+  cameraProjection: 'perspective',
   backgroundMode: 'gradient',
   backgroundColor: '#0f172a',
   gradientTopColor: '#263652',

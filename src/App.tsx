@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import './index.css';
 import { Viewport3D } from './renderer/Viewport3D';
 import type { ViewportApi } from './renderer/SceneController';
+import { useParameterAnimation } from './hooks/useParameterAnimation';
 import { useWorkerPipeline } from './hooks/useWorkerPipeline';
 import { useAppStore } from './state/store';
 import { createBuiltInTestScene } from './testing/testScenes';
@@ -26,6 +27,7 @@ export default function App() {
   const updatePlotEquationText = useAppStore((s) => s.updatePlotEquationText);
 
   useWorkerPipeline();
+  useParameterAnimation();
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
