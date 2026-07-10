@@ -94,6 +94,14 @@ interface ProbeRenderResources {
   size: number;
 }
 
+interface PlanarReflectionTargets {
+  framebuffer: WebGLFramebuffer | null;
+  colorTexture: WebGLTexture | null;
+  depthRenderbuffer: WebGLRenderbuffer | null;
+  width: number;
+  height: number;
+}
+
 interface ProbeInstance {
   cubemap: WebGLTexture | null;
   center: vec3;
@@ -174,9 +182,11 @@ const MAX_REFLECTION_PROBES = 4;
 const PROBE_REFRESHES_PER_FRAME = 1;
 const ENVIRONMENT_CUBEMAP_SIZE = 48;
 const FULLSCREEN_TRIANGLE_VERTICES = new Float32Array([-1, -1, 3, -1, -1, 3]);
-// Units 0-2: directional shadow maps, 3: environment, 4: probe, 5: refraction source.
-const BASE_FRAGMENT_TEXTURE_UNITS = 6;
+// Units 0-2: directional shadow maps, 3: environment, 4: probe,
+// 5: refraction source, 6: planar ground reflection; point shadows start at 7.
+const BASE_FRAGMENT_TEXTURE_UNITS = 7;
 const REFRACTION_TEXTURE_UNIT = 5;
+const PLANAR_REFLECTION_TEXTURE_UNIT = 6;
 const POINT_SHADOW_TEXTURE_UNIT_BASE = BASE_FRAGMENT_TEXTURE_UNITS;
 const POINT_SHADOW_TEXTURE_UNIT_STRIDE = 3;
 const POINT_SHADOW_NEAR = 0.05;
@@ -202,6 +212,8 @@ export class SceneController {
   private probeRefreshTotal = 0;
   private probeRefreshesThisFrame = 0;
   private frameIndex = 0;
+  private planarReflection: PlanarReflectionTargets = emptyPlanarReflectionTargets();
+  private planarReflectionReady = false;
   private fullscreenVao: WebGLVertexArrayObject | null = null;
   private fullscreenBuffer: WebGLBuffer | null = null;
   private groundMesh: SimpleMeshBuffer | null = null;
@@ -316,6 +328,7 @@ export class SceneController {
       this.deleteRenderTargets(gl);
       this.deleteShadowResources(gl);
       this.deleteProbeResources(gl);
+      this.deletePlanarReflectionTargets(gl);
       deleteTexture(gl, this.environmentCubemap);
       if (this.groundMesh) {
         deleteVertexArray(gl, this.groundMesh.vao);
@@ -427,6 +440,7 @@ export class SceneController {
     const pointShadowLights = this.collectActivePointShadowLights(snapshot, pointLights);
     this.renderDirectionalShadowMaps(snapshot);
     this.renderPointShadowMaps(snapshot, pointShadowLights);
+    this.renderPlanarReflection(snapshot, pointLights);
     this.renderOpaqueScene(snapshot, pointLights, pointShadowLights);
     this.renderTransparentScene(snapshot, pointLights, pointShadowLights);
     this.renderSceneAxes(snapshot);
@@ -852,6 +866,108 @@ export class SceneController {
     gl.bindVertexArray(null);
   }
 
+  private renderPlanarReflection(
+    snapshot: RendererSceneSnapshot,
+    pointLights: ReadonlyArray<PointLightObject>,
+  ): void {
+    const gl = this.gl!;
+    const scene = snapshot.scene;
+    const cameraAbovePlane = this.getCameraPosition()[2] > 0.05;
+    this.planarReflectionReady = false;
+    if (!scene.groundPlaneVisible || !scene.groundPlaneReflective || !cameraAbovePlane) {
+      return;
+    }
+    this.ensurePlanarReflectionTargets(
+      Math.max(1, Math.floor(this.renderTargets.width / 2)),
+      Math.max(1, Math.floor(this.renderTargets.height / 2)),
+    );
+    const targets = this.planarReflection;
+    if (!targets.framebuffer) {
+      return;
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, targets.framebuffer);
+    gl.viewport(0, 0, targets.width, targets.height);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clearDepth(1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthMask(true);
+    gl.depthFunc(gl.LESS);
+    gl.disable(gl.CULL_FACE);
+    gl.disable(gl.BLEND);
+    gl.useProgram(this.renderPrograms!.mesh.program);
+    // Shadow lookups are wrong at mirrored positions, so shadows stay off;
+    // lights are mirrored about z=0 so the reflected shading matches.
+    this.bindSceneUniforms(this.renderPrograms!.mesh, snapshot, pointLights, [], false, true, true);
+    gl.uniform1i(this.renderPrograms!.mesh.uniforms.u_clipWorldZAbove, 1);
+    const mirror = mat4.fromScaling(mat4.create(), vec3.fromValues(1, 1, -1));
+    for (const plotSnapshot of snapshot.plots) {
+      const opacity = clamp01(plotSnapshot.plot.material.opacity);
+      if (!plotSnapshot.plot.visible || opacity < 0.999) {
+        continue;
+      }
+      this.drawShadedMesh(plotSnapshot.plot, this.renderPrograms!.mesh, false, noProbeUsage(), mirror);
+    }
+    gl.uniform1i(this.renderPrograms!.mesh.uniforms.u_clipWorldZAbove, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (targets.colorTexture) {
+      gl.bindTexture(gl.TEXTURE_2D, targets.colorTexture);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+    }
+    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+    this.planarReflectionReady = true;
+  }
+
+  private ensurePlanarReflectionTargets(width: number, height: number): void {
+    const gl = this.gl!;
+    if (
+      this.planarReflection.framebuffer
+      && this.planarReflection.width === width
+      && this.planarReflection.height === height
+    ) {
+      return;
+    }
+    this.deletePlanarReflectionTargets(gl);
+    const hdrColorFormat = this.supportsFloatColorBuffers
+      ? { internalFormat: gl.RGBA16F, format: gl.RGBA, type: gl.HALF_FLOAT }
+      : { internalFormat: gl.RGBA8, format: gl.RGBA, type: gl.UNSIGNED_BYTE };
+    const colorTexture = createColorTexture(gl, width, height, hdrColorFormat.internalFormat, hdrColorFormat.format, hdrColorFormat.type);
+    gl.bindTexture(gl.TEXTURE_2D, colorTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    const depthRenderbuffer = gl.createRenderbuffer();
+    if (!depthRenderbuffer) {
+      return;
+    }
+    gl.bindRenderbuffer(gl.RENDERBUFFER, depthRenderbuffer);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, width, height);
+    gl.bindRenderbuffer(gl.RENDERBUFFER, null);
+    const framebuffer = gl.createFramebuffer();
+    if (!framebuffer) {
+      deleteTexture(gl, colorTexture);
+      gl.deleteRenderbuffer(depthRenderbuffer);
+      return;
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, colorTexture, 0);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depthRenderbuffer);
+    gl.drawBuffers([gl.COLOR_ATTACHMENT0]);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.planarReflection = { framebuffer, colorTexture, depthRenderbuffer, width, height };
+  }
+
+  private deletePlanarReflectionTargets(gl: WebGL2RenderingContext): void {
+    deleteFramebuffer(gl, this.planarReflection.framebuffer);
+    deleteTexture(gl, this.planarReflection.colorTexture);
+    if (this.planarReflection.depthRenderbuffer) {
+      gl.deleteRenderbuffer(this.planarReflection.depthRenderbuffer);
+    }
+    this.planarReflection = emptyPlanarReflectionTargets();
+    this.planarReflectionReady = false;
+  }
+
   private renderOpaqueScene(
     snapshot: RendererSceneSnapshot,
     pointLights: ReadonlyArray<PointLightObject>,
@@ -879,7 +995,7 @@ export class SceneController {
     if (snapshot.scene.groundPlaneVisible) {
       gl.enable(gl.CULL_FACE);
       gl.cullFace(gl.BACK);
-      this.drawGroundPlane(snapshot.scene, this.renderPrograms!.mesh, false, false);
+      this.drawGroundPlane(snapshot.scene, this.renderPrograms!.mesh, false, false, this.planarReflectionReady);
     }
     if (snapshot.scene.gridVisible) {
       this.drawSceneGrid(snapshot.scene);
@@ -910,9 +1026,6 @@ export class SceneController {
       })
       .sort((a, b) => transparentSortDistance(b.plot, cameraPosition) - transparentSortDistance(a.plot, cameraPosition));
     this.renderTransparentPlots(snapshot, pointLights, pointShadowLights, transparentPlots);
-    if (snapshot.scene.groundPlaneVisible && snapshot.scene.groundPlaneReflective) {
-      this.drawGroundPlane(snapshot.scene, this.renderPrograms!.mesh, true, false);
-    }
 
     gl.depthMask(true);
     gl.disable(gl.BLEND);
@@ -1305,6 +1418,7 @@ export class SceneController {
     program: ProgramBundle,
     transparentPass: boolean,
     useProbe: boolean,
+    usePlanarReflection = false,
   ): void {
     const gl = this.gl!;
     if (!this.groundMesh?.vao || this.groundMesh.indexCount <= 0) {
@@ -1319,6 +1433,7 @@ export class SceneController {
     gl.uniform1f(program.uniforms.u_opacity, opacity);
     gl.uniform1f(program.uniforms.u_reflectiveness, scene.groundPlaneReflective ? 0.82 : 0.02);
     gl.uniform1f(program.uniforms.u_roughness, clamp(scene.groundPlaneRoughness, 0.04, 1));
+    gl.uniform1i(program.uniforms.u_usePlanarReflection, usePlanarReflection ? 1 : 0);
     this.bindContourUniforms(program, {
       xEnabled: false,
       xSpacing: 1,
@@ -1338,9 +1453,16 @@ export class SceneController {
     gl.bindVertexArray(this.groundMesh.vao);
     gl.drawElements(gl.TRIANGLES, this.groundMesh.indexCount, gl.UNSIGNED_SHORT, 0);
     gl.bindVertexArray(null);
+    gl.uniform1i(program.uniforms.u_usePlanarReflection, 0);
   }
 
-  private drawShadedMesh(plot: PlotObject, program: ProgramBundle, transparentPass: boolean, probe: ProbeUsage): void {
+  private drawShadedMesh(
+    plot: PlotObject,
+    program: ProgramBundle,
+    transparentPass: boolean,
+    probe: ProbeUsage,
+    preTransform?: mat4,
+  ): void {
     const gl = this.gl!;
     const visual = this.plotVisuals.get(plot.id);
     if (!visual?.buffers.vao || visual.buffers.indexCount <= 0) {
@@ -1351,6 +1473,9 @@ export class SceneController {
       plot.transform.position.y,
       plot.transform.position.z,
     ));
+    if (preTransform) {
+      mat4.multiply(model, preTransform, model);
+    }
     const normalMatrix = mat3.normalFromMat4(mat3.create(), model) ?? mat3.create();
     gl.uniformMatrix4fv(program.uniforms.u_model, false, model);
     gl.uniformMatrix3fv(program.uniforms.u_normalMatrix, false, normalMatrix);
@@ -1423,10 +1548,12 @@ export class SceneController {
     pointShadowLights: ReadonlyArray<ActivePointShadowLight>,
     enableShadows: boolean,
     enableReflections: boolean,
+    mirrorLightsZ = false,
   ): void {
     const gl = this.gl!;
     const cameraPosition = this.getCameraPosition();
     const scene = snapshot.scene;
+    const lightZSign = mirrorLightsZ ? -1 : 1;
 
     gl.uniformMatrix4fv(program.uniforms.u_view, false, this.viewMatrix);
     gl.uniformMatrix4fv(program.uniforms.u_projection, false, this.projectionMatrix);
@@ -1440,7 +1567,12 @@ export class SceneController {
       program.uniforms.u_dirColor,
       hexToRgb(scene.directional.color).map((value) => value * (scene.directional.enabled ? scene.directional.intensity : 0)),
     );
-    gl.uniform3f(program.uniforms.u_dirDirection, scene.directional.direction.x, scene.directional.direction.y, scene.directional.direction.z);
+    gl.uniform3f(
+      program.uniforms.u_dirDirection,
+      scene.directional.direction.x,
+      scene.directional.direction.y,
+      scene.directional.direction.z * lightZSign,
+    );
     gl.uniform1i(program.uniforms.u_pointCount, pointLights.length);
     const pointPositions = new Float32Array(MAX_POINT_LIGHTS * 3);
     const pointColors = new Float32Array(MAX_POINT_LIGHTS * 3);
@@ -1449,7 +1581,7 @@ export class SceneController {
     pointLights.forEach((light, index) => {
       pointPositions[index * 3] = light.position.x;
       pointPositions[index * 3 + 1] = light.position.y;
-      pointPositions[index * 3 + 2] = light.position.z;
+      pointPositions[index * 3 + 2] = light.position.z * lightZSign;
       const color = hexToRgb(light.color);
       pointColors[index * 3] = color[0];
       pointColors[index * 3 + 1] = color[1];
@@ -1491,6 +1623,14 @@ export class SceneController {
     bindTexture(gl, this.environmentCubemap, 4, gl.TEXTURE_CUBE_MAP);
     bindTexture(gl, this.renderTargets.refractionTexture, REFRACTION_TEXTURE_UNIT, gl.TEXTURE_2D);
     gl.uniform1i(program.uniforms.u_refractionSource, REFRACTION_TEXTURE_UNIT);
+    bindTexture(gl, this.planarReflection.colorTexture, PLANAR_REFLECTION_TEXTURE_UNIT, gl.TEXTURE_2D);
+    gl.uniform1i(program.uniforms.u_planarReflection, PLANAR_REFLECTION_TEXTURE_UNIT);
+    gl.uniform1i(program.uniforms.u_usePlanarReflection, 0);
+    gl.uniform1f(
+      program.uniforms.u_planarMaxLod,
+      Math.min(5, Math.max(0, Math.log2(Math.max(this.planarReflection.width, this.planarReflection.height, 1)))),
+    );
+    gl.uniform1i(program.uniforms.u_clipWorldZAbove, 0);
     const supportedPointShadowSlots = this.supportedPointShadowLightCount();
     for (let shadowSlot = 0; shadowSlot < supportedPointShadowSlots; shadowSlot += 1) {
       const unitBase = POINT_SHADOW_TEXTURE_UNIT_BASE + shadowSlot * POINT_SHADOW_TEXTURE_UNIT_STRIDE;
@@ -1738,12 +1878,16 @@ export class SceneController {
     gl.uniform1i(program.uniforms.u_enableReflections, 0);
     gl.uniform1i(program.uniforms.u_useProbe, 0);
     gl.uniform1i(program.uniforms.u_refractionEnabled, 0);
+    gl.uniform1i(program.uniforms.u_usePlanarReflection, 0);
+    gl.uniform1i(program.uniforms.u_clipWorldZAbove, 0);
     bindTexture(gl, this.environmentCubemap, 3, gl.TEXTURE_CUBE_MAP);
     bindTexture(gl, this.environmentCubemap, 4, gl.TEXTURE_CUBE_MAP);
     bindTexture(gl, this.renderTargets.refractionTexture, REFRACTION_TEXTURE_UNIT, gl.TEXTURE_2D);
+    bindTexture(gl, this.planarReflection.colorTexture, PLANAR_REFLECTION_TEXTURE_UNIT, gl.TEXTURE_2D);
     gl.uniform1i(program.uniforms.u_environment, 3);
     gl.uniform1i(program.uniforms.u_probe, 4);
     gl.uniform1i(program.uniforms.u_refractionSource, REFRACTION_TEXTURE_UNIT);
+    gl.uniform1i(program.uniforms.u_planarReflection, PLANAR_REFLECTION_TEXTURE_UNIT);
   }
 
   private drawShadedMeshWithMatrices(
@@ -1931,6 +2075,22 @@ export class SceneController {
     window.addEventListener('resize', this.resizeListener);
   }
 
+  private capturePointer(pointerId: number): void {
+    try {
+      this.canvas.setPointerCapture(pointerId);
+    } catch {
+      // The pointer may already be released (e.g. pointercancel); capture is best-effort.
+    }
+  }
+
+  private releasePointer(pointerId: number): void {
+    try {
+      this.canvas.releasePointerCapture(pointerId);
+    } catch {
+      // The pointer may already be released; releasing is best-effort.
+    }
+  }
+
   private handlePointerDown(event: PointerEvent): void {
     if (event.button === 2) {
       this.cameraDrag = {
@@ -1939,7 +2099,7 @@ export class SceneController {
         lastX: event.clientX,
         lastY: event.clientY,
       };
-      this.canvas.setPointerCapture(event.pointerId);
+      this.capturePointer(event.pointerId);
       return;
     }
     if (event.button !== 0) {
@@ -1971,7 +2131,7 @@ export class SceneController {
         startClientY: event.clientY,
       };
       useAppStore.getState().beginObjectDragHistory(hit.id);
-      this.canvas.setPointerCapture(event.pointerId);
+      this.capturePointer(event.pointerId);
       return;
     }
     const planeHit = rayPlaneIntersectZ(ray, startPosition[2]);
@@ -1986,7 +2146,7 @@ export class SceneController {
       startPoint: planeHit,
     };
     useAppStore.getState().beginObjectDragHistory(hit.id);
-    this.canvas.setPointerCapture(event.pointerId);
+    this.capturePointer(event.pointerId);
   }
 
   private handlePointerMove(event: PointerEvent): void {
@@ -2041,13 +2201,13 @@ export class SceneController {
   private handlePointerUp(event: PointerEvent): void {
     if (this.cameraDrag && this.cameraDrag.pointerId === event.pointerId) {
       this.cameraDrag = null;
-      this.canvas.releasePointerCapture(event.pointerId);
+      this.releasePointer(event.pointerId);
     }
     if (this.dragState) {
       const dragObjectId = this.dragState.objectId;
       this.dragState = null;
       useAppStore.getState().commitObjectDragHistory(dragObjectId);
-      this.canvas.releasePointerCapture(event.pointerId);
+      this.releasePointer(event.pointerId);
     }
   }
 
@@ -2297,6 +2457,10 @@ function createPrograms(gl: WebGL2RenderingContext): RenderPrograms {
     'u_ior',
     'u_viewportSize',
     'u_refractionMaxLod',
+    'u_planarReflection',
+    'u_usePlanarReflection',
+    'u_planarMaxLod',
+    'u_clipWorldZAbove',
     'u_enableShadows',
     'u_enableReflections',
     'u_isTransparentPass',
@@ -2476,6 +2640,10 @@ uniform int u_refractionEnabled;
 uniform float u_ior;
 uniform vec2 u_viewportSize;
 uniform float u_refractionMaxLod;
+uniform sampler2D u_planarReflection;
+uniform int u_usePlanarReflection;
+uniform float u_planarMaxLod;
+uniform int u_clipWorldZAbove;
 uniform int u_enableShadows;
 uniform int u_enableReflections;
 uniform int u_isTransparentPass;
@@ -2651,9 +2819,20 @@ vec3 applyLighting(vec3 N, vec3 V) {
     vec3 reflected = reflect(-V, N);
     // Rougher surfaces sample blurrier mips for glossy rather than mirror reflections.
     float reflectionLod = pow(roughness, 0.8);
-    vec3 reflectedColor = u_useProbe == 1
-      ? textureLod(u_probe, reflected, reflectionLod * u_probeMaxLod).rgb
-      : textureLod(u_environment, reflected, reflectionLod * u_envMaxLod).rgb;
+    vec3 reflectedColor;
+    if (u_usePlanarReflection == 1) {
+      // The planar texture holds the scene mirrored about z=0, rendered from
+      // the main camera, so the fragment's own screen position looks up its
+      // mirror image; empty texels fall back to the environment.
+      vec2 screenUv = gl_FragCoord.xy / max(u_viewportSize, vec2(1.0));
+      vec4 planarSample = textureLod(u_planarReflection, screenUv, reflectionLod * u_planarMaxLod);
+      vec3 envReflected = textureLod(u_environment, reflected, reflectionLod * u_envMaxLod).rgb;
+      reflectedColor = mix(envReflected, planarSample.rgb, clamp(planarSample.a, 0.0, 1.0));
+    } else if (u_useProbe == 1) {
+      reflectedColor = textureLod(u_probe, reflected, reflectionLod * u_probeMaxLod).rgb;
+    } else {
+      reflectedColor = textureLod(u_environment, reflected, reflectionLod * u_envMaxLod).rgb;
+    }
     float baseReflectance = mix(0.02, 0.985, pow(reflectiveness, 1.2));
     float reflectionMix = clamp((baseReflectance + (1.0 - baseReflectance) * viewFresnel) * mix(1.0, 0.72, roughness), 0.0, 0.995);
     color = mix(color, reflectedColor, reflectionMix);
@@ -2730,6 +2909,11 @@ ${meshLightingPreamble}
 out vec4 outColor;
 
 void main() {
+  if (u_clipWorldZAbove == 1 && v_worldPosition.z > 0.0005) {
+    // Mirrored planar-reflection pass: fragments above the ground plane come
+    // from geometry that was below it and must not appear in the mirror.
+    discard;
+  }
   vec3 N = normalize(gl_FrontFacing ? v_worldNormal : -v_worldNormal);
   vec3 V = normalize(u_cameraPos - v_worldPosition);
   vec3 litColor = applyLighting(N, V);
@@ -3742,6 +3926,16 @@ function emptyProbeRenderResources(): ProbeRenderResources {
 
 function noProbeUsage(): ProbeUsage {
   return { useProbe: false, refreshed: false, texture: null, center: ZERO_PROBE_CENTER };
+}
+
+function emptyPlanarReflectionTargets(): PlanarReflectionTargets {
+  return {
+    framebuffer: null,
+    colorTexture: null,
+    depthRenderbuffer: null,
+    width: 0,
+    height: 0,
+  };
 }
 
 function rayPlaneIntersectZ(ray: { origin: vec3; direction: vec3 }, z: number): vec3 | null {
