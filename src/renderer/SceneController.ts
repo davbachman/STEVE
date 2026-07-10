@@ -899,6 +899,9 @@ export class SceneController {
     // Shadow lookups are wrong at mirrored positions, so shadows stay off;
     // lights are mirrored about z=0 so the reflected shading matches.
     this.bindSceneUniforms(this.renderPrograms!.mesh, snapshot, pointLights, [], false, true, true);
+    // The planar texture is this pass's render target; point its sampler unit
+    // at another 2D texture so no rendering feedback loop forms.
+    bindTexture(gl, this.renderTargets.refractionTexture, PLANAR_REFLECTION_TEXTURE_UNIT, gl.TEXTURE_2D);
     gl.uniform1i(this.renderPrograms!.mesh.uniforms.u_clipWorldZAbove, 1);
     const mirror = mat4.fromScaling(mat4.create(), vec3.fromValues(1, 1, -1));
     for (const plotSnapshot of snapshot.plots) {

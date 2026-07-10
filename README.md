@@ -15,7 +15,7 @@ ST.E.V.E. is a browser-only interactive 3D graphing app for exploring mathematic
 - Graphs implicit surfaces defined by `F(x,y,z)=0`.
 - Graphs explicit surfaces along a single axis such as `z=f(x,y)`, `x=g(y,z)`, or `y=h(x,z)`.
 - Lets you combine multiple plots and lights in one scene.
-- Supports interactive materials, shadows, reflections, and adjustable render quality.
+- Supports interactive materials, shadows, reflections (including a mirror-like ground plane), screen-space refraction for glass-like surfaces, and adjustable render quality.
 - Saves scenes as project files, exports viewport images as PNG, and exports selected plots as STL.
 
 ## Usage

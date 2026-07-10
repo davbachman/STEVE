@@ -14,9 +14,9 @@ Current product direction is interactive rendering only. The Babylon and legacy 
 ## Core Capabilities
 - Multi-object 3D scenes with plot objects and point lights
 - Equation editing with live parse/classification and LaTeX preview
-- Interactive PBR materials, lighting, shadows, and reflections
+- Interactive PBR materials, lighting, shadows, reflections (per-plot probes plus a planar ground mirror), and screen-space refraction
 - Object selection/dragging and inspector editing
-- Local save/load/autosave and PNG export
+- Local save/load and PNG/STL export
 - Worker-based parse/meshing pipeline for responsiveness
 
 ## Tech Stack
@@ -25,7 +25,6 @@ Current product direction is interactive rendering only. The Babylon and legacy 
 - CodeMirror 6 + KaTeX
 - Raw WebGL2 + `gl-matrix`
 - Web Workers for parsing and meshing
-- Dexie/IndexedDB for local persistence
 - Vitest + Playwright for testing
 
 ## Repository Structure
@@ -52,7 +51,6 @@ Current product direction is interactive rendering only. The Babylon and legacy 
     - `runtimeMeshCache.ts`: runtime mesh handoff cache
 
   - `hooks/`
-    - `useAutosave.ts`: autosave integration
     - `useWorkerPipeline.ts`: parse/mesh job orchestration
 
   - `renderer/`
@@ -61,15 +59,15 @@ Current product direction is interactive rendering only. The Babylon and legacy 
     - `plotGeometry.ts`: renderer-ready geometry conversion and CPU picking helpers
 
   - `ui/components/`
-    - `TopBar.tsx`: file actions, autosave controls, export, quality selector
+    - `TopBar.tsx`: file actions, export, quality selector
     - `ObjectListPanel.tsx`: object/light creation and list
     - `EquationEditor.tsx`: equation editor and diagnostics
     - `InspectorPanel.tsx`: object/material/scene/render controls
     - `LatexPreview.tsx`: rendered math preview
 
   - `persistence/`
-    - `db.ts`: IndexedDB wrapper
     - `projectFile.ts`: project import/export helpers
+    - `meshExport.ts`: STL export helpers
 
   - `testing/testScenes.ts`: built-in deterministic test scenes
 
