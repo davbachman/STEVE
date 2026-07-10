@@ -201,6 +201,9 @@ export class SceneController {
   private fullscreenVao: WebGLVertexArrayObject | null = null;
   private fullscreenBuffer: WebGLBuffer | null = null;
   private groundMesh: SimpleMeshBuffer | null = null;
+  private axesLineBuffer: { key: string; buffer: GpuLineBuffer } | null = null;
+  private gridLineBuffer: { key: string; buffer: GpuLineBuffer } | null = null;
+  private gizmoPointBuffer: GpuLineBuffer | null = null;
   private environmentCubemap: WebGLTexture | null = null;
   private environmentKey = '';
   private plotVisuals = new Map<string, PlotVisual>();
@@ -314,6 +317,16 @@ export class SceneController {
         deleteVertexArray(gl, this.groundMesh.vao);
         deleteBuffer(gl, this.groundMesh.indexBuffer);
       }
+      if (this.axesLineBuffer) {
+        deleteLineBuffer(gl, this.axesLineBuffer.buffer);
+        this.axesLineBuffer = null;
+      }
+      if (this.gridLineBuffer) {
+        deleteLineBuffer(gl, this.gridLineBuffer.buffer);
+        this.gridLineBuffer = null;
+      }
+      deleteLineBuffer(gl, this.gizmoPointBuffer);
+      this.gizmoPointBuffer = null;
       deleteBuffer(gl, this.fullscreenBuffer);
       deleteVertexArray(gl, this.fullscreenVao);
       if (this.renderPrograms) {
@@ -1064,8 +1077,19 @@ export class SceneController {
       return;
     }
     const gl = this.gl!;
-    const axes = buildAxesLines(snapshot.scene.axesLength);
-    const buffer = createLineBuffer(gl, axes.positions, gl.LINES);
+    const key = String(snapshot.scene.axesLength);
+    if (!this.axesLineBuffer || this.axesLineBuffer.key !== key) {
+      if (this.axesLineBuffer) {
+        deleteLineBuffer(gl, this.axesLineBuffer.buffer);
+        this.axesLineBuffer = null;
+      }
+      const axes = buildAxesLines(snapshot.scene.axesLength);
+      const created = createLineBuffer(gl, axes.positions, gl.LINES);
+      if (created) {
+        this.axesLineBuffer = { key, buffer: created };
+      }
+    }
+    const buffer = this.axesLineBuffer?.buffer;
     if (!buffer) {
       return;
     }
@@ -1085,7 +1109,6 @@ export class SceneController {
     gl.depthMask(true);
     gl.depthFunc(gl.LESS);
     gl.disable(gl.BLEND);
-    deleteLineBuffer(gl, buffer);
   }
 
   private renderOverlayLines(snapshot: RendererSceneSnapshot): void {
@@ -1172,8 +1195,19 @@ export class SceneController {
 
   private drawSceneGrid(scene: RendererSceneSnapshot['scene']): void {
     const gl = this.gl!;
-    const grid = buildGridLines(scene.gridExtent, scene.gridSpacing);
-    const buffer = createLineBuffer(gl, grid.positions, gl.LINES);
+    const key = `${scene.gridExtent}|${scene.gridSpacing}`;
+    if (!this.gridLineBuffer || this.gridLineBuffer.key !== key) {
+      if (this.gridLineBuffer) {
+        deleteLineBuffer(gl, this.gridLineBuffer.buffer);
+        this.gridLineBuffer = null;
+      }
+      const grid = buildGridLines(scene.gridExtent, scene.gridSpacing);
+      const created = createLineBuffer(gl, grid.positions, gl.LINES);
+      if (created) {
+        this.gridLineBuffer = { key, buffer: created };
+      }
+    }
+    const buffer = this.gridLineBuffer?.buffer;
     if (!buffer) {
       return;
     }
@@ -1191,12 +1225,12 @@ export class SceneController {
     drawLineBuffer(gl, buffer);
     gl.depthMask(true);
     gl.depthFunc(gl.LESS);
-    deleteLineBuffer(gl, buffer);
   }
 
   private renderPointLightGizmos(snapshot: RendererSceneSnapshot, program: ProgramBundle): void {
     const gl = this.gl!;
-    const pointBuffer = createPointBuffer(gl);
+    this.gizmoPointBuffer ??= createPointBuffer(gl);
+    const pointBuffer = this.gizmoPointBuffer;
     if (!pointBuffer) {
       return;
     }
@@ -1227,7 +1261,6 @@ export class SceneController {
     gl.depthMask(true);
     gl.depthFunc(gl.LESS);
     gl.disable(gl.BLEND);
-    deleteLineBuffer(gl, pointBuffer);
   }
 
   private drawGroundPlane(
