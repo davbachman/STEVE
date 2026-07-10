@@ -86,19 +86,26 @@ interface RenderTargets {
   maskDepth: WebGLTexture | null;
 }
 
-interface ProbeResources {
-  cubemap: WebGLTexture | null;
+interface ProbeRenderResources {
   framebuffer: WebGLFramebuffer | null;
   depthRenderbuffer: WebGLRenderbuffer | null;
   size: number;
-  frameCounter: number;
-  refreshCount: number;
+}
+
+interface ProbeInstance {
+  cubemap: WebGLTexture | null;
   center: vec3;
+  sceneKey: string;
+  lastRefreshFrame: number;
+  lastUsedFrame: number;
+  refreshCount: number;
 }
 
 interface ProbeUsage {
   refreshed: boolean;
   useProbe: boolean;
+  texture: WebGLTexture | null;
+  center: vec3;
 }
 
 interface SimpleMeshBuffer {
@@ -161,12 +168,15 @@ const MAX_POINT_LIGHTS = 4;
 const MAX_POINT_SHADOW_LIGHTS = 3;
 const PROBE_REFRESH_INTERVAL = 18;
 const DEFAULT_PROBE_SIZE = 96;
+const MAX_REFLECTION_PROBES = 4;
+const PROBE_REFRESHES_PER_FRAME = 1;
 const ENVIRONMENT_CUBEMAP_SIZE = 48;
 const FULLSCREEN_TRIANGLE_VERTICES = new Float32Array([-1, -1, 3, -1, -1, 3]);
 const BASE_FRAGMENT_TEXTURE_UNITS = 5;
 const POINT_SHADOW_TEXTURE_UNIT_BASE = BASE_FRAGMENT_TEXTURE_UNITS;
 const POINT_SHADOW_TEXTURE_UNIT_STRIDE = 3;
 const POINT_SHADOW_NEAR = 0.05;
+const ZERO_PROBE_CENTER = vec3.fromValues(0, 0, 0);
 const POINT_SHADOW_FACE_VECTORS: Array<{ target: vec3; up: vec3 }> = [
   { target: vec3.fromValues(1, 0, 0), up: vec3.fromValues(0, -1, 0) },
   { target: vec3.fromValues(-1, 0, 0), up: vec3.fromValues(0, -1, 0) },
@@ -183,7 +193,11 @@ export class SceneController {
   private renderPrograms: RenderPrograms | null = null;
   private renderTargets: RenderTargets = emptyRenderTargets();
   private shadowResources: ShadowResources = emptyShadowResources();
-  private probeResources: ProbeResources = emptyProbeResources();
+  private probeRenderResources: ProbeRenderResources = emptyProbeRenderResources();
+  private probePool = new Map<string, ProbeInstance>();
+  private probeRefreshTotal = 0;
+  private probeRefreshesThisFrame = 0;
+  private frameIndex = 0;
   private fullscreenVao: WebGLVertexArrayObject | null = null;
   private fullscreenBuffer: WebGLBuffer | null = null;
   private groundMesh: SimpleMeshBuffer | null = null;
@@ -228,8 +242,7 @@ export class SceneController {
   private readonly probeViewMatrix = mat4.create();
   private readonly probeProjectionMatrix = mat4.create();
   private readonly emptyProbeCenter = vec3.fromValues(0, 0, 0);
-  private currentProbeOwnerId: string | null = null;
-  private currentProbeSceneKey = '';
+  private environmentFacePixelCache = new Map<string, Uint8Array[]>();
 
   constructor(private readonly canvas: HTMLCanvasElement) {}
 
@@ -390,7 +403,9 @@ export class SceneController {
     this.ensureRenderTargets(this.canvas.width, this.canvas.height);
     this.ensureShadowResources(snapshot.scene.shadow.shadowMapResolution);
     this.ensureEnvironmentCubemap(snapshot);
-    this.probeResources.frameCounter += 1;
+    this.frameIndex += 1;
+    this.probeRefreshesThisFrame = 0;
+    this.pruneProbePool(snapshot);
     const pointLights = this.collectRenderablePointLights(snapshot);
     const pointShadowLights = this.collectActivePointShadowLights(snapshot, pointLights);
     this.renderDirectionalShadowMaps(snapshot);
@@ -842,7 +857,7 @@ export class SceneController {
       if (probeUsage.refreshed) {
         this.bindOpaqueMeshPass(snapshot, pointLights, pointShadowLights);
       }
-      this.drawShadedMesh(plotSnapshot.plot, this.renderPrograms!.mesh, false, probeUsage.useProbe);
+      this.drawShadedMesh(plotSnapshot.plot, this.renderPrograms!.mesh, false, probeUsage);
     }
     if (snapshot.scene.groundPlaneVisible) {
       gl.enable(gl.CULL_FACE);
@@ -904,9 +919,9 @@ export class SceneController {
       // Transparent double-sided shells render more stably back-to-front when we split back and front faces.
       gl.enable(gl.CULL_FACE);
       gl.cullFace(gl.FRONT);
-      this.drawShadedMesh(plotSnapshot.plot, this.renderPrograms!.mesh, true, probeUsage.useProbe);
+      this.drawShadedMesh(plotSnapshot.plot, this.renderPrograms!.mesh, true, probeUsage);
       gl.cullFace(gl.BACK);
-      this.drawShadedMesh(plotSnapshot.plot, this.renderPrograms!.mesh, true, probeUsage.useProbe);
+      this.drawShadedMesh(plotSnapshot.plot, this.renderPrograms!.mesh, true, probeUsage);
     }
     gl.disable(gl.CULL_FACE);
   }
@@ -1247,13 +1262,13 @@ export class SceneController {
     });
     gl.uniform1i(program.uniforms.u_isTransparentPass, transparentPass ? 1 : 0);
     gl.uniform1i(program.uniforms.u_useProbe, useProbe ? 1 : 0);
-    gl.uniform3fv(program.uniforms.u_probeCenter, useProbe ? this.probeResources.center : this.emptyProbeCenter);
+    gl.uniform3fv(program.uniforms.u_probeCenter, this.emptyProbeCenter);
     gl.bindVertexArray(this.groundMesh.vao);
     gl.drawElements(gl.TRIANGLES, this.groundMesh.indexCount, gl.UNSIGNED_SHORT, 0);
     gl.bindVertexArray(null);
   }
 
-  private drawShadedMesh(plot: PlotObject, program: ProgramBundle, transparentPass: boolean, useProbe: boolean): void {
+  private drawShadedMesh(plot: PlotObject, program: ProgramBundle, transparentPass: boolean, probe: ProbeUsage): void {
     const gl = this.gl!;
     const visual = this.plotVisuals.get(plot.id);
     if (!visual?.buffers.vao || visual.buffers.indexCount <= 0) {
@@ -1273,11 +1288,22 @@ export class SceneController {
     gl.uniform1f(program.uniforms.u_roughness, clamp(plot.material.roughness, 0.04, 1));
     this.bindContourUniforms(program, contourUniformState(plot));
     gl.uniform1i(program.uniforms.u_isTransparentPass, transparentPass ? 1 : 0);
-    gl.uniform1i(program.uniforms.u_useProbe, useProbe ? 1 : 0);
-    gl.uniform3fv(program.uniforms.u_probeCenter, useProbe ? this.probeResources.center : this.emptyProbeCenter);
+    this.bindProbeUsage(program, probe);
     gl.bindVertexArray(visual.buffers.vao);
     gl.drawElements(gl.TRIANGLES, visual.buffers.indexCount, gl.UNSIGNED_INT, 0);
     gl.bindVertexArray(null);
+  }
+
+  private bindProbeUsage(program: ProgramBundle, probe: ProbeUsage): void {
+    const gl = this.gl!;
+    if (probe.useProbe && probe.texture) {
+      bindTexture(gl, probe.texture, 4, gl.TEXTURE_CUBE_MAP);
+      gl.uniform1i(program.uniforms.u_useProbe, 1);
+      gl.uniform3fv(program.uniforms.u_probeCenter, probe.center);
+      return;
+    }
+    gl.uniform1i(program.uniforms.u_useProbe, 0);
+    gl.uniform3fv(program.uniforms.u_probeCenter, this.emptyProbeCenter);
   }
 
   private bindOpaqueMeshPass(
@@ -1369,11 +1395,15 @@ export class SceneController {
     gl.uniform1f(program.uniforms.u_shadowSoftness, clamp(scene.shadow.shadowSoftness, 0, 1));
     gl.uniform1i(program.uniforms.u_enableShadows, enableShadows && this.directionalShadowsEnabled(scene) ? 1 : 0);
     gl.uniform1i(program.uniforms.u_enableReflections, enableReflections ? 1 : 0);
+    gl.uniform1f(program.uniforms.u_probeMaxLod, Math.max(0, Math.log2(this.probeRenderResources.size || DEFAULT_PROBE_SIZE) - 1));
+    gl.uniform1f(program.uniforms.u_envMaxLod, Math.max(0, Math.log2(ENVIRONMENT_CUBEMAP_SIZE) - 1));
     bindTexture(gl, this.shadowResources.directionalDepthTexture, 0, gl.TEXTURE_2D);
     bindTexture(gl, this.shadowResources.directionalTransDepthTexture, 1, gl.TEXTURE_2D);
     bindTexture(gl, this.shadowResources.directionalTransColorTexture, 2, gl.TEXTURE_2D);
     bindTexture(gl, this.environmentCubemap, 3, gl.TEXTURE_CUBE_MAP);
-    bindTexture(gl, this.probeResources.cubemap, 4, gl.TEXTURE_CUBE_MAP);
+    // Unit 4 holds the per-plot probe; bind the environment as a safe default
+    // so the sampler always sees a complete cube texture.
+    bindTexture(gl, this.environmentCubemap, 4, gl.TEXTURE_CUBE_MAP);
     const supportedPointShadowSlots = this.supportedPointShadowLightCount();
     for (let shadowSlot = 0; shadowSlot < supportedPointShadowSlots; shadowSlot += 1) {
       const unitBase = POINT_SHADOW_TEXTURE_UNIT_BASE + shadowSlot * POINT_SHADOW_TEXTURE_UNIT_STRIDE;
@@ -1403,32 +1433,91 @@ export class SceneController {
 
   private prepareProbeForPlot(snapshot: RendererSceneSnapshot, plot: PlotObject): ProbeUsage {
     if (!this.shouldUseProbeReflections(plot.material.reflectiveness)) {
-      return { useProbe: false, refreshed: false };
+      return noProbeUsage();
     }
-    const probe = this.probeResources;
+    const probe = this.probePool.get(plot.id) ?? this.allocateProbeInstance(plot.id);
+    if (!probe) {
+      return noProbeUsage();
+    }
+    probe.lastUsedFrame = this.frameIndex;
     const nextSceneKey = this.buildProbeSceneKey(snapshot, plot.id);
     const nextCenter = vec3.fromValues(
       plot.transform.position.x,
       plot.transform.position.y,
       plot.transform.position.z,
     );
-    const movedSinceRefresh =
-      this.currentProbeOwnerId === plot.id && vec3.distance(probe.center, nextCenter) > 0.05;
-    const needsRefresh =
-      probe.refreshCount === 0
-      || this.currentProbeOwnerId !== plot.id
-      || this.currentProbeSceneKey !== nextSceneKey
-      || movedSinceRefresh
-      || probe.frameCounter % probeRefreshInterval(snapshot.render.interactiveQuality) === 0;
+    const moved = vec3.distance(probe.center, nextCenter) > 0.05;
+    const interval = probeRefreshInterval(snapshot.render.interactiveQuality);
+    const stale = this.frameIndex - probe.lastRefreshFrame >= interval;
+    const needsRefresh = probe.refreshCount === 0 || probe.sceneKey !== nextSceneKey || moved || stale;
     if (!needsRefresh) {
-      return { useProbe: true, refreshed: false };
+      return { useProbe: true, refreshed: false, texture: probe.cubemap, center: probe.center };
     }
+    if (this.probeRefreshesThisFrame >= PROBE_REFRESHES_PER_FRAME) {
+      // Out of refresh budget this frame; a previously rendered probe stays
+      // usable while slightly stale, an empty one falls back to the environment.
+      if (probe.refreshCount > 0) {
+        return { useProbe: true, refreshed: false, texture: probe.cubemap, center: probe.center };
+      }
+      return noProbeUsage();
+    }
+    this.probeRefreshesThisFrame += 1;
     vec3.copy(probe.center, nextCenter);
-    this.renderProbeCubemap(snapshot, probe.center, plot.id);
+    this.renderProbeCubemap(snapshot, probe, plot.id);
+    probe.sceneKey = nextSceneKey;
+    probe.lastRefreshFrame = this.frameIndex;
     probe.refreshCount += 1;
-    this.currentProbeOwnerId = plot.id;
-    this.currentProbeSceneKey = nextSceneKey;
-    return { useProbe: true, refreshed: true };
+    this.probeRefreshTotal += 1;
+    return { useProbe: true, refreshed: true, texture: probe.cubemap, center: probe.center };
+  }
+
+  private allocateProbeInstance(plotId: string): ProbeInstance | null {
+    const gl = this.gl!;
+    if (this.probePool.size >= MAX_REFLECTION_PROBES) {
+      let lruId: string | null = null;
+      let lruFrame = Number.POSITIVE_INFINITY;
+      for (const [id, instance] of this.probePool.entries()) {
+        if (instance.lastUsedFrame < lruFrame) {
+          lruFrame = instance.lastUsedFrame;
+          lruId = id;
+        }
+      }
+      if (lruId === null || lruFrame >= this.frameIndex) {
+        return null;
+      }
+      const evicted = this.probePool.get(lruId);
+      deleteTexture(gl, evicted?.cubemap ?? null);
+      this.probePool.delete(lruId);
+    }
+    const cubemap = createProbeCubemapTexture(gl, this.probeRenderResources.size);
+    const instance: ProbeInstance = {
+      cubemap,
+      center: vec3.create(),
+      sceneKey: '',
+      lastRefreshFrame: -1,
+      lastUsedFrame: this.frameIndex,
+      refreshCount: 0,
+    };
+    this.probePool.set(plotId, instance);
+    return instance;
+  }
+
+  private pruneProbePool(snapshot: RendererSceneSnapshot): void {
+    if (this.probePool.size === 0) {
+      return;
+    }
+    const gl = this.gl!;
+    const reflectiveIds = new Set(
+      snapshot.plots
+        .filter(({ plot }) => plot.visible && this.shouldUseProbeReflections(plot.material.reflectiveness))
+        .map(({ plot }) => plot.id),
+    );
+    for (const [plotId, instance] of this.probePool.entries()) {
+      if (!reflectiveIds.has(plotId)) {
+        deleteTexture(gl, instance.cubemap);
+        this.probePool.delete(plotId);
+      }
+    }
   }
 
   private buildProbeSceneKey(snapshot: RendererSceneSnapshot, excludedPlotId: string): string {
@@ -1471,12 +1560,13 @@ export class SceneController {
     ].join('|');
   }
 
-  private renderProbeCubemap(snapshot: RendererSceneSnapshot, center: vec3, excludedPlotId: string | null): void {
+  private renderProbeCubemap(snapshot: RendererSceneSnapshot, probe: ProbeInstance, excludedPlotId: string | null): void {
     const gl = this.gl!;
-    const probe = this.probeResources;
+    const size = this.probeRenderResources.size;
+    const environmentFaces = this.getEnvironmentFacePixels(snapshot.scene, size);
     mat4.perspective(this.probeProjectionMatrix, Math.PI / 2, 1, 0.05, 120);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, probe.framebuffer);
-    gl.viewport(0, 0, probe.size, probe.size);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.probeRenderResources.framebuffer);
+    gl.viewport(0, 0, size, size);
     gl.disable(gl.BLEND);
     gl.disable(gl.CULL_FACE);
     for (let face = 0; face < POINT_SHADOW_FACE_VECTORS.length; face += 1) {
@@ -1484,17 +1574,16 @@ export class SceneController {
         gl,
         probe.cubemap,
         gl.TEXTURE_CUBE_MAP_POSITIVE_X + face,
-        probe.size,
-        snapshot.scene,
-        face,
+        size,
+        environmentFaces[face],
       );
       gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_CUBE_MAP_POSITIVE_X + face, probe.cubemap, 0);
       gl.clearDepth(1);
       gl.clear(gl.DEPTH_BUFFER_BIT);
-      const faceTarget = vec3.add(vec3.create(), center, POINT_SHADOW_FACE_VECTORS[face].target);
-      mat4.lookAt(this.probeViewMatrix, center, faceTarget, POINT_SHADOW_FACE_VECTORS[face].up);
+      const faceTarget = vec3.add(vec3.create(), probe.center, POINT_SHADOW_FACE_VECTORS[face].target);
+      mat4.lookAt(this.probeViewMatrix, probe.center, faceTarget, POINT_SHADOW_FACE_VECTORS[face].up);
       gl.useProgram(this.renderPrograms!.mesh.program);
-      this.bindProbeUniforms(snapshot, this.renderPrograms!.mesh);
+      this.bindProbeUniforms(snapshot, this.renderPrograms!.mesh, probe.center);
       if (snapshot.scene.groundPlaneVisible) {
         this.drawGroundPlane(snapshot.scene, this.renderPrograms!.mesh, false, false);
       }
@@ -1512,21 +1601,40 @@ export class SceneController {
           this.probeViewMatrix,
           this.probeProjectionMatrix,
           false,
-          false,
+          noProbeUsage(),
         );
       }
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    if (probe.cubemap) {
+      gl.bindTexture(gl.TEXTURE_CUBE_MAP, probe.cubemap);
+      gl.generateMipmap(gl.TEXTURE_CUBE_MAP);
+      gl.bindTexture(gl.TEXTURE_CUBE_MAP, null);
+    }
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
   }
 
-  private bindProbeUniforms(snapshot: RendererSceneSnapshot, program: ProgramBundle): void {
+  private getEnvironmentFacePixels(scene: RendererSceneSnapshot['scene'], size: number): Uint8Array[] {
+    const key = `${buildEnvironmentSignature(scene)}|${size}`;
+    const cached = this.environmentFacePixelCache.get(key);
+    if (cached) {
+      return cached;
+    }
+    const faces = Array.from({ length: 6 }, (_, face) => buildEnvironmentFacePixels(scene, size, face));
+    if (this.environmentFacePixelCache.size >= 4) {
+      this.environmentFacePixelCache.clear();
+    }
+    this.environmentFacePixelCache.set(key, faces);
+    return faces;
+  }
+
+  private bindProbeUniforms(snapshot: RendererSceneSnapshot, program: ProgramBundle, probeCenter: vec3): void {
     const gl = this.gl!;
     const scene = snapshot.scene;
     gl.uniformMatrix4fv(program.uniforms.u_lightMatrix, false, this.lightViewProjection);
     gl.uniformMatrix4fv(program.uniforms.u_view, false, this.probeViewMatrix);
     gl.uniformMatrix4fv(program.uniforms.u_projection, false, this.probeProjectionMatrix);
-    gl.uniform3fv(program.uniforms.u_cameraPos, this.probeResources.center);
+    gl.uniform3fv(program.uniforms.u_cameraPos, probeCenter);
     gl.uniform3fv(
       program.uniforms.u_ambientColor,
       hexToRgb(scene.ambient.color).map((value) => value * (scene.ambient.enabled ? scene.ambient.intensity : 0)),
@@ -1554,7 +1662,7 @@ export class SceneController {
     view: mat4,
     projection: mat4,
     transparentPass: boolean,
-    useProbe: boolean,
+    probe: ProbeUsage,
   ): void {
     const gl = this.gl!;
     const visual = this.plotVisuals.get(plot.id);
@@ -1577,8 +1685,7 @@ export class SceneController {
     gl.uniform1f(program.uniforms.u_roughness, clamp(plot.material.roughness, 0.04, 1));
     this.bindContourUniforms(program, contourUniformState(plot));
     gl.uniform1i(program.uniforms.u_isTransparentPass, transparentPass ? 1 : 0);
-    gl.uniform1i(program.uniforms.u_useProbe, useProbe ? 1 : 0);
-    gl.uniform3fv(program.uniforms.u_probeCenter, useProbe ? this.probeResources.center : this.emptyProbeCenter);
+    this.bindProbeUsage(program, probe);
     gl.bindVertexArray(visual.buffers.vao);
     gl.drawElements(gl.TRIANGLES, visual.buffers.indexCount, gl.UNSIGNED_INT, 0);
     gl.bindVertexArray(null);
@@ -1623,7 +1730,13 @@ export class SceneController {
     pointShadowLights: ReadonlyArray<ActivePointShadowLight>,
   ): void {
     const reflectivePlots = snapshot.plots.filter(({ plot }) => plot.visible && plot.material.reflectiveness > 0.16).length;
-    const probeReady = this.probeResources.refreshCount > 0;
+    let readyProbeCount = 0;
+    for (const instance of this.probePool.values()) {
+      if (instance.refreshCount > 0) {
+        readyProbeCount += 1;
+      }
+    }
+    const probeReady = readyProbeCount > 0;
     const pointShadowCount = pointShadowLights.length;
     const opaqueShadowCasters = snapshot.plots.filter(({ plot }) => plot.visible && clamp01(plot.material.opacity) >= 0.999).length;
     const transmittanceShadowCasters = snapshot.plots.filter(({ plot }) => {
@@ -1646,15 +1759,15 @@ export class SceneController {
       opaqueShadowCasters,
       transmittanceShadowCasters,
       pointShadowCount,
-      activeProbeCount: reflectivePlots > 0 && probeReady ? 1 : 0,
+      activeProbeCount: readyProbeCount,
       outlineMode: snapshot.selectedId ? 'screen_space_edges' : 'disabled',
       reflectionSource: reflectivePlots > 0 && probeReady ? 'probe' : 'environment',
-      reflectionProbeRefreshCount: this.probeResources.refreshCount,
+      reflectionProbeRefreshCount: this.probeRefreshTotal,
     });
   }
 
   private shouldUseProbeReflections(reflectiveness: number): boolean {
-    return Boolean(this.probeResources.cubemap)
+    return Boolean(this.probeRenderResources.framebuffer)
       && reflectiveness > 0.18;
   }
 
@@ -1974,34 +2087,28 @@ export class SceneController {
   }
 
   private ensureEnvironmentCubemap(snapshot: RendererSceneSnapshot): void {
-    const key = [
-      snapshot.scene.backgroundMode,
-      snapshot.scene.backgroundColor,
-      snapshot.scene.gradientTopColor,
-      snapshot.scene.gradientBottomColor,
-      snapshot.scene.groundPlaneVisible ? 'ground:on' : 'ground:off',
-      snapshot.scene.groundPlaneColor,
-      snapshot.scene.ambient.color,
-      snapshot.scene.directional.color,
-    ].join('|');
+    const key = buildEnvironmentSignature(snapshot.scene);
     if (this.environmentCubemap && this.environmentKey === key) {
       return;
     }
     const gl = this.gl!;
     deleteTexture(gl, this.environmentCubemap);
-    this.environmentCubemap = createEnvironmentCubemap(gl, snapshot);
+    const faces = this.getEnvironmentFacePixels(snapshot.scene, ENVIRONMENT_CUBEMAP_SIZE);
+    this.environmentCubemap = createEnvironmentCubemap(gl, faces, ENVIRONMENT_CUBEMAP_SIZE);
     this.environmentKey = key;
   }
 
   private deleteProbeResources(gl: WebGL2RenderingContext): void {
-    deleteTexture(gl, this.probeResources.cubemap);
-    deleteFramebuffer(gl, this.probeResources.framebuffer);
-    if (this.probeResources.depthRenderbuffer) {
-      gl.deleteRenderbuffer(this.probeResources.depthRenderbuffer);
+    for (const instance of this.probePool.values()) {
+      deleteTexture(gl, instance.cubemap);
     }
-    this.probeResources = emptyProbeResources();
-    this.currentProbeOwnerId = null;
-    this.currentProbeSceneKey = '';
+    this.probePool.clear();
+    deleteFramebuffer(gl, this.probeRenderResources.framebuffer);
+    if (this.probeRenderResources.depthRenderbuffer) {
+      gl.deleteRenderbuffer(this.probeRenderResources.depthRenderbuffer);
+    }
+    this.probeRenderResources = emptyProbeRenderResources();
+    this.environmentFacePixelCache.clear();
   }
 
   private createFullscreenResources(gl: WebGL2RenderingContext): void {
@@ -2013,45 +2120,21 @@ export class SceneController {
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
-    const probeCubemap = gl.createTexture();
     const probeFramebuffer = gl.createFramebuffer();
     const probeDepth = gl.createRenderbuffer();
-    if (!probeCubemap || !probeFramebuffer || !probeDepth) {
+    if (!probeFramebuffer || !probeDepth) {
       throw new Error('Failed to create probe resources');
     }
-    gl.bindTexture(gl.TEXTURE_CUBE_MAP, probeCubemap);
-    for (let face = 0; face < 6; face += 1) {
-      gl.texImage2D(
-        gl.TEXTURE_CUBE_MAP_POSITIVE_X + face,
-        0,
-        gl.RGBA8,
-        DEFAULT_PROBE_SIZE,
-        DEFAULT_PROBE_SIZE,
-        0,
-        gl.RGBA,
-        gl.UNSIGNED_BYTE,
-        null,
-      );
-    }
-    gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.bindRenderbuffer(gl.RENDERBUFFER, probeDepth);
     gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, DEFAULT_PROBE_SIZE, DEFAULT_PROBE_SIZE);
     gl.bindFramebuffer(gl.FRAMEBUFFER, probeFramebuffer);
     gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, probeDepth);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    this.probeResources = {
-      cubemap: probeCubemap,
+    this.probeRenderResources = {
       framebuffer: probeFramebuffer,
       depthRenderbuffer: probeDepth,
       size: DEFAULT_PROBE_SIZE,
-      frameCounter: 0,
-      refreshCount: 0,
-      center: vec3.fromValues(0, 0, 0),
     };
-    this.currentProbeOwnerId = null;
     this.groundMesh = createGroundMesh(gl);
   }
 }
@@ -2103,6 +2186,8 @@ function createPrograms(gl: WebGL2RenderingContext): RenderPrograms {
     'u_probe',
     'u_probeCenter',
     'u_useProbe',
+    'u_probeMaxLod',
+    'u_envMaxLod',
     'u_enableShadows',
     'u_enableReflections',
     'u_isTransparentPass',
@@ -2273,6 +2358,8 @@ uniform samplerCube u_environment;
 uniform samplerCube u_probe;
 uniform vec3 u_probeCenter;
 uniform int u_useProbe;
+uniform float u_probeMaxLod;
+uniform float u_envMaxLod;
 uniform int u_enableShadows;
 uniform int u_enableReflections;
 uniform int u_isTransparentPass;
@@ -2446,10 +2533,11 @@ vec3 applyLighting(vec3 N, vec3 V) {
   }
   if (u_enableReflections == 1 && u_reflectiveness > 0.001) {
     vec3 reflected = reflect(-V, N);
-    vec3 reflectedColor = texture(u_environment, reflected).rgb;
-    if (u_useProbe == 1) {
-      reflectedColor = texture(u_probe, reflected).rgb;
-    }
+    // Rougher surfaces sample blurrier mips for glossy rather than mirror reflections.
+    float reflectionLod = pow(roughness, 0.8);
+    vec3 reflectedColor = u_useProbe == 1
+      ? textureLod(u_probe, reflected, reflectionLod * u_probeMaxLod).rgb
+      : textureLod(u_environment, reflected, reflectionLod * u_envMaxLod).rgb;
     float baseReflectance = mix(0.02, 0.985, pow(reflectiveness, 1.2));
     float reflectionMix = clamp((baseReflectance + (1.0 - baseReflectance) * viewFresnel) * mix(1.0, 0.72, roughness), 0.0, 0.995);
     color = mix(color, reflectedColor, reflectionMix);
@@ -3009,7 +3097,7 @@ function createDepthCubemap(gl: WebGL2RenderingContext, size: number): WebGLText
   return texture;
 }
 
-function createEnvironmentCubemap(gl: WebGL2RenderingContext, snapshot: RendererSceneSnapshot): WebGLTexture {
+function createEnvironmentCubemap(gl: WebGL2RenderingContext, faces: Uint8Array[], size: number): WebGLTexture {
   const texture = gl.createTexture();
   if (!texture) {
     throw new Error('Failed to create environment cubemap');
@@ -3020,15 +3108,44 @@ function createEnvironmentCubemap(gl: WebGL2RenderingContext, snapshot: Renderer
       gl.TEXTURE_CUBE_MAP_POSITIVE_X + face,
       0,
       gl.RGBA8,
-      ENVIRONMENT_CUBEMAP_SIZE,
-      ENVIRONMENT_CUBEMAP_SIZE,
+      size,
+      size,
       0,
       gl.RGBA,
       gl.UNSIGNED_BYTE,
-      buildEnvironmentFacePixels(snapshot.scene, ENVIRONMENT_CUBEMAP_SIZE, face),
+      faces[face],
     );
   }
-  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+  gl.generateMipmap(gl.TEXTURE_CUBE_MAP);
+  gl.bindTexture(gl.TEXTURE_CUBE_MAP, null);
+  return texture;
+}
+
+function createProbeCubemapTexture(gl: WebGL2RenderingContext, size: number): WebGLTexture | null {
+  const texture = gl.createTexture();
+  if (!texture) {
+    return null;
+  }
+  gl.bindTexture(gl.TEXTURE_CUBE_MAP, texture);
+  for (let face = 0; face < 6; face += 1) {
+    gl.texImage2D(
+      gl.TEXTURE_CUBE_MAP_POSITIVE_X + face,
+      0,
+      gl.RGBA8,
+      size,
+      size,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      null,
+    );
+  }
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
   gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
@@ -3090,8 +3207,7 @@ function uploadEnvironmentFaceToCubemap(
   texture: WebGLTexture | null,
   targetFace: number,
   size: number,
-  scene: RendererSceneSnapshot['scene'],
-  faceIndex: number,
+  pixels: Uint8Array,
 ): void {
   if (!texture) {
     return;
@@ -3106,9 +3222,22 @@ function uploadEnvironmentFaceToCubemap(
     size,
     gl.RGBA,
     gl.UNSIGNED_BYTE,
-    buildEnvironmentFacePixels(scene, size, faceIndex),
+    pixels,
   );
   gl.bindTexture(gl.TEXTURE_CUBE_MAP, null);
+}
+
+function buildEnvironmentSignature(scene: RendererSceneSnapshot['scene']): string {
+  return [
+    scene.backgroundMode,
+    scene.backgroundColor,
+    scene.gradientTopColor,
+    scene.gradientBottomColor,
+    scene.groundPlaneVisible ? 'ground:on' : 'ground:off',
+    scene.groundPlaneColor,
+    scene.ambient.color,
+    scene.directional.color,
+  ].join('|');
 }
 
 function deleteProgramBundle(gl: WebGL2RenderingContext, bundle: ProgramBundle | null): void {
@@ -3445,16 +3574,16 @@ function emptyShadowResources(): ShadowResources {
   };
 }
 
-function emptyProbeResources(): ProbeResources {
+function emptyProbeRenderResources(): ProbeRenderResources {
   return {
-    cubemap: null,
     framebuffer: null,
     depthRenderbuffer: null,
     size: 0,
-    frameCounter: 0,
-    refreshCount: 0,
-    center: vec3.fromValues(0, 0, 0),
   };
+}
+
+function noProbeUsage(): ProbeUsage {
+  return { useProbe: false, refreshed: false, texture: null, center: ZERO_PROBE_CENTER };
 }
 
 function rayPlaneIntersectZ(ray: { origin: vec3; direction: vec3 }, z: number): vec3 | null {
