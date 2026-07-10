@@ -942,6 +942,7 @@ export class SceneController {
     gl.bindTexture(gl.TEXTURE_2D, null);
     const depthRenderbuffer = gl.createRenderbuffer();
     if (!depthRenderbuffer) {
+      deleteTexture(gl, colorTexture);
       return;
     }
     gl.bindRenderbuffer(gl.RENDERBUFFER, depthRenderbuffer);
