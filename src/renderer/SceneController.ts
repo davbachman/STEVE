@@ -81,6 +81,8 @@ interface RenderTargets {
   sceneFramebuffer: WebGLFramebuffer | null;
   sceneColor: WebGLTexture | null;
   sceneDepth: WebGLTexture | null;
+  refractionFramebuffer: WebGLFramebuffer | null;
+  refractionTexture: WebGLTexture | null;
   maskFramebuffer: WebGLFramebuffer | null;
   maskTexture: WebGLTexture | null;
   maskDepth: WebGLTexture | null;
@@ -172,7 +174,9 @@ const MAX_REFLECTION_PROBES = 4;
 const PROBE_REFRESHES_PER_FRAME = 1;
 const ENVIRONMENT_CUBEMAP_SIZE = 48;
 const FULLSCREEN_TRIANGLE_VERTICES = new Float32Array([-1, -1, 3, -1, -1, 3]);
-const BASE_FRAGMENT_TEXTURE_UNITS = 5;
+// Units 0-2: directional shadow maps, 3: environment, 4: probe, 5: refraction source.
+const BASE_FRAGMENT_TEXTURE_UNITS = 6;
+const REFRACTION_TEXTURE_UNIT = 5;
 const POINT_SHADOW_TEXTURE_UNIT_BASE = BASE_FRAGMENT_TEXTURE_UNITS;
 const POINT_SHADOW_TEXTURE_UNIT_STRIDE = 3;
 const POINT_SHADOW_NEAR = 0.05;
@@ -926,7 +930,13 @@ export class SceneController {
     this.bindTransparentMeshPass(snapshot, pointLights, pointShadowLights);
     for (const plotSnapshot of transparentPlots) {
       const probeUsage = this.prepareProbeForPlot(snapshot, plotSnapshot.plot);
-      if (probeUsage.refreshed) {
+      const usesRefraction = plotUsesRefraction(plotSnapshot.plot);
+      if (usesRefraction) {
+        // Snapshot everything rendered so far (opaque scene plus farther
+        // transparent plots) so this surface can refract what is behind it.
+        this.updateRefractionSource();
+      }
+      if (probeUsage.refreshed || usesRefraction) {
         this.bindTransparentMeshPass(snapshot, pointLights, pointShadowLights);
       }
       // Transparent double-sided shells render more stably back-to-front when we split back and front faces.
@@ -937,6 +947,33 @@ export class SceneController {
       this.drawShadedMesh(plotSnapshot.plot, this.renderPrograms!.mesh, true, probeUsage);
     }
     gl.disable(gl.CULL_FACE);
+  }
+
+  private updateRefractionSource(): void {
+    const gl = this.gl!;
+    const targets = this.renderTargets;
+    if (!targets.sceneFramebuffer || !targets.refractionFramebuffer || !targets.refractionTexture) {
+      return;
+    }
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, targets.sceneFramebuffer);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, targets.refractionFramebuffer);
+    gl.blitFramebuffer(
+      0,
+      0,
+      targets.width,
+      targets.height,
+      0,
+      0,
+      targets.width,
+      targets.height,
+      gl.COLOR_BUFFER_BIT,
+      gl.NEAREST,
+    );
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+    gl.bindTexture(gl.TEXTURE_2D, targets.refractionTexture);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.bindTexture(gl.TEXTURE_2D, null);
   }
 
   private renderTransparentContourOverlays(
@@ -1294,6 +1331,8 @@ export class SceneController {
       zColor: '#000000',
     });
     gl.uniform1i(program.uniforms.u_isTransparentPass, transparentPass ? 1 : 0);
+    gl.uniform1i(program.uniforms.u_refractionEnabled, 0);
+    gl.uniform1f(program.uniforms.u_ior, 1.45);
     gl.uniform1i(program.uniforms.u_useProbe, useProbe ? 1 : 0);
     gl.uniform3fv(program.uniforms.u_probeCenter, this.emptyProbeCenter);
     gl.bindVertexArray(this.groundMesh.vao);
@@ -1321,6 +1360,8 @@ export class SceneController {
     gl.uniform1f(program.uniforms.u_roughness, clamp(plot.material.roughness, 0.04, 1));
     this.bindContourUniforms(program, contourUniformState(plot));
     gl.uniform1i(program.uniforms.u_isTransparentPass, transparentPass ? 1 : 0);
+    gl.uniform1i(program.uniforms.u_refractionEnabled, transparentPass && plotUsesRefraction(plot) ? 1 : 0);
+    gl.uniform1f(program.uniforms.u_ior, clamp(plot.material.ior ?? 1.45, 1, 2.5));
     this.bindProbeUsage(program, probe);
     gl.bindVertexArray(visual.buffers.vao);
     gl.drawElements(gl.TRIANGLES, visual.buffers.indexCount, gl.UNSIGNED_INT, 0);
@@ -1430,6 +1471,17 @@ export class SceneController {
     gl.uniform1i(program.uniforms.u_enableReflections, enableReflections ? 1 : 0);
     gl.uniform1f(program.uniforms.u_probeMaxLod, Math.max(0, Math.log2(this.probeRenderResources.size || DEFAULT_PROBE_SIZE) - 1));
     gl.uniform1f(program.uniforms.u_envMaxLod, Math.max(0, Math.log2(ENVIRONMENT_CUBEMAP_SIZE) - 1));
+    gl.uniform2f(
+      program.uniforms.u_viewportSize,
+      Math.max(1, this.renderTargets.width),
+      Math.max(1, this.renderTargets.height),
+    );
+    gl.uniform1f(
+      program.uniforms.u_refractionMaxLod,
+      Math.min(5, Math.max(0, Math.log2(Math.max(this.renderTargets.width, this.renderTargets.height, 1)))),
+    );
+    gl.uniform1i(program.uniforms.u_refractionEnabled, 0);
+    gl.uniform1f(program.uniforms.u_ior, 1.45);
     bindTexture(gl, this.shadowResources.directionalDepthTexture, 0, gl.TEXTURE_2D);
     bindTexture(gl, this.shadowResources.directionalTransDepthTexture, 1, gl.TEXTURE_2D);
     bindTexture(gl, this.shadowResources.directionalTransColorTexture, 2, gl.TEXTURE_2D);
@@ -1437,6 +1489,8 @@ export class SceneController {
     // Unit 4 holds the per-plot probe; bind the environment as a safe default
     // so the sampler always sees a complete cube texture.
     bindTexture(gl, this.environmentCubemap, 4, gl.TEXTURE_CUBE_MAP);
+    bindTexture(gl, this.renderTargets.refractionTexture, REFRACTION_TEXTURE_UNIT, gl.TEXTURE_2D);
+    gl.uniform1i(program.uniforms.u_refractionSource, REFRACTION_TEXTURE_UNIT);
     const supportedPointShadowSlots = this.supportedPointShadowLightCount();
     for (let shadowSlot = 0; shadowSlot < supportedPointShadowSlots; shadowSlot += 1) {
       const unitBase = POINT_SHADOW_TEXTURE_UNIT_BASE + shadowSlot * POINT_SHADOW_TEXTURE_UNIT_STRIDE;
@@ -1683,10 +1737,13 @@ export class SceneController {
     gl.uniform1i(program.uniforms.u_enableShadows, 0);
     gl.uniform1i(program.uniforms.u_enableReflections, 0);
     gl.uniform1i(program.uniforms.u_useProbe, 0);
+    gl.uniform1i(program.uniforms.u_refractionEnabled, 0);
     bindTexture(gl, this.environmentCubemap, 3, gl.TEXTURE_CUBE_MAP);
     bindTexture(gl, this.environmentCubemap, 4, gl.TEXTURE_CUBE_MAP);
+    bindTexture(gl, this.renderTargets.refractionTexture, REFRACTION_TEXTURE_UNIT, gl.TEXTURE_2D);
     gl.uniform1i(program.uniforms.u_environment, 3);
     gl.uniform1i(program.uniforms.u_probe, 4);
+    gl.uniform1i(program.uniforms.u_refractionSource, REFRACTION_TEXTURE_UNIT);
   }
 
   private drawShadedMeshWithMatrices(
@@ -1718,6 +1775,8 @@ export class SceneController {
     gl.uniform1f(program.uniforms.u_roughness, clamp(plot.material.roughness, 0.04, 1));
     this.bindContourUniforms(program, contourUniformState(plot));
     gl.uniform1i(program.uniforms.u_isTransparentPass, transparentPass ? 1 : 0);
+    gl.uniform1i(program.uniforms.u_refractionEnabled, 0);
+    gl.uniform1f(program.uniforms.u_ior, clamp(plot.material.ior ?? 1.45, 1, 2.5));
     this.bindProbeUsage(program, probe);
     gl.bindVertexArray(visual.buffers.vao);
     gl.drawElements(gl.TRIANGLES, visual.buffers.indexCount, gl.UNSIGNED_INT, 0);
@@ -2040,6 +2099,14 @@ export class SceneController {
       { attachment: gl.COLOR_ATTACHMENT0, texture: sceneColor, target: gl.TEXTURE_2D },
       { attachment: gl.DEPTH_ATTACHMENT, texture: sceneDepth, target: gl.TEXTURE_2D },
     ]);
+    const refractionTexture = createColorTexture(gl, width, height, hdrColorFormat.internalFormat, hdrColorFormat.format, hdrColorFormat.type);
+    gl.bindTexture(gl.TEXTURE_2D, refractionTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    const refractionFramebuffer = createFramebuffer(gl, [
+      { attachment: gl.COLOR_ATTACHMENT0, texture: refractionTexture, target: gl.TEXTURE_2D },
+    ]);
     const maskTexture = createColorTexture(gl, width, height, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, gl.NEAREST);
     const maskDepth = createDepthTexture(gl, width, height);
     const maskFramebuffer = createFramebuffer(gl, [
@@ -2052,6 +2119,8 @@ export class SceneController {
       sceneFramebuffer,
       sceneColor,
       sceneDepth,
+      refractionFramebuffer,
+      refractionTexture,
       maskFramebuffer,
       maskTexture,
       maskDepth,
@@ -2060,9 +2129,11 @@ export class SceneController {
 
   private deleteRenderTargets(gl: WebGL2RenderingContext): void {
     deleteFramebuffer(gl, this.renderTargets.sceneFramebuffer);
+    deleteFramebuffer(gl, this.renderTargets.refractionFramebuffer);
     deleteFramebuffer(gl, this.renderTargets.maskFramebuffer);
     deleteTexture(gl, this.renderTargets.sceneColor);
     deleteTexture(gl, this.renderTargets.sceneDepth);
+    deleteTexture(gl, this.renderTargets.refractionTexture);
     deleteTexture(gl, this.renderTargets.maskTexture);
     deleteTexture(gl, this.renderTargets.maskDepth);
     this.renderTargets = emptyRenderTargets();
@@ -2221,6 +2292,11 @@ function createPrograms(gl: WebGL2RenderingContext): RenderPrograms {
     'u_useProbe',
     'u_probeMaxLod',
     'u_envMaxLod',
+    'u_refractionSource',
+    'u_refractionEnabled',
+    'u_ior',
+    'u_viewportSize',
+    'u_refractionMaxLod',
     'u_enableShadows',
     'u_enableReflections',
     'u_isTransparentPass',
@@ -2351,6 +2427,8 @@ void main() {
 const meshLightingPreamble = `
 precision highp float;
 
+uniform mat4 u_view;
+uniform mat4 u_projection;
 uniform vec3 u_cameraPos;
 uniform vec3 u_baseColor;
 uniform float u_opacity;
@@ -2393,6 +2471,11 @@ uniform vec3 u_probeCenter;
 uniform int u_useProbe;
 uniform float u_probeMaxLod;
 uniform float u_envMaxLod;
+uniform sampler2D u_refractionSource;
+uniform int u_refractionEnabled;
+uniform float u_ior;
+uniform vec2 u_viewportSize;
+uniform float u_refractionMaxLod;
 uniform int u_enableShadows;
 uniform int u_enableReflections;
 uniform int u_isTransparentPass;
@@ -2578,6 +2661,36 @@ vec3 applyLighting(vec3 N, vec3 V) {
   return color;
 }
 
+const float REFRACTION_THICKNESS = 0.75;
+
+vec3 applyRefraction(vec3 N, vec3 V, vec3 litColor) {
+  // Bend the eye ray entering the surface and sample the scene rendered so
+  // far where the bent ray re-projects on screen; the surface itself then
+  // writes an opaque pixel because the transmitted light is already baked in.
+  float eta = 1.0 / max(u_ior, 1.0);
+  vec3 refracted = refract(-V, N, eta);
+  if (dot(refracted, refracted) < 1e-6) {
+    refracted = reflect(-V, N);
+  }
+  vec2 screenUv = gl_FragCoord.xy / max(u_viewportSize, vec2(1.0));
+  vec3 exitPoint = v_worldPosition + refracted * REFRACTION_THICKNESS;
+  vec4 exitClip = u_projection * u_view * vec4(exitPoint, 1.0);
+  vec2 refractedUv = exitClip.w > 0.0001 ? exitClip.xy / exitClip.w * 0.5 + 0.5 : screenUv;
+  refractedUv = clamp(refractedUv, vec2(0.002), vec2(0.998));
+  float roughness = clamp(u_roughness, 0.0, 1.0);
+  float lod = pow(roughness, 0.9) * u_refractionMaxLod;
+  vec4 refractedSample = textureLod(u_refractionSource, refractedUv, lod);
+  // Pixels never rendered to have zero alpha; fall back to the environment
+  // sampled along the bent ray so the backdrop still shows through.
+  vec3 environmentBehind = textureLod(u_environment, refracted, pow(roughness, 0.9) * u_envMaxLod).rgb;
+  vec3 background = mix(environmentBehind, refractedSample.rgb, clamp(refractedSample.a, 0.0, 1.0));
+  float opacity = clamp(u_opacity, 0.0, 1.0);
+  vec3 tint = mix(vec3(1.0), u_baseColor, opacity * 0.85);
+  float fresnel = pow(1.0 - max(dot(N, V), 0.0), 5.0);
+  float surfaceMix = clamp(opacity + (1.0 - opacity) * max(fresnel, clamp(u_reflectiveness, 0.0, 1.0) * 0.22), 0.0, 1.0);
+  return mix(background * tint, litColor, surfaceMix);
+}
+
 float contourAxisMask(float value, float spacing) {
   float safeSpacing = max(spacing, 0.1);
   float distanceToBand = abs(mod(value + safeSpacing * 0.5, safeSpacing) - safeSpacing * 0.5);
@@ -2620,6 +2733,10 @@ void main() {
   vec3 N = normalize(gl_FrontFacing ? v_worldNormal : -v_worldNormal);
   vec3 V = normalize(u_cameraPos - v_worldPosition);
   vec3 litColor = applyLighting(N, V);
+  if (u_isTransparentPass == 1 && u_refractionEnabled == 1) {
+    outColor = vec4(applyRefraction(N, V, litColor), 1.0);
+    return;
+  }
   vec3 color = u_isTransparentPass == 1 ? litColor : applyContours(litColor);
   float alpha = u_isTransparentPass == 1 ? clamp(u_opacity, 0.0, 0.995) : 1.0;
   outColor = vec4(color, alpha);
@@ -3356,6 +3473,12 @@ function plotHasContours(plot: PlotObject): boolean {
   return state.xEnabled || state.yEnabled || state.zEnabled;
 }
 
+function plotUsesRefraction(plot: PlotObject): boolean {
+  return Boolean(plot.material.refractionEnabled)
+    && (plot.material.ior ?? 1.45) > 1.001
+    && clamp01(plot.material.opacity) < 0.999;
+}
+
 function buildAxesLines(length: number): { positions: Float32Array } {
   return {
     positions: new Float32Array([
@@ -3585,6 +3708,8 @@ function emptyRenderTargets(): RenderTargets {
     sceneFramebuffer: null,
     sceneColor: null,
     sceneDepth: null,
+    refractionFramebuffer: null,
+    refractionTexture: null,
     maskFramebuffer: null,
     maskTexture: null,
     maskDepth: null,

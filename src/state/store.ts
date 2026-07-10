@@ -1019,6 +1019,8 @@ function normalizeMaterialImport(
     opacity: clampNumber(asFiniteNumber(materialInput.opacity) ?? fallback.opacity, 0, 1),
     reflectiveness: clampNumber(asFiniteNumber(materialInput.reflectiveness) ?? fallback.reflectiveness, 0, 1),
     roughness: clampNumber(asFiniteNumber(materialInput.roughness) ?? fallback.roughness, 0, 1),
+    refractionEnabled: asBoolean(materialInput.refractionEnabled) ?? fallback.refractionEnabled ?? false,
+    ior: clampNumber(asFiniteNumber(materialInput.ior) ?? fallback.ior ?? 1.45, 1, 2.5),
     presetName: asNonEmptyString(materialInput.presetName) ?? fallback.presetName,
     wireframeVisible: asBoolean(materialInput.wireframeVisible) ?? fallback.wireframeVisible,
     wireframeCellSize: positiveFiniteNumber(materialInput.wireframeCellSize) ?? fallback.wireframeCellSize,

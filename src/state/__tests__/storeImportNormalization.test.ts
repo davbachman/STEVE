@@ -31,7 +31,8 @@ describe('project import normalization', () => {
           material: {
             baseColor: '#ff5533',
             opacity: 0.9,
-            ior: 1.45,
+            ior: 1.6,
+            legacyShaderModel: 'phong',
             reflectiveness: 0.35,
             roughness: 0.4,
             wireframeColor: '#123',
@@ -60,7 +61,9 @@ describe('project import normalization', () => {
       throw new Error('Expected imported plot');
     }
     expect(state.objects[0].equation.source.rawText).toBe('z = cos(x) * sin(y)');
-    expect('ior' in state.objects[0].material).toBe(false);
+    expect(state.objects[0].material.ior).toBe(1.6);
+    expect(state.objects[0].material.refractionEnabled).toBe(false);
+    expect('legacyShaderModel' in state.objects[0].material).toBe(false);
     expect(state.objects[0].material.wireframeColor).toBe('#112233');
     expect(state.objects[0].material.xContoursVisible).toBe(true);
     expect(state.objects[0].material.xContourSpacing).toBe(5);

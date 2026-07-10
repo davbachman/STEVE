@@ -82,6 +82,10 @@ export interface MaterialParams {
   opacity: number;
   reflectiveness: number;
   roughness: number;
+  /** Bend the background seen through transparent surfaces (screen-space refraction). */
+  refractionEnabled?: boolean;
+  /** Index of refraction used when refractionEnabled; 1 = no bending, glass ≈ 1.45. */
+  ior?: number;
   presetName?: string;
   wireframeVisible?: boolean;
   wireframeCellSize?: number;

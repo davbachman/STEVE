@@ -182,6 +182,29 @@ function MaterialTab({ selected }: { selected: PlotObject | PointLightObject | n
       <RangeField label="Opacity" min={0} max={1} step={0.01} value={selected.material.opacity} onChange={(v) => updatePlotMaterial(selected.id, { opacity: v })} />
       <RangeField label="Reflectiveness" min={0} max={1} step={0.01} value={selected.material.reflectiveness} onChange={(v) => updatePlotMaterial(selected.id, { reflectiveness: v })} />
       <RangeField label="Roughness" min={0} max={1} step={0.01} value={selected.material.roughness} onChange={(v) => updatePlotMaterial(selected.id, { roughness: v })} />
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={Boolean(selected.material.refractionEnabled)}
+          onChange={(e) => updatePlotMaterial(selected.id, { refractionEnabled: e.target.checked })}
+        />
+        Refraction
+      </label>
+      {selected.material.refractionEnabled ? (
+        <>
+          <RangeField
+            label="Index of refraction"
+            min={1}
+            max={2.5}
+            step={0.01}
+            value={selected.material.ior ?? 1.45}
+            onChange={(v) => updatePlotMaterial(selected.id, { ior: v })}
+          />
+          {selected.material.opacity >= 0.999 ? (
+            <div className="inspector-note">Refraction applies when Opacity is below 1.</div>
+          ) : null}
+        </>
+      ) : null}
       {(supportsWireframe || supportsContours) ? <h3>Surface Decorations</h3> : null}
       {supportsWireframe ? (
         <>
