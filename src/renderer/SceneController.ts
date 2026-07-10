@@ -1106,6 +1106,15 @@ export class SceneController {
     gl.useProgram(this.renderPrograms!.contour.program);
     gl.uniformMatrix4fv(this.renderPrograms!.contour.uniforms.u_view, false, this.viewMatrix);
     gl.uniformMatrix4fv(this.renderPrograms!.contour.uniforms.u_projection, false, this.projectionMatrix);
+    // The overlay draws after compositing, so occlusion against opaque
+    // geometry is resolved manually against the scene depth texture.
+    bindTexture(gl, this.renderTargets.sceneDepth, 0, gl.TEXTURE_2D);
+    gl.uniform1i(this.renderPrograms!.contour.uniforms.u_sceneDepth, 0);
+    gl.uniform2f(
+      this.renderPrograms!.contour.uniforms.u_viewportSize,
+      Math.max(1, this.renderTargets.width),
+      Math.max(1, this.renderTargets.height),
+    );
     gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -2474,6 +2483,8 @@ function createPrograms(gl: WebGL2RenderingContext): RenderPrograms {
       'u_projection',
       'u_normalMatrix',
       'u_baseColor',
+      'u_sceneDepth',
+      'u_viewportSize',
       'u_xContoursVisible',
       'u_xContourSpacing',
       'u_xContourColor',
@@ -2931,6 +2942,8 @@ const contourFragmentShaderSource = `#version 300 es
 precision highp float;
 
 uniform vec3 u_baseColor;
+uniform sampler2D u_sceneDepth;
+uniform vec2 u_viewportSize;
 uniform int u_xContoursVisible;
 uniform float u_xContourSpacing;
 uniform vec3 u_xContourColor;
@@ -2972,6 +2985,12 @@ vec4 resolveContourOverlay() {
 }
 
 void main() {
+  vec2 screenUv = gl_FragCoord.xy / max(u_viewportSize, vec2(1.0));
+  float sceneDepth = texture(u_sceneDepth, screenUv).r;
+  if (gl_FragCoord.z > sceneDepth + 0.0015) {
+    // Occluded by opaque geometry (transparent surfaces do not write depth).
+    discard;
+  }
   vec4 contour = resolveContourOverlay();
   float alpha = clamp(contour.a * 0.84, 0.0, 0.84);
   if (alpha <= 0.001) {
