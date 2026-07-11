@@ -2,7 +2,7 @@
 
 **STudio for Equation Visualization and Experimentation**
 
-Created by David Bachman with GPT-5.4
+Created by David Bachman with GPT 5.4, GPT 5.5, GPT 5.6 Sol, and Fable 5
 
 To learn more about David Bachman and his work visit https://pzacad.pitzer.edu/~dbachman/ and subscribe to his AI substack *Entropy Bonus* at https://profbachman.substack.com
 
