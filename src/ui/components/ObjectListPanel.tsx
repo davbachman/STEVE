@@ -51,8 +51,6 @@ export function ObjectListPanel() {
   const selectedId = useAppStore((s) => s.selectedId);
   const selectObject = useAppStore((s) => s.selectObject);
   const setObjectVisibility = useAppStore((s) => s.setObjectVisibility);
-  const duplicateObject = useAppStore((s) => s.duplicateObject);
-  const deleteObject = useAppStore((s) => s.deleteObject);
   const plotJobs = useAppStore((s) => s.plotJobs);
 
   return (
@@ -88,24 +86,6 @@ export function ObjectListPanel() {
                   </span>
                 ) : null}
               </button>
-              <div className="object-card__actions">
-                <button
-                  className="object-card__action"
-                  onClick={() => duplicateObject(obj.id)}
-                  title={`Duplicate ${obj.name}`}
-                  aria-label={`Duplicate ${obj.name}`}
-                >
-                  ⧉
-                </button>
-                <button
-                  className="object-card__action object-card__action--danger"
-                  onClick={() => deleteObject(obj.id)}
-                  title={`Delete ${obj.name}`}
-                  aria-label={`Delete ${obj.name}`}
-                >
-                  ×
-                </button>
-              </div>
               <label className="object-card__toggle" title={obj.type === 'point_light' ? 'Show light gizmo' : 'Show object'}>
                 <input
                   aria-label={obj.type === 'point_light' ? `Show gizmo for ${obj.name}` : `Show ${obj.name}`}

@@ -387,7 +387,7 @@ input[type='color'] {
 
 .object-card {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.4rem;
   padding: 0.25rem 0.3rem 0.25rem 0.4rem;
@@ -469,27 +469,6 @@ input[type='color'] {
 @keyframes object-card-appear {
   from { opacity: 0; }
   to { opacity: 1; }
-}
-
-.object-card__actions {
-  display: none;
-  gap: 0.15rem;
-}
-
-.object-card:hover .object-card__actions,
-.object-card:focus-within .object-card__actions {
-  display: inline-flex;
-}
-
-.object-card__action {
-  padding: 0.1rem 0.4rem;
-  font-size: 0.85rem;
-  line-height: 1.3;
-}
-
-.object-card__action--danger:hover {
-  border-color: rgba(220, 80, 80, 0.8);
-  color: #ff9b9b;
 }
 
 .object-card__toggle {
