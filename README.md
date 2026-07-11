@@ -16,7 +16,9 @@ ST.E.V.E. is a browser-only interactive 3D graphing app for exploring mathematic
 - Graphs explicit surfaces along a single axis such as `z=f(x,y)`, `x=g(y,z)`, or `y=h(x,z)`.
 - Lets you combine multiple plots and lights in one scene.
 - Animates equation constants: press play on any constant's slider to sweep it between its bounds while the surface re-meshes live.
-- Supports perspective and orthographic camera projections.
+- Supports perspective and orthographic camera projections, with Top/Front/Side view presets, camera reset, and double-click to frame an object.
+- Draws numbered tick labels along the axes (toggle in Scene settings).
+- Exports viewport images at 1×, 2×, or 4× resolution for publication-quality figures.
 - Supports interactive materials, shadows, reflections (including a mirror-like ground plane), screen-space refraction for glass-like surfaces, and adjustable render quality.
 - Saves scenes as project files, exports viewport images as PNG, and exports selected plots as STL.
 
@@ -26,7 +28,7 @@ ST.E.V.E. is a browser-only interactive 3D graphing app for exploring mathematic
 2. Select an object from the object list to edit it. Plot objects open in the equation editor, and lights open in the inspector.
 3. Enter or revise the equation for the selected plot. ST.E.V.E. classifies the expression and updates the preview and mesh when the expression is valid.
 4. Use the right inspector tabs to change object name, position, domain bounds, sampling density, material settings, lighting, scene options, and render settings.
-5. Navigate the viewport with right-drag to orbit and `Shift` + right-drag to pan. Drag selected objects with left-drag, and use `Shift` + left-drag to constrain object dragging along Z.
+5. Navigate the viewport with right-drag to orbit and `Shift` + right-drag to pan. Drag selected objects with left-drag, and use `Shift` + left-drag to constrain object dragging along Z. Use the Top/Front/Side buttons for axis-aligned views, `⌂` to reset the camera, and double-click (or `⛶`) to frame objects.
 6. Toggle visibility for plots and light gizmos from the object list to isolate parts of a scene while editing.
 7. Use `Save` to write the current scene as a `.json` project file and `Open` to load a previously saved project.
 8. Use `Export PNG` to save the current viewport as an image.

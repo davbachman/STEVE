@@ -24,8 +24,12 @@ import {
   type PlotGeometry,
 } from './plotGeometry';
 
+export type ViewPreset = 'top' | 'front' | 'side' | 'default';
+
 export interface ViewportApi {
-  exportPng: (filename?: string) => Promise<void>;
+  exportPng: (filename?: string, scale?: number) => Promise<void>;
+  setViewPreset: (preset: ViewPreset) => void;
+  frameObject: (objectId?: string | null) => void;
 }
 
 interface GpuMeshBuffers {
@@ -124,6 +128,15 @@ interface SimpleMeshBuffer {
   indexCount: number;
 }
 
+interface AxisLabelResources {
+  key: string;
+  texture: WebGLTexture | null;
+  vao: WebGLVertexArrayObject | null;
+  vertexBuffer: WebGLBuffer | null;
+  indexBuffer: WebGLBuffer | null;
+  indexCount: number;
+}
+
 interface RenderPrograms {
   mesh: ProgramBundle;
   contour: ProgramBundle;
@@ -136,6 +149,7 @@ interface RenderPrograms {
   mask: ProgramBundle;
   composite: ProgramBundle;
   outline: ProgramBundle;
+  label: ProgramBundle;
 }
 
 interface ProgramBundle {
@@ -191,6 +205,11 @@ const POINT_SHADOW_TEXTURE_UNIT_BASE = BASE_FRAGMENT_TEXTURE_UNITS;
 const POINT_SHADOW_TEXTURE_UNIT_STRIDE = 3;
 const POINT_SHADOW_NEAR = 0.05;
 const ZERO_PROBE_CENTER = vec3.fromValues(0, 0, 0);
+const MAX_EXPORT_DIMENSION = 8192;
+const DEFAULT_CAMERA_ALPHA = -Math.PI / 3;
+const DEFAULT_CAMERA_BETA = 1.1;
+const DEFAULT_CAMERA_RADIUS = 20;
+const DEFAULT_CAMERA_TARGET = vec3.fromValues(0, 0, 1.5);
 const POINT_SHADOW_FACE_VECTORS: Array<{ target: vec3; up: vec3 }> = [
   { target: vec3.fromValues(1, 0, 0), up: vec3.fromValues(0, -1, 0) },
   { target: vec3.fromValues(-1, 0, 0), up: vec3.fromValues(0, -1, 0) },
@@ -221,6 +240,7 @@ export class SceneController {
   private axesLineBuffer: { key: string; buffer: GpuLineBuffer } | null = null;
   private gridLineBuffer: { key: string; buffer: GpuLineBuffer } | null = null;
   private gizmoPointBuffer: GpuLineBuffer | null = null;
+  private axisLabels: AxisLabelResources | null = null;
   private environmentCubemap: WebGLTexture | null = null;
   private environmentKey = '';
   private plotVisuals = new Map<string, PlotVisual>();
@@ -239,10 +259,10 @@ export class SceneController {
   private frameTimeMs = 16.67;
   private fps = 60;
   private readonly camera = {
-    alpha: -Math.PI / 3,
-    beta: 1.1,
-    radius: 20,
-    target: vec3.fromValues(0, 0, 1.5),
+    alpha: DEFAULT_CAMERA_ALPHA,
+    beta: DEFAULT_CAMERA_BETA,
+    radius: DEFAULT_CAMERA_RADIUS,
+    target: vec3.clone(DEFAULT_CAMERA_TARGET),
     upVector: vec3.fromValues(0, 0, 1),
     minZ: 0.05,
     maxZ: 400,
@@ -345,6 +365,7 @@ export class SceneController {
       }
       deleteLineBuffer(gl, this.gizmoPointBuffer);
       this.gizmoPointBuffer = null;
+      this.deleteAxisLabelResources(gl);
       deleteBuffer(gl, this.fullscreenBuffer);
       deleteVertexArray(gl, this.fullscreenVao);
       if (this.renderPrograms) {
@@ -359,6 +380,7 @@ export class SceneController {
         deleteProgramBundle(gl, this.renderPrograms.mask);
         deleteProgramBundle(gl, this.renderPrograms.composite);
         deleteProgramBundle(gl, this.renderPrograms.outline);
+        deleteProgramBundle(gl, this.renderPrograms.label);
       }
     }
     this.plotVisuals.clear();
@@ -369,16 +391,139 @@ export class SceneController {
 
   getApi(): ViewportApi {
     return {
-      exportPng: async (filename = buildPngFileName()) => {
+      exportPng: async (filename = buildPngFileName(), scale = 1) => {
         const gl = this.gl;
         if (!gl) {
           throw new Error('Viewport not ready');
         }
         this.resizeViewport();
-        this.renderScene();
-        await exportCanvasPng(gl, this.canvas, this.latestSnapshot?.scene ?? useAppStore.getState().scene, filename);
+        const baseWidth = this.canvas.width;
+        const baseHeight = this.canvas.height;
+        const safeScale = Math.max(1, Math.min(scale, MAX_EXPORT_DIMENSION / Math.max(baseWidth, baseHeight)));
+        try {
+          if (safeScale > 1) {
+            this.canvas.width = Math.round(baseWidth * safeScale);
+            this.canvas.height = Math.round(baseHeight * safeScale);
+            gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+          }
+          this.renderScene();
+          await exportCanvasPng(gl, this.canvas, this.latestSnapshot?.scene ?? useAppStore.getState().scene, filename);
+        } finally {
+          if (this.canvas.width !== baseWidth || this.canvas.height !== baseHeight) {
+            this.canvas.width = baseWidth;
+            this.canvas.height = baseHeight;
+            gl.viewport(0, 0, baseWidth, baseHeight);
+            this.renderScene();
+          }
+        }
       },
+      setViewPreset: (preset) => this.setViewPreset(preset),
+      frameObject: (objectId) => this.frameObject(objectId ?? null),
     };
+  }
+
+  setViewPreset(preset: ViewPreset): void {
+    if (preset === 'default') {
+      this.camera.alpha = DEFAULT_CAMERA_ALPHA;
+      this.camera.beta = DEFAULT_CAMERA_BETA;
+      this.camera.radius = DEFAULT_CAMERA_RADIUS;
+      vec3.copy(this.camera.target, DEFAULT_CAMERA_TARGET);
+      return;
+    }
+    // Axis views keep the current target and distance so the subject stays framed.
+    if (preset === 'top') {
+      this.camera.alpha = -Math.PI / 2;
+      this.camera.beta = 0.1;
+      return;
+    }
+    if (preset === 'front') {
+      this.camera.alpha = -Math.PI / 2;
+      this.camera.beta = Math.PI / 2;
+      return;
+    }
+    this.camera.alpha = 0;
+    this.camera.beta = Math.PI / 2;
+  }
+
+  frameObject(objectId: string | null): void {
+    const snapshot = this.latestSnapshot;
+    if (!snapshot) {
+      return;
+    }
+    const targetId = objectId ?? snapshot.selectedId;
+    let framed = targetId ? this.computeObjectBounds(targetId) : null;
+    framed ??= this.computeVisiblePlotsBounds();
+    if (!framed) {
+      return;
+    }
+    vec3.copy(this.camera.target, framed.center);
+    const fitRadius = Math.max(0.75, framed.radius) * 1.35;
+    this.camera.radius = clamp(
+      fitRadius / Math.sin(this.camera.fov / 2),
+      this.camera.lowerRadiusLimit,
+      this.camera.upperRadiusLimit,
+    );
+  }
+
+  private computeObjectBounds(objectId: string): { center: vec3; radius: number } | null {
+    const object = this.latestSnapshot?.objects.find((candidate) => candidate.id === objectId);
+    if (!object) {
+      return null;
+    }
+    if (object.type === 'point_light') {
+      return {
+        center: vec3.fromValues(object.position.x, object.position.y, object.position.z),
+        radius: 2,
+      };
+    }
+    const visual = this.plotVisuals.get(objectId);
+    if (!visual) {
+      return null;
+    }
+    const bounds = visual.geometry.bounds;
+    return {
+      center: vec3.fromValues(
+        bounds.center.x + object.transform.position.x,
+        bounds.center.y + object.transform.position.y,
+        bounds.center.z + object.transform.position.z,
+      ),
+      radius: Math.max(0.001, bounds.radius),
+    };
+  }
+
+  private computeVisiblePlotsBounds(): { center: vec3; radius: number } | null {
+    const snapshot = this.latestSnapshot;
+    if (!snapshot) {
+      return null;
+    }
+    const min = vec3.fromValues(Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
+    const max = vec3.fromValues(Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY);
+    let found = false;
+    for (const plotSnapshot of snapshot.plots) {
+      const plot = plotSnapshot.plot;
+      if (!plot.visible) {
+        continue;
+      }
+      const visual = this.plotVisuals.get(plot.id);
+      if (!visual) {
+        continue;
+      }
+      const bounds = visual.geometry.bounds;
+      const offset = plot.transform.position;
+      min[0] = Math.min(min[0], bounds.min.x + offset.x);
+      min[1] = Math.min(min[1], bounds.min.y + offset.y);
+      min[2] = Math.min(min[2], bounds.min.z + offset.z);
+      max[0] = Math.max(max[0], bounds.max.x + offset.x);
+      max[1] = Math.max(max[1], bounds.max.y + offset.y);
+      max[2] = Math.max(max[2], bounds.max.z + offset.z);
+      found = true;
+    }
+    if (!found) {
+      return null;
+    }
+    const center = vec3.fromValues((min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2);
+    const radius = vec3.distance(center, max);
+    return { center, radius: Math.max(0.001, radius) };
   }
 
   resizeViewport(): void {
@@ -453,7 +598,106 @@ export class SceneController {
     this.renderSelectedFeatureEdges(snapshot);
     this.renderOverlayLines(snapshot);
     this.renderPointLightGizmos(snapshot, programs.gizmo);
+    this.renderAxisLabels(snapshot);
     this.syncRenderDiagnostics(snapshot, pointShadowLights);
+  }
+
+  private renderAxisLabels(snapshot: RendererSceneSnapshot): void {
+    const scene = snapshot.scene;
+    if (!scene.axesVisible || !scene.axisLabelsVisible) {
+      return;
+    }
+    const gl = this.gl!;
+    this.ensureAxisLabelResources(scene.axesLength);
+    const labels = this.axisLabels;
+    if (!labels?.vao || !labels.texture || labels.indexCount === 0) {
+      return;
+    }
+    const program = this.renderPrograms!.label;
+    gl.useProgram(program.program);
+    gl.uniformMatrix4fv(program.uniforms.u_view, false, this.viewMatrix);
+    gl.uniformMatrix4fv(program.uniforms.u_projection, false, this.projectionMatrix);
+    gl.uniform2f(program.uniforms.u_viewport, Math.max(1, this.canvas.width), Math.max(1, this.canvas.height));
+    // Keep on-screen label size during high-resolution PNG exports, where the
+    // backing store is temporarily larger than the CSS pixel size.
+    const nativeWidth = Math.max(1, Math.floor(this.canvas.clientWidth * window.devicePixelRatio));
+    gl.uniform1f(program.uniforms.u_labelScale, Math.max(1, this.canvas.width / nativeWidth));
+    bindTexture(gl, labels.texture, 0, gl.TEXTURE_2D);
+    gl.uniform1i(program.uniforms.u_atlas, 0);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.CULL_FACE);
+    gl.bindVertexArray(labels.vao);
+    gl.drawElements(gl.TRIANGLES, labels.indexCount, gl.UNSIGNED_SHORT, 0);
+    gl.bindVertexArray(null);
+    gl.disable(gl.BLEND);
+    gl.enable(gl.DEPTH_TEST);
+  }
+
+  private ensureAxisLabelResources(axesLength: number): void {
+    const gl = this.gl!;
+    const dpr = clamp(window.devicePixelRatio || 1, 1, 3);
+    const key = `${axesLength}|${Math.round(dpr * 100)}`;
+    if (this.axisLabels?.key === key) {
+      return;
+    }
+    this.deleteAxisLabelResources(gl);
+    const built = buildAxisLabelAtlas(axesLength, dpr);
+    if (!built) {
+      return;
+    }
+    const texture = gl.createTexture();
+    const vao = gl.createVertexArray();
+    const vertexBuffer = gl.createBuffer();
+    const indexBuffer = gl.createBuffer();
+    if (!texture || !vao || !vertexBuffer || !indexBuffer) {
+      deleteTexture(gl, texture);
+      deleteVertexArray(gl, vao);
+      deleteBuffer(gl, vertexBuffer);
+      deleteBuffer(gl, indexBuffer);
+      return;
+    }
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, built.atlas);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, vertexBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, built.vertices, gl.STATIC_DRAW);
+    const stride = 7 * 4;
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, stride, 0);
+    gl.enableVertexAttribArray(1);
+    gl.vertexAttribPointer(1, 2, gl.FLOAT, false, stride, 3 * 4);
+    gl.enableVertexAttribArray(2);
+    gl.vertexAttribPointer(2, 2, gl.FLOAT, false, stride, 5 * 4);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, built.indices, gl.STATIC_DRAW);
+    gl.bindVertexArray(null);
+    this.axisLabels = {
+      key,
+      texture,
+      vao,
+      vertexBuffer,
+      indexBuffer,
+      indexCount: built.indices.length,
+    };
+  }
+
+  private deleteAxisLabelResources(gl: WebGL2RenderingContext): void {
+    if (!this.axisLabels) {
+      return;
+    }
+    deleteTexture(gl, this.axisLabels.texture);
+    deleteVertexArray(gl, this.axisLabels.vao);
+    deleteBuffer(gl, this.axisLabels.vertexBuffer);
+    deleteBuffer(gl, this.axisLabels.indexBuffer);
+    this.axisLabels = null;
   }
 
   private syncBackground(snapshot: RendererSceneSnapshot): void {
@@ -2089,6 +2333,10 @@ export class SceneController {
 
   private attachInputHandlers(): void {
     this.canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+    this.canvas.addEventListener('dblclick', (event) => {
+      const hit = this.pickSceneObject(event.clientX, event.clientY);
+      this.frameObject(hit?.id ?? null);
+    });
     this.pointerDownListener = (event) => this.handlePointerDown(event);
     this.pointerMoveListener = (event) => this.handlePointerMove(event);
     this.pointerUpListener = (event) => this.handlePointerUp(event);
@@ -2571,6 +2819,13 @@ function createPrograms(gl: WebGL2RenderingContext): RenderPrograms {
       'u_maskDepth',
       'u_sceneDepth',
       'u_texelSize',
+    ]),
+    label: createProgramBundle(gl, axisLabelVertexShaderSource, axisLabelFragmentShaderSource, [
+      'u_view',
+      'u_projection',
+      'u_viewport',
+      'u_labelScale',
+      'u_atlas',
     ]),
   };
 }
@@ -3176,6 +3431,39 @@ void main() {
 }
 `;
 
+const axisLabelVertexShaderSource = `#version 300 es
+precision highp float;
+layout(location = 0) in vec3 a_center;
+layout(location = 1) in vec2 a_corner;
+layout(location = 2) in vec2 a_uv;
+uniform mat4 u_view;
+uniform mat4 u_projection;
+uniform vec2 u_viewport;
+uniform float u_labelScale;
+out vec2 v_uv;
+void main() {
+  vec4 clip = u_projection * u_view * vec4(a_center, 1.0);
+  vec2 safeViewport = max(u_viewport, vec2(1.0));
+  clip.xy += (a_corner * u_labelScale / safeViewport) * 2.0 * clip.w;
+  v_uv = a_uv;
+  gl_Position = clip;
+}
+`;
+
+const axisLabelFragmentShaderSource = `#version 300 es
+precision highp float;
+uniform sampler2D u_atlas;
+in vec2 v_uv;
+out vec4 outColor;
+void main() {
+  vec4 texel = texture(u_atlas, v_uv);
+  if (texel.a < 0.01) {
+    discard;
+  }
+  outColor = texel;
+}
+`;
+
 const maskVertexShaderSource = lineVertexShaderSource;
 
 const maskFragmentShaderSource = `#version 300 es
@@ -3701,6 +3989,142 @@ function plotUsesRefraction(plot: PlotObject): boolean {
   return Boolean(plot.material.refractionEnabled)
     && (plot.material.ior ?? 1.45) > 1.001
     && clamp01(plot.material.opacity) < 0.999;
+}
+
+interface AxisLabelAtlas {
+  atlas: HTMLCanvasElement;
+  vertices: Float32Array;
+  indices: Uint16Array;
+}
+
+function niceTickStep(length: number): number {
+  const target = Math.max(0.001, length / 5);
+  const power = 10 ** Math.floor(Math.log10(target));
+  const normalized = target / power;
+  const factor = normalized >= 5 ? 5 : normalized >= 2 ? 2 : 1;
+  return factor * power;
+}
+
+function formatTickValue(value: number, step: number): string {
+  const decimals = Math.max(0, -Math.floor(Math.log10(step) + 1e-9));
+  return value.toFixed(decimals);
+}
+
+function buildAxisLabelAtlas(axesLength: number, dpr: number): AxisLabelAtlas | null {
+  const step = niceTickStep(axesLength);
+  const entries: Array<{ text: string; position: [number, number, number]; big: boolean }> = [];
+  const axes: Array<{ unit: [number, number, number]; name: string }> = [
+    { unit: [1, 0, 0], name: 'x' },
+    { unit: [0, 1, 0], name: 'y' },
+    { unit: [0, 0, 1], name: 'z' },
+  ];
+  for (const axis of axes) {
+    for (let value = step; value <= axesLength + step * 1e-3; value += step) {
+      entries.push({
+        text: formatTickValue(value, step),
+        position: [axis.unit[0] * value, axis.unit[1] * value, axis.unit[2] * value],
+        big: false,
+      });
+    }
+    const end = axesLength * 1.07 + 0.15;
+    entries.push({
+      text: axis.name,
+      position: [axis.unit[0] * end, axis.unit[1] * end, axis.unit[2] * end],
+      big: true,
+    });
+  }
+  if (entries.length === 0) {
+    return null;
+  }
+
+  const fontPx = Math.round(12 * dpr);
+  const bigFontPx = Math.round(15 * dpr);
+  const padding = Math.ceil(3 * dpr);
+  const atlas = document.createElement('canvas');
+  const measureCtx = atlas.getContext('2d');
+  if (!measureCtx) {
+    return null;
+  }
+  const fontFor = (big: boolean) => `${big ? 'italic ' : ''}${big ? bigFontPx : fontPx}px system-ui, -apple-system, sans-serif`;
+  const placed: Array<{ x: number; y: number; w: number; h: number }> = [];
+  const maxAtlasWidth = 1024;
+  let cursorX = padding;
+  let cursorY = padding;
+  let shelfHeight = 0;
+  let atlasWidth = 0;
+  for (const entry of entries) {
+    measureCtx.font = fontFor(entry.big);
+    const textWidth = Math.ceil(measureCtx.measureText(entry.text).width);
+    const w = textWidth + padding * 2;
+    const h = Math.ceil((entry.big ? bigFontPx : fontPx) * 1.4) + padding * 2;
+    if (cursorX + w > maxAtlasWidth) {
+      cursorX = padding;
+      cursorY += shelfHeight + padding;
+      shelfHeight = 0;
+    }
+    placed.push({ x: cursorX, y: cursorY, w, h });
+    cursorX += w + padding;
+    shelfHeight = Math.max(shelfHeight, h);
+    atlasWidth = Math.max(atlasWidth, cursorX);
+  }
+  atlas.width = Math.min(maxAtlasWidth, Math.max(64, atlasWidth));
+  atlas.height = Math.max(32, cursorY + shelfHeight + padding);
+  const ctx = atlas.getContext('2d');
+  if (!ctx) {
+    return null;
+  }
+  ctx.clearRect(0, 0, atlas.width, atlas.height);
+  ctx.textBaseline = 'middle';
+  ctx.textAlign = 'center';
+  ctx.lineJoin = 'round';
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i];
+    const box = placed[i];
+    ctx.font = fontFor(entry.big);
+    const centerX = box.x + box.w / 2;
+    const centerY = box.y + box.h / 2;
+    ctx.lineWidth = Math.max(2, 2.5 * dpr);
+    ctx.strokeStyle = 'rgba(6, 10, 18, 0.9)';
+    ctx.strokeText(entry.text, centerX, centerY);
+    ctx.fillStyle = entry.big ? '#f0d9a8' : '#d9e3f4';
+    ctx.fillText(entry.text, centerX, centerY);
+  }
+
+  // Four vertices per label: world-space center plus a pixel-space corner
+  // offset resolved in the vertex shader, so labels stay screen-sized.
+  const vertices = new Float32Array(entries.length * 4 * 7);
+  const indices = new Uint16Array(entries.length * 6);
+  const dropPx = 11 * dpr;
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i];
+    const box = placed[i];
+    const halfW = box.w / 2;
+    const halfH = box.h / 2;
+    const offsetY = entry.big ? 0 : -dropPx;
+    const u0 = box.x / atlas.width;
+    const u1 = (box.x + box.w) / atlas.width;
+    const v0 = box.y / atlas.height;
+    const v1 = (box.y + box.h) / atlas.height;
+    const corners: Array<[number, number, number, number]> = [
+      [-halfW, halfH + offsetY, u0, v0],
+      [halfW, halfH + offsetY, u1, v0],
+      [halfW, -halfH + offsetY, u1, v1],
+      [-halfW, -halfH + offsetY, u0, v1],
+    ];
+    for (let c = 0; c < 4; c += 1) {
+      const base = (i * 4 + c) * 7;
+      vertices[base] = entry.position[0];
+      vertices[base + 1] = entry.position[1];
+      vertices[base + 2] = entry.position[2];
+      vertices[base + 3] = corners[c][0];
+      vertices[base + 4] = corners[c][1];
+      vertices[base + 5] = corners[c][2];
+      vertices[base + 6] = corners[c][3];
+    }
+    const quad = i * 4;
+    indices.set([quad, quad + 1, quad + 2, quad, quad + 2, quad + 3], i * 6);
+  }
+  return { atlas, vertices, indices };
 }
 
 function buildAxesLines(length: number): { positions: Float32Array } {

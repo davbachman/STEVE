@@ -195,6 +195,7 @@ export interface SceneSettings {
   gridLineOpacity: number;
   axesVisible: boolean;
   axesLength: number;
+  axisLabelsVisible: boolean;
   defaultGraphBounds: Bounds3D;
   ambient: AmbientLightSettings;
   directional: DirectionalLightSettings;

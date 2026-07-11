@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { exportPlotAsStl } from '../../persistence/meshExport';
 import { readProjectFile, saveProjectFile } from '../../persistence/projectFile';
 import { useAppStore } from '../../state/store';
@@ -23,6 +23,7 @@ export function TopBar({
   onToggleRightSidebar,
 }: TopBarProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [exportScale, setExportScale] = useState(1);
   const exportProjectFile = useAppStore((s) => s.exportProjectFile);
   const replaceProject = useAppStore((s) => s.replaceProject);
   const newProject = useAppStore((s) => s.newProject);
@@ -53,7 +54,7 @@ export function TopBar({
         return;
       }
       try {
-        await viewportApi.exportPng();
+        await viewportApi.exportPng(undefined, exportScale);
       } catch (error) {
         if (error instanceof DOMException && error.name === 'AbortError') {
           return;
@@ -96,6 +97,17 @@ export function TopBar({
         <button onClick={handleSaveProject}>Save</button>
         <button onClick={() => fileInputRef.current?.click()}>Open</button>
         <button onClick={handleExportPng}>Export PNG</button>
+        <select
+          className="top-bar__export-scale"
+          value={exportScale}
+          onChange={(e) => setExportScale(Number(e.target.value))}
+          title="PNG export resolution multiplier"
+          aria-label="PNG export scale"
+        >
+          <option value={1}>1×</option>
+          <option value={2}>2×</option>
+          <option value={4}>4×</option>
+        </select>
         <button onClick={handleExportStl} disabled={!selectedPlot}>Export STL</button>
       </div>
 

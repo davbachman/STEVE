@@ -29,6 +29,10 @@ const unaryFns: Record<string, (x: number) => number> = {
   abs: Math.abs,
 };
 
+/** Names accepted by the expression evaluator, for editor tooling. */
+export const supportedFunctionNames: readonly string[] = Object.keys(unaryFns);
+export const supportedConstantNames: readonly string[] = Object.keys(constants);
+
 export function compileNumericExpression(expr: Expression): CompiledNumericFn {
   return (vars) => evaluateNumericExpression(expr, vars);
 }

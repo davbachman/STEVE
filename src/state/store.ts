@@ -80,6 +80,8 @@ interface AppActions {
   setParameterAnimation: (plotId: UUID, parameterName: string, patch: { animating?: boolean; animationSpeed?: number }) => void;
   applyParameterAnimationValues: (updates: ReadonlyArray<{ plotId: UUID; parameterName: string; value: number }>) => void;
   deleteSelected: () => void;
+  deleteObject: (id: UUID) => void;
+  duplicateObject: (id: UUID) => void;
   copySelectedToClipboard: () => Promise<void>;
   pasteClipboard: () => Promise<void>;
   newProject: () => void;
@@ -714,6 +716,34 @@ export const useAppStore = create<AppState>((set, get) => ({
       };
     }),
 
+  deleteObject: (id) =>
+    set((state) => {
+      if (!state.objects.some((obj) => obj.id === id)) return state;
+      return {
+        ...state,
+        objects: state.objects.filter((obj) => obj.id !== id),
+        selectedId: state.selectedId === id ? null : state.selectedId,
+        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyFuture: [],
+      };
+    }),
+
+  duplicateObject: (id) =>
+    set((state) => {
+      const index = state.objects.findIndex((obj) => obj.id === id);
+      if (index === -1) return state;
+      const cloned = cloneWithNewId(state.objects[index]);
+      const objects = [...state.objects];
+      objects.splice(index + 1, 0, cloned);
+      return {
+        ...state,
+        objects,
+        selectedId: cloned.id,
+        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyFuture: [],
+      };
+    }),
+
   copySelectedToClipboard: async () => {
     const state = get();
     const selected = state.objects.find((obj) => obj.id === state.selectedId);
@@ -962,6 +992,7 @@ function normalizeSceneSettingsImport(
     gridLineOpacity: clampNumber(asFiniteNumber(sceneInput.gridLineOpacity) ?? defaults.gridLineOpacity, 0, 1),
     axesVisible: asBoolean(sceneInput.axesVisible) ?? defaults.axesVisible,
     axesLength: asFiniteNumber(sceneInput.axesLength) ?? defaults.axesLength,
+    axisLabelsVisible: asBoolean(sceneInput.axisLabelsVisible) ?? defaults.axisLabelsVisible,
     defaultGraphBounds: normalizeBounds3D(sceneInput.defaultGraphBounds, defaults.defaultGraphBounds),
     ambient: {
       ...defaults.ambient,

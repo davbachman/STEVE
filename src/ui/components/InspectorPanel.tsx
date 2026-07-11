@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   DEFAULT_PARAMETER_ANIMATION_SPEED,
   MAX_PARAMETER_ANIMATION_SPEED,
@@ -7,7 +7,7 @@ import {
 } from '../../math/parameters';
 import { materialPresets } from '../../state/defaults';
 import { useAppStore } from '../../state/store';
-import type { PlotObject, PointLightObject } from '../../types/contracts';
+import type { MaterialParams, PlotObject, PointLightObject } from '../../types/contracts';
 
 const tabs = [
   { id: 'object', label: 'Object' },
@@ -212,7 +212,11 @@ function MaterialTab({ selected }: { selected: PlotObject | PointLightObject | n
       ) : null}
       {(supportsWireframe || supportsContours) ? <h3>Surface Decorations</h3> : null}
       {supportsWireframe ? (
-        <>
+        <CollapsibleSection
+          key={`wireframe-${selected.id}`}
+          title="Wireframe"
+          defaultOpen={Boolean(selected.material.wireframeVisible)}
+        >
           <label className="checkbox-row">
             <input
               type="checkbox"
@@ -241,96 +245,154 @@ function MaterialTab({ selected }: { selected: PlotObject | PointLightObject | n
               />
             </>
           ) : null}
-        </>
+        </CollapsibleSection>
       ) : null}
       {supportsContours ? (
-        <>
-          <label className="checkbox-row">
-            <input
-              type="checkbox"
-              checked={Boolean(selected.material.zContoursVisible)}
-              onChange={(e) => updatePlotMaterial(selected.id, { zContoursVisible: e.target.checked })}
-            />
-            Z contours
-          </label>
-          {selected.material.zContoursVisible ? (
-            <>
-              <label>
-                Z contour color
-                <input
-                  type="color"
-                  value={selected.material.zContourColor ?? '#000000'}
-                  onChange={(e) => updatePlotMaterial(selected.id, { zContourColor: e.target.value })}
+        <CollapsibleSection
+          key={`contours-${selected.id}`}
+          title="Contours"
+          defaultOpen={CONTOUR_AXES.some((axis) => contourAxisState(selected.material, axis).visible)}
+        >
+          <div className="contour-grid" role="group" aria-label="Contour lines">
+            <span className="contour-grid__heading" aria-hidden="true" />
+            <span className="contour-grid__heading">Color</span>
+            <span className="contour-grid__heading">Spacing</span>
+            {CONTOUR_AXES.map((axis) => {
+              const state = contourAxisState(selected.material, axis);
+              return (
+                <ContourAxisRow
+                  key={axis}
+                  axis={axis}
+                  state={state}
+                  onPatch={(patch) => updatePlotMaterial(selected.id, patch)}
+                  clampSpacing={clampContourSpacing}
                 />
-              </label>
-              <RangeField
-                label="Z contour spacing"
-                min={0.1}
-                max={5}
-                step={0.1}
-                value={selected.material.zContourSpacing ?? 1}
-                onChange={(v) => updatePlotMaterial(selected.id, { zContourSpacing: clampContourSpacing(v) })}
-              />
-            </>
-          ) : null}
-          <label className="checkbox-row">
-            <input
-              type="checkbox"
-              checked={Boolean(selected.material.yContoursVisible)}
-              onChange={(e) => updatePlotMaterial(selected.id, { yContoursVisible: e.target.checked })}
-            />
-            Y contours
-          </label>
-          {selected.material.yContoursVisible ? (
-            <>
-              <label>
-                Y contour color
-                <input
-                  type="color"
-                  value={selected.material.yContourColor ?? '#000000'}
-                  onChange={(e) => updatePlotMaterial(selected.id, { yContourColor: e.target.value })}
-                />
-              </label>
-              <RangeField
-                label="Y contour spacing"
-                min={0.1}
-                max={5}
-                step={0.1}
-                value={selected.material.yContourSpacing ?? 1}
-                onChange={(v) => updatePlotMaterial(selected.id, { yContourSpacing: clampContourSpacing(v) })}
-              />
-            </>
-          ) : null}
-          <label className="checkbox-row">
-            <input
-              type="checkbox"
-              checked={Boolean(selected.material.xContoursVisible)}
-              onChange={(e) => updatePlotMaterial(selected.id, { xContoursVisible: e.target.checked })}
-            />
-            X contours
-          </label>
-          {selected.material.xContoursVisible ? (
-            <>
-              <label>
-                X contour color
-                <input
-                  type="color"
-                  value={selected.material.xContourColor ?? '#000000'}
-                  onChange={(e) => updatePlotMaterial(selected.id, { xContourColor: e.target.value })}
-                />
-              </label>
-              <RangeField
-                label="X contour spacing"
-                min={0.1}
-                max={5}
-                step={0.1}
-                value={selected.material.xContourSpacing ?? 1}
-                onChange={(v) => updatePlotMaterial(selected.id, { xContourSpacing: clampContourSpacing(v) })}
-              />
-            </>
-          ) : null}
-        </>
+              );
+            })}
+          </div>
+        </CollapsibleSection>
       ) : null}
+    </div>
+  );
+}
+
+type ContourAxis = 'x' | 'y' | 'z';
+
+const CONTOUR_AXES: readonly ContourAxis[] = ['z', 'y', 'x'];
+
+function contourAxisState(material: MaterialParams, axis: ContourAxis): { visible: boolean; color: string; spacing: number } {
+  switch (axis) {
+    case 'x':
+      return {
+        visible: Boolean(material.xContoursVisible),
+        color: material.xContourColor ?? '#000000',
+        spacing: material.xContourSpacing ?? 1,
+      };
+    case 'y':
+      return {
+        visible: Boolean(material.yContoursVisible),
+        color: material.yContourColor ?? '#000000',
+        spacing: material.yContourSpacing ?? 1,
+      };
+    case 'z':
+      return {
+        visible: Boolean(material.zContoursVisible),
+        color: material.zContourColor ?? '#000000',
+        spacing: material.zContourSpacing ?? 1,
+      };
+  }
+}
+
+function contourAxisPatch(
+  axis: ContourAxis,
+  patch: { visible?: boolean; color?: string; spacing?: number },
+): Partial<MaterialParams> {
+  switch (axis) {
+    case 'x':
+      return {
+        ...(patch.visible !== undefined ? { xContoursVisible: patch.visible } : null),
+        ...(patch.color !== undefined ? { xContourColor: patch.color } : null),
+        ...(patch.spacing !== undefined ? { xContourSpacing: patch.spacing } : null),
+      };
+    case 'y':
+      return {
+        ...(patch.visible !== undefined ? { yContoursVisible: patch.visible } : null),
+        ...(patch.color !== undefined ? { yContourColor: patch.color } : null),
+        ...(patch.spacing !== undefined ? { yContourSpacing: patch.spacing } : null),
+      };
+    case 'z':
+      return {
+        ...(patch.visible !== undefined ? { zContoursVisible: patch.visible } : null),
+        ...(patch.color !== undefined ? { zContourColor: patch.color } : null),
+        ...(patch.spacing !== undefined ? { zContourSpacing: patch.spacing } : null),
+      };
+  }
+}
+
+function ContourAxisRow({
+  axis,
+  state,
+  onPatch,
+  clampSpacing,
+}: {
+  axis: ContourAxis;
+  state: { visible: boolean; color: string; spacing: number };
+  onPatch: (patch: Partial<MaterialParams>) => void;
+  clampSpacing: (value: number) => number;
+}) {
+  return (
+    <>
+      <label className="checkbox-row contour-grid__toggle">
+        <input
+          type="checkbox"
+          checked={state.visible}
+          onChange={(e) => onPatch(contourAxisPatch(axis, { visible: e.target.checked }))}
+        />
+        {axis.toUpperCase()}
+      </label>
+      <input
+        type="color"
+        value={state.color}
+        disabled={!state.visible}
+        aria-label={`${axis.toUpperCase()} contour color`}
+        onChange={(e) => onPatch(contourAxisPatch(axis, { color: e.target.value }))}
+      />
+      <input
+        type="number"
+        min={0.1}
+        max={5}
+        step={0.1}
+        value={state.spacing}
+        disabled={!state.visible}
+        aria-label={`${axis.toUpperCase()} contour spacing`}
+        onChange={(e) => onPatch(contourAxisPatch(axis, { spacing: clampSpacing(Number(e.target.value)) }))}
+      />
+    </>
+  );
+}
+
+function CollapsibleSection({
+  title,
+  defaultOpen,
+  children,
+}: {
+  title: string;
+  defaultOpen: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="collapsible">
+      <button
+        type="button"
+        className="collapsible__header"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span className={`collapsible__chevron${open ? ' is-open' : ''}`} aria-hidden="true">▸</span>
+        {title}
+      </button>
+      {open ? <div className="collapsible__body">{children}</div> : null}
     </div>
   );
 }
@@ -375,6 +437,10 @@ function LightingTab({ selected }: { selected: PlotObject | PointLightObject | n
             <input type="color" value={scene.directional.color} onChange={(e) => updateScene({ directional: { ...scene.directional, color: e.target.value } })} />
           </label>
           <RangeField label="Intensity" min={0} max={4} step={0.01} value={scene.directional.intensity} onChange={(v) => updateScene({ directional: { ...scene.directional, intensity: v } })} />
+          <SunAngleFields
+            direction={scene.directional.direction}
+            onChange={(direction) => updateScene({ directional: { ...scene.directional, direction } })}
+          />
           <NumberTriplet
             label="Direction (points toward scene)"
             value={scene.directional.direction}
@@ -389,14 +455,21 @@ function LightingTab({ selected }: { selected: PlotObject | PointLightObject | n
           </label>
           {scene.directional.castShadows ? (
             <>
-              <RangeField
-                label="Shadow map resolution"
-                min={256}
-                max={4096}
-                step={256}
-                value={scene.shadow.shadowMapResolution}
-                onChange={(v) => updateScene({ shadow: { ...scene.shadow, shadowMapResolution: Math.round(v) } })}
-              />
+              <label>
+                Shadow map resolution
+                <select
+                  value={String(scene.shadow.shadowMapResolution)}
+                  onChange={(e) => updateScene({ shadow: { ...scene.shadow, shadowMapResolution: Number(e.target.value) } })}
+                >
+                  {![512, 1024, 2048, 4096].includes(scene.shadow.shadowMapResolution) ? (
+                    <option value={String(scene.shadow.shadowMapResolution)}>{scene.shadow.shadowMapResolution}</option>
+                  ) : null}
+                  <option value="512">512</option>
+                  <option value="1024">1024</option>
+                  <option value="2048">2048</option>
+                  <option value="4096">4096</option>
+                </select>
+              </label>
               <RangeField
                 label="Shadow softness"
                 min={0}
@@ -414,6 +487,55 @@ function LightingTab({ selected }: { selected: PlotObject | PointLightObject | n
         <div className="inspector-note">Selected point light can also be edited in the Object tab.</div>
       ) : null}
     </div>
+  );
+}
+
+function SunAngleFields({
+  direction,
+  onChange,
+}: {
+  direction: { x: number; y: number; z: number };
+  onChange: (direction: { x: number; y: number; z: number }) => void;
+}) {
+  // The sliders describe where the light comes FROM (like a sun position);
+  // the stored vector is the travel direction, i.e. its negation.
+  const length = Math.hypot(direction.x, direction.y, direction.z) || 1;
+  const sourceX = -direction.x / length;
+  const sourceY = -direction.y / length;
+  const sourceZ = -direction.z / length;
+  const elevationDeg = (Math.asin(Math.min(1, Math.max(-1, sourceZ))) * 180) / Math.PI;
+  const azimuthDeg = ((Math.atan2(sourceY, sourceX) * 180) / Math.PI + 360) % 360;
+
+  const applyAngles = (nextAzimuthDeg: number, nextElevationDeg: number) => {
+    const azimuth = (nextAzimuthDeg * Math.PI) / 180;
+    const elevation = (Math.min(89, Math.max(-89, nextElevationDeg)) * Math.PI) / 180;
+    const cosElevation = Math.cos(elevation);
+    onChange({
+      x: -(cosElevation * Math.cos(azimuth)),
+      y: -(cosElevation * Math.sin(azimuth)),
+      z: -Math.sin(elevation),
+    });
+  };
+
+  return (
+    <>
+      <RangeField
+        label="Sun azimuth (°)"
+        min={0}
+        max={360}
+        step={1}
+        value={Math.round(azimuthDeg)}
+        onChange={(v) => applyAngles(v, elevationDeg)}
+      />
+      <RangeField
+        label="Sun elevation (°)"
+        min={-89}
+        max={89}
+        step={1}
+        value={Math.round(elevationDeg)}
+        onChange={(v) => applyAngles(azimuthDeg, v)}
+      />
+    </>
   );
 }
 
@@ -486,7 +608,17 @@ function SceneTab() {
         Axes
       </label>
       {scene.axesVisible ? (
-        <RangeField label="Axes Length" min={1} max={30} step={0.5} value={scene.axesLength} onChange={(v) => updateScene({ axesLength: v })} />
+        <>
+          <RangeField label="Axes Length" min={1} max={30} step={0.5} value={scene.axesLength} onChange={(v) => updateScene({ axesLength: v })} />
+          <label className="checkbox-row">
+            <input
+              type="checkbox"
+              checked={scene.axisLabelsVisible}
+              onChange={(e) => updateScene({ axisLabelsVisible: e.target.checked })}
+            />
+            Axis labels
+          </label>
+        </>
       ) : null}
       <BoundsEditor />
     </div>
@@ -750,14 +882,18 @@ function RangeField({
   onDragStart?: () => void;
   onDragEnd?: () => void;
 }) {
+  // Typed values may exceed the nominal slider bounds; the slider range grows
+  // to include the current value so it never snaps the value back.
+  const sliderMin = Math.min(min, Number.isFinite(value) ? value : min);
+  const sliderMax = Math.max(max, Number.isFinite(value) ? value : max);
   return (
     <label className="range-field">
       <span>{label}</span>
       <div className="range-field__controls">
         <input
           type="range"
-          min={min}
-          max={max}
+          min={sliderMin}
+          max={sliderMax}
           step={step}
           value={value}
           onChange={(e) => {
@@ -768,7 +904,7 @@ function RangeField({
           onPointerCancel={onDragEnd}
           onBlur={onDragEnd}
         />
-        <input type="number" min={min} max={max} step={step} value={Number.isFinite(value) ? value : 0} onChange={(e) => onChange(Number(e.target.value))} />
+        <input type="number" step={step} value={Number.isFinite(value) ? value : 0} onChange={(e) => onChange(Number(e.target.value))} />
       </div>
     </label>
   );

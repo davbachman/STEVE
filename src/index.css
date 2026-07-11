@@ -254,7 +254,7 @@ input[type='color'] {
 
 .object-card {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 0.4rem;
   padding: 0.25rem 0.3rem 0.25rem 0.4rem;
@@ -294,6 +294,69 @@ input[type='color'] {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 0.86rem;
+}
+
+.object-card__swatch {
+  flex: none;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+}
+
+.object-card__spinner {
+  flex: none;
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  border: 2px solid rgba(160, 190, 235, 0.25);
+  border-top-color: rgba(160, 190, 235, 0.95);
+  animation: object-card-spin 0.8s linear infinite, object-card-appear 0.15s ease 0.35s both;
+}
+
+.object-card__error {
+  flex: none;
+  width: 0.95rem;
+  height: 0.95rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgba(220, 80, 80, 0.85);
+  color: #fff;
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+@keyframes object-card-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes object-card-appear {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.object-card__actions {
+  display: none;
+  gap: 0.15rem;
+}
+
+.object-card:hover .object-card__actions,
+.object-card:focus-within .object-card__actions {
+  display: inline-flex;
+}
+
+.object-card__action {
+  padding: 0.1rem 0.4rem;
+  font-size: 0.85rem;
+  line-height: 1.3;
+}
+
+.object-card__action--danger:hover {
+  border-color: rgba(220, 80, 80, 0.8);
+  color: #ff9b9b;
 }
 
 .object-card__toggle {
@@ -382,6 +445,61 @@ input[type='color'] {
   color: #ffb0a6;
   background: rgba(255, 109, 87, 0.08);
   border-color: rgba(255, 109, 87, 0.22);
+}
+
+.equation-editor__input {
+  position: relative;
+}
+
+.equation-editor__help-toggle {
+  position: absolute;
+  top: 0.3rem;
+  right: 0.3rem;
+  z-index: 5;
+  padding: 0.1rem 0.45rem;
+  font-size: 0.75rem;
+  font-style: italic;
+  opacity: 0.75;
+}
+
+.equation-editor__help-toggle:hover,
+.equation-editor__help-toggle[aria-expanded='true'] {
+  opacity: 1;
+}
+
+.equation-help {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  z-index: 30;
+  width: min(34rem, 90vw);
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.65rem 0.8rem;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(10, 15, 25, 0.96);
+  backdrop-filter: blur(10px);
+  color: #ccd8ea;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.equation-help__row {
+  display: grid;
+  grid-template-columns: 5rem 1fr;
+  gap: 0.5rem;
+}
+
+.equation-help__label {
+  color: #8fa0b8;
+  font-weight: 600;
+}
+
+.equation-help code {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  padding: 0 0.25rem;
 }
 
 .equation-editor {
@@ -590,6 +708,50 @@ input[type='color'] {
   outline: none;
 }
 
+.viewport-toolbar {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 11;
+  display: flex;
+  gap: 0.3rem;
+  padding: 0.3rem;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(8, 12, 20, 0.72);
+  backdrop-filter: blur(8px);
+}
+
+.viewport-toolbar button {
+  padding: 0.25rem 0.55rem;
+  font-size: 0.8rem;
+  line-height: 1.2;
+}
+
+.viewport-hint {
+  position: absolute;
+  bottom: 0.75rem;
+  left: 0.75rem;
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: calc(100% - 1.5rem);
+  padding: 0.4rem 0.4rem 0.4rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(8, 12, 20, 0.78);
+  backdrop-filter: blur(8px);
+  color: #b9c6da;
+  font-size: 0.78rem;
+}
+
+.viewport-hint button {
+  padding: 0 0.45rem;
+  font-size: 0.85rem;
+  line-height: 1.4;
+}
+
 .viewport-overlay {
   position: absolute;
   left: 0.75rem;
@@ -675,6 +837,61 @@ input[type='color'] {
 .range-field {
   display: grid;
   gap: 0.25rem;
+}
+
+.collapsible {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.collapsible__header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.45rem;
+  text-align: left;
+  font-size: 0.85rem;
+}
+
+.collapsible__chevron {
+  display: inline-block;
+  transition: transform 0.12s ease;
+}
+
+.collapsible__chevron.is-open {
+  transform: rotate(90deg);
+}
+
+.collapsible__body {
+  display: grid;
+  gap: 0.45rem;
+  padding-left: 0.35rem;
+}
+
+.contour-grid {
+  display: grid;
+  grid-template-columns: auto 3.2rem 1fr;
+  gap: 0.35rem 0.5rem;
+  align-items: center;
+}
+
+.contour-grid__heading {
+  font-size: 0.72rem;
+  color: #92a1b7;
+}
+
+.contour-grid input[type='color'] {
+  width: 100%;
+  min-width: 2.6rem;
+  padding: 0;
+}
+
+.contour-grid input[type='number'] {
+  width: 100%;
+}
+
+.contour-grid input:disabled {
+  opacity: 0.4;
 }
 
 .parameter-editor {

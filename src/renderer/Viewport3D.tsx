@@ -1,10 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AppState } from '../state/store';
 import { useAppStore } from '../state/store';
-import { SceneController, type ViewportApi } from './SceneController';
+import { SceneController, type ViewPreset, type ViewportApi } from './SceneController';
 
 interface Viewport3DProps {
   onApiReady?: (api: ViewportApi | null) => void;
+}
+
+const CONTROLS_HINT_DISMISSED_KEY = 'steve:viewportHintDismissed';
+
+function readHintDismissed(): boolean {
+  try {
+    return window.localStorage.getItem(CONTROLS_HINT_DISMISSED_KEY) === '1';
+  } catch {
+    return false;
+  }
 }
 
 export function Viewport3D({ onApiReady }: Viewport3DProps) {
@@ -13,6 +23,7 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
   const controllerRef = useRef<SceneController | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [controllerReady, setControllerReady] = useState(false);
+  const [hintVisible, setHintVisible] = useState(() => !readHintDismissed());
 
   const scene = useAppStore((s) => s.scene);
   const render = useAppStore((s) => s.render);
@@ -93,9 +104,55 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
     };
   }, [controllerReady]);
 
+  const applyViewPreset = (preset: ViewPreset) => {
+    controllerRef.current?.setViewPreset(preset);
+  };
+
+  const dismissHint = () => {
+    setHintVisible(false);
+    try {
+      window.localStorage.setItem(CONTROLS_HINT_DISMISSED_KEY, '1');
+    } catch {
+      // localStorage may be unavailable; the hint just reappears next session.
+    }
+  };
+
   return (
     <div ref={shellRef} className="viewport-shell">
       <canvas ref={canvasRef} className="viewport-canvas" />
+      {!error && controllerReady ? (
+        <div className="viewport-toolbar" role="toolbar" aria-label="View controls">
+          <button onClick={() => applyViewPreset('top')} title="Top view (looking down the z axis)">Top</button>
+          <button onClick={() => applyViewPreset('front')} title="Front view (looking along the y axis)">Front</button>
+          <button onClick={() => applyViewPreset('side')} title="Side view (looking along the x axis)">Side</button>
+          <button
+            onClick={() => controllerRef.current?.frameObject(null)}
+            title="Frame the selected object, or everything (also: double-click the viewport)"
+            aria-label="Frame selection"
+          >
+            ⛶
+          </button>
+          <button onClick={() => applyViewPreset('default')} title="Reset camera to the default view" aria-label="Reset view">
+            ⌂
+          </button>
+          <button
+            onClick={() => setHintVisible((visible) => !visible)}
+            title="Viewport controls"
+            aria-label="Toggle viewport controls hint"
+            aria-pressed={hintVisible}
+          >
+            ?
+          </button>
+        </div>
+      ) : null}
+      {!error && controllerReady && hintVisible ? (
+        <div className="viewport-hint" role="note">
+          <span>
+            Right-drag orbit · Shift + right-drag pan · Scroll zoom · Left-drag move object · Double-click frame
+          </span>
+          <button onClick={dismissHint} title="Dismiss" aria-label="Dismiss controls hint">×</button>
+        </div>
+      ) : null}
       {error ? (
         <div className="viewport-overlay viewport-overlay--error">
           <h3>WebGL2 Required</h3>

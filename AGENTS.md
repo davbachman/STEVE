@@ -15,7 +15,9 @@ Current product direction is interactive rendering only. The Babylon and legacy 
 - Multi-object 3D scenes with plot objects and point lights
 - Equation editing with live parse/classification and LaTeX preview
 - Animated equation constants (per-parameter play/pause and speed, ping-pong between bounds)
-- Perspective and orthographic camera projections
+- Perspective and orthographic camera projections, view presets (top/front/side/reset), double-click framing
+- Axis tick labels, function autocomplete with a syntax reference, per-object duplicate/delete and mesh-progress indicators
+- PNG export at 1×/2×/4× resolution
 - Interactive PBR materials, lighting, shadows, reflections (per-plot probes plus a planar ground mirror), and screen-space refraction
 - Object selection/dragging and inspector editing
 - Local save/load and PNG/STL export
