@@ -180,17 +180,22 @@ input[type='color'] {
   backdrop-filter: blur(14px);
 }
 
-.top-bar__menu-popover button {
+.top-bar__menu-popover button,
+.top-bar__menu-popover a {
+  display: block;
   width: 100%;
   padding: 0.45rem 0.6rem;
   border-color: transparent;
   border-radius: 7px;
   background: transparent;
   box-shadow: none;
+  color: #e6edf7;
   text-align: left;
+  text-decoration: none;
 }
 
-.top-bar__menu-popover button:hover:not(:disabled) {
+.top-bar__menu-popover button:hover:not(:disabled),
+.top-bar__menu-popover a:hover {
   background: rgba(91, 151, 224, 0.16);
 }
 

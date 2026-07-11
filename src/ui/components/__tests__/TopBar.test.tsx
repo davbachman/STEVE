@@ -49,6 +49,9 @@ describe('TopBar menus', () => {
     expect(steveButton.querySelector('strong')?.textContent).toBe('STEVE');
     act(() => steveButton.click());
     expect(menuItemTexts(host, 'STEVE menu')).toEqual(['About', 'Settings']);
+    const aboutLink = host.querySelector('[role="menuitem"][href="https://github.com/davbachman/STEVE"]');
+    expect(aboutLink?.getAttribute('target')).toBe('_blank');
+    expect(aboutLink?.getAttribute('rel')).toBe('noopener noreferrer');
 
     act(() => buttonWithText(host, 'Settings').click());
     expect(host.querySelector('[role="dialog"]')).toBeInstanceOf(HTMLElement);

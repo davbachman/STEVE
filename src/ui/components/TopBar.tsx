@@ -107,15 +107,6 @@ export function TopBar({
     })();
   };
 
-  const handleOpenAbout = () => {
-    const opened = window.open(APP_GITHUB_URL, '_blank', 'noopener,noreferrer');
-    if (opened) {
-      opened.opener = null;
-      return;
-    }
-    window.location.assign(APP_GITHUB_URL);
-  };
-
   const openSettings = () => {
     setActiveMenu(null);
     setSettingsOpen(true);
@@ -143,7 +134,15 @@ export function TopBar({
             </button>
             {activeMenu === 'steve' ? (
               <div className="top-bar__menu-popover" role="menu" aria-label="STEVE menu">
-                <button type="button" role="menuitem" onClick={() => closeMenusThen(handleOpenAbout)}>About</button>
+                <a
+                  role="menuitem"
+                  href={APP_GITHUB_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => setActiveMenu(null)}
+                >
+                  About
+                </a>
                 <button type="button" role="menuitem" onClick={openSettings}>Settings</button>
               </div>
             ) : null}
