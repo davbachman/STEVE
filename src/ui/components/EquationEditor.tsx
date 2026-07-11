@@ -48,6 +48,7 @@ const EDITOR_EXTENSIONS = [
 
 export function EquationEditor({ equation, onChange }: EquationEditorProps) {
   const source = equation.source;
+  const graphExpression = equation.kind === 'explicit_surface' && equation.graphExpression;
   const [helpOpen, setHelpOpen] = useState(false);
 
   return (
@@ -78,22 +79,26 @@ export function EquationEditor({ equation, onChange }: EquationEditorProps) {
         >
           ƒx
         </button>
-        {helpOpen ? <SyntaxHelp /> : null}
+        {helpOpen ? <SyntaxHelp graphExpression={Boolean(graphExpression)} /> : null}
       </div>
       <LatexPreview latex={source.formattedLatex} fallbackText={source.rawText} />
     </div>
   );
 }
 
-function SyntaxHelp() {
+function SyntaxHelp({ graphExpression }: { graphExpression: boolean }) {
   return (
     <div className="equation-help" role="note" aria-label="Equation syntax reference">
       <div className="equation-help__row">
         <span className="equation-help__label">Forms</span>
-        <span>
-          <code>z = f(x, y)</code> · <code>F(x, y, z) = 0</code> · curve <code>(x(t), y(t), z(t))</code> · surface{' '}
-          <code>(x(u,v), y(u,v), z(u,v))</code>
-        </span>
+        {graphExpression ? (
+          <span>Enter <code>f(x, y)</code> directly, such as <code>x^2 - y^2</code>; <code>z =</code> is supplied automatically.</span>
+        ) : (
+          <span>
+            <code>z = f(x, y)</code> · <code>F(x, y, z) = 0</code> · curve <code>(x(t), y(t), z(t))</code> · surface{' '}
+            <code>(x(u,v), y(u,v), z(u,v))</code>
+          </span>
+        )}
       </div>
       <div className="equation-help__row">
         <span className="equation-help__label">Functions</span>

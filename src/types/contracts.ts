@@ -52,7 +52,7 @@ export interface ParseDiagnostic {
 
 export interface EquationClassification {
   kind: EquationObjectKind | 'unknown';
-  label: 'Curve' | 'Surface' | 'Implicit' | 'Explicit->Parametric' | 'Unknown';
+  label: 'Curve' | 'Surface' | 'Implicit' | 'Graph' | 'Explicit->Parametric' | 'Unknown';
   warning?: string;
 }
 
@@ -121,6 +121,8 @@ export interface ParametricSurfaceSpec extends BaseEquationSpec {
 
 export interface ExplicitSurfaceSpec extends BaseEquationSpec {
   kind: 'explicit_surface';
+  /** Graph objects accept only f(x,y); z = is supplied internally. */
+  graphExpression?: boolean;
   solvedAxis: Axis;
   domainAxes: [Axis, Axis];
   domain: Domain2D;
@@ -262,7 +264,7 @@ export interface ParseClassifyResult {
 export type WorkerJobPriority = 'preview' | 'refine' | 'interactive' | 'background';
 
 export type WorkerRequest =
-  | { type: 'parse_and_classify'; jobId: UUID; objectId: UUID; rawText: string }
+  | { type: 'parse_and_classify'; jobId: UUID; objectId: UUID; rawText: string; graphExpression?: boolean }
   | {
       type: 'build_parametric_mesh';
       jobId: UUID;

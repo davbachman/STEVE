@@ -8,6 +8,26 @@ const CONSTANT_NAMES = new Set(['pi', 'e']);
 const AXES: Axis[] = ['x', 'y', 'z'];
 
 export function analyzeEquationText(rawText: string): ParseClassifyResult {
+  return analyzeText(rawText, classifyAst);
+}
+
+export function analyzeGraphExpression(rawText: string): ParseClassifyResult {
+  return analyzeText(rawText, classifyGraphAst);
+}
+
+type ClassificationInfo = {
+  kind: ParseClassifyResult['inferredKind'];
+  label: EquationClassification['label'];
+  parameterNames: string[];
+  explicitAxis?: Axis;
+  explicitDomainAxes?: [Axis, Axis];
+  warning?: string;
+};
+
+function analyzeText(
+  rawText: string,
+  classify: (ast: Expression) => ClassificationInfo,
+): ParseClassifyResult {
   const parsed = parseMath(rawText);
   const source = {
     rawText,
@@ -27,7 +47,7 @@ export function analyzeEquationText(rawText: string): ParseClassifyResult {
     };
   }
 
-  const classificationInfo = classifyAst(parsed.ast);
+  const classificationInfo = classify(parsed.ast);
   const classification: EquationClassification = {
     kind: classificationInfo.kind,
     label: classificationInfo.label,
@@ -52,14 +72,7 @@ function safeLatex(ast: Expression): string | undefined {
   }
 }
 
-function classifyAst(ast: Expression): {
-  kind: ParseClassifyResult['inferredKind'];
-  label: EquationClassification['label'];
-  parameterNames: string[];
-  explicitAxis?: Axis;
-  explicitDomainAxes?: [Axis, Axis];
-  warning?: string;
-} {
+function classifyAst(ast: Expression): ClassificationInfo {
   const identifiers = nonConstantNames(collectIdentifiers(ast));
 
   if (ast.type === 'tuple' && ast.items.length === 3) {
@@ -124,6 +137,26 @@ function classifyAst(ast: Expression): {
     label: 'Unknown',
     parameterNames: [],
     warning: 'Expected a 3-tuple or equality expression.',
+  };
+}
+
+function classifyGraphAst(ast: Expression): ClassificationInfo {
+  const identifiers = nonConstantNames(collectIdentifiers(ast));
+  const reservedVars = pickNames(identifiers, ['x', 'y', 'z', 't', 'u', 'v']);
+  if (ast.type === 'equality' || ast.type === 'tuple' || !isSubset(reservedVars, ['x', 'y'])) {
+    return {
+      kind: 'unknown',
+      label: 'Unknown',
+      parameterNames: [],
+      warning: 'Enter a function of x and y only; Graph objects supply z = automatically.',
+    };
+  }
+  return {
+    kind: 'explicit_surface',
+    label: 'Graph',
+    parameterNames: orderedNames(excludeNames(identifiers, ['x', 'y'])),
+    explicitAxis: 'z',
+    explicitDomainAxes: ['x', 'y'],
   };
 }
 

@@ -14,7 +14,7 @@ import type {
   RenderSettings,
   UUID,
 } from '../types/contracts';
-import { analyzeEquationText } from '../math/classifier';
+import { analyzeEquationText, analyzeGraphExpression } from '../math/classifier';
 import {
   DEFAULT_DISCRETE_PARAMETER_COUNT,
   clampAnimationSpeed,
@@ -26,6 +26,7 @@ import {
   APP_VERSION,
   createBlankPlot,
   createDefaultCurve,
+  createDefaultGraph,
   createDefaultImplicit,
   createDefaultObjects,
   createDefaultSurface,
@@ -65,7 +66,7 @@ interface AppStateShape {
 interface AppActions {
   setInspectorTab: (tab: AppState['ui']['inspectorTab']) => void;
   selectObject: (id: UUID | null) => void;
-  addPlot: (template?: 'curve' | 'surface' | 'implicit') => void;
+  addPlot: (template?: 'curve' | 'graph' | 'surface' | 'implicit') => void;
   addPointLight: () => void;
   updatePlotEquationText: (id: UUID, rawText: string) => void;
   updatePlotSpec: (id: UUID, updater: (spec: EquationSpec) => EquationSpec) => void;
@@ -230,7 +231,8 @@ function makeExplicitSpec(rawText: string): EquationSpec {
 }
 
 function coerceEquationSpec(existing: EquationSpec, rawText: string, forcedKind?: EquationSpec['kind']): EquationSpec {
-  const analyzed = analyzeEquationText(rawText);
+  const graphExpression = existing.kind === 'explicit_surface' && existing.graphExpression;
+  const analyzed = graphExpression ? analyzeGraphExpression(rawText) : analyzeEquationText(rawText);
   const inferred = forcedKind ?? analyzed.inferredKind;
   const source = analyzed.source;
   const nextParameters =
@@ -265,6 +267,7 @@ function coerceEquationSpec(existing: EquationSpec, rawText: string, forcedKind?
     const priorDomain = keepSurfaceDomain(existing);
     return {
       kind: 'explicit_surface',
+      graphExpression: graphExpression || undefined,
       source,
       parameters: nextParameters,
       solvedAxis: analyzed.explicitAxis ?? (existing.kind === 'explicit_surface' ? existing.solvedAxis : 'z'),
@@ -413,11 +416,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       const actualPlot =
         template === 'curve'
           ? createDefaultCurve(`Curve ${countPlotsByKind(state.objects, 'curve') + 1}`)
+          : template === 'graph'
+            ? createDefaultGraph(`Graph ${countPlotsByKind(state.objects, 'graph') + 1}`)
           : template === 'surface'
-            ? createDefaultSurface(`Surface ${countPlotsByKind(state.objects, 'surface') + 1}`)
+            ? createDefaultSurface(`Parametric ${countPlotsByKind(state.objects, 'parametric') + 1}`)
             : template === 'implicit'
               ? createDefaultImplicit(`Implicit ${countPlotsByKind(state.objects, 'implicit') + 1}`)
-              : createBlankPlot(`Surface ${countPlotsByKind(state.objects, 'surface') + 1}`);
+              : createBlankPlot(`Surface ${countPlotsByKind(state.objects, 'graph') + 1}`);
       return {
         ...state,
         objects: [...state.objects, actualPlot],
@@ -796,7 +801,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         } catch {
           // use text as equation
         }
-        const newPlot = createBlankPlot(`Surface ${countPlotsByKind(state.objects, 'surface') + 1}`);
+        const newPlot = createBlankPlot(`Surface ${countPlotsByKind(state.objects, 'graph') + 1}`);
         newPlot.equation = makeExplicitSpec(trimmed);
         pasteFromObject(newPlot);
         return;
@@ -1120,7 +1125,11 @@ function normalizeEquationSpecImport(
   const rawText = asNonEmptyString(sourceInput?.rawText) ?? fallback.source.rawText;
   const requestedKind =
     asEnum(equationInput.kind, ['parametric_curve', 'parametric_surface', 'implicit_surface', 'explicit_surface']) ?? undefined;
-  const base = coerceEquationSpec(fallback, rawText, requestedKind);
+  const graphExpression = asBoolean(equationInput.graphExpression) ?? false;
+  const coercionFallback = graphExpression && fallback.kind === 'explicit_surface'
+    ? { ...fallback, graphExpression: true }
+    : fallback;
+  const base = coerceEquationSpec(coercionFallback, rawText, requestedKind);
 
   if (base.kind === 'parametric_curve') {
     const tDomainInput = asRecord(equationInput.tDomain);
@@ -1144,6 +1153,7 @@ function normalizeEquationSpecImport(
   if (base.kind === 'explicit_surface') {
     return {
       ...base,
+      graphExpression: graphExpression || base.graphExpression || undefined,
       parameters: normalizeEquationParameters(equationInput.parameters, base.parameters),
       solvedAxis: asEnum(equationInput.solvedAxis, ['x', 'y', 'z']) ?? base.solvedAxis,
       domainAxes: normalizeExplicitDomainAxes(equationInput.domainAxes, base.domainAxes),
@@ -1273,7 +1283,7 @@ function normalizeEquationParameters(
   });
 }
 
-function countPlotsByKind(objects: SceneObject[], kind: 'curve' | 'surface' | 'implicit'): number {
+function countPlotsByKind(objects: SceneObject[], kind: 'curve' | 'graph' | 'parametric' | 'implicit'): number {
   return objects.filter((obj) => {
     if (obj.type !== 'plot') {
       return false;
@@ -1281,10 +1291,16 @@ function countPlotsByKind(objects: SceneObject[], kind: 'curve' | 'surface' | 'i
     if (kind === 'curve') {
       return obj.equation.kind === 'parametric_curve';
     }
+    if (kind === 'graph') {
+      return obj.equation.kind === 'explicit_surface';
+    }
+    if (kind === 'parametric') {
+      return obj.equation.kind === 'parametric_surface';
+    }
     if (kind === 'implicit') {
       return obj.equation.kind === 'implicit_surface';
     }
-    return obj.equation.kind !== 'parametric_curve' && obj.equation.kind !== 'implicit_surface';
+    return false;
   }).length;
 }
 

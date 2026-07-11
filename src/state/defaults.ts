@@ -8,7 +8,7 @@ import type {
   SceneSettings,
   SceneObject,
 } from '../types/contracts';
-import { analyzeEquationText } from '../math/classifier';
+import { analyzeEquationText, analyzeGraphExpression } from '../math/classifier';
 import { syncEquationParameters } from '../math/parameters';
 
 export const APP_VERSION = '0.1.0-dev';
@@ -281,6 +281,14 @@ function analyzedEquation(rawText: string) {
   };
 }
 
+function analyzedGraph(rawText: string) {
+  const analyzed = analyzeGraphExpression(rawText);
+  return {
+    source: analyzed.source,
+    parameters: syncEquationParameters(analyzed.parameterNames),
+  };
+}
+
 export function createDefaultCurve(name = 'Curve'): PlotObject {
   const rawText = '(cos(t), sin(t), 0.2*t)';
   const equationMeta = analyzedEquation(rawText);
@@ -316,6 +324,28 @@ export function createDefaultSurface(name = 'Surface'): PlotObject {
       domain: { uMin: -2, uMax: 2, vMin: -3.14, vMax: 3.14, uSamples: 60, vSamples: 80 },
     },
     material: { ...materialPresets['Glossy Plastic'], baseColor: '#4ea1ff' },
+  };
+}
+
+export function createDefaultGraph(name = 'Graph'): PlotObject {
+  const rawText = 'x^2 - y^2';
+  const equationMeta = analyzedGraph(rawText);
+  return {
+    id: uuidv4(),
+    name,
+    type: 'plot',
+    visible: true,
+    transform: { position: { x: 0, y: 0, z: 0 } },
+    equation: {
+      kind: 'explicit_surface',
+      graphExpression: true,
+      ...equationMeta,
+      solvedAxis: 'z',
+      domainAxes: ['x', 'y'],
+      domain: { uMin: -4, uMax: 4, vMin: -4, vMax: 4, uSamples: 80, vSamples: 80 },
+      compileAsParametric: true,
+    },
+    material: defaultMaterial(),
   };
 }
 

@@ -728,7 +728,6 @@ function EquationParameterEditor({ plot }: { plot: PlotObject }) {
   const beginEquationParameterDrag = useAppStore((s) => s.beginEquationParameterDrag);
   const commitEquationParameterDrag = useAppStore((s) => s.commitEquationParameterDrag);
   const setParameterAnimation = useAppStore((s) => s.setParameterAnimation);
-  const discreteFamiliesEnabled = plot.equation.kind === 'parametric_curve' || plot.equation.kind === 'parametric_surface' || plot.equation.kind === 'implicit_surface';
   if (plot.equation.parameters.length === 0) {
     return null;
   }
@@ -740,35 +739,33 @@ function EquationParameterEditor({ plot }: { plot: PlotObject }) {
         Slide a constant to either end, then type in its box to move that end of the range.
       </div>
       {plot.equation.parameters.map((parameter) => {
-        const isDiscrete = discreteFamiliesEnabled && parameter.samplingMode === 'discrete';
+        const isDiscrete = parameter.samplingMode === 'discrete';
         return (
           <div key={parameter.name} className="equation-parameter">
             <div className="equation-parameter__header">
               <span>{parameter.name}</span>
               <span className="equation-parameter__header-actions">
-                {discreteFamiliesEnabled ? (
-                  <button
-                    type="button"
-                    className={parameter.samplingMode === 'discrete' ? 'equation-parameter__mode equation-parameter__mode--active' : 'equation-parameter__mode'}
-                    onClick={() => {
-                      updatePlotSpec(plot.id, (spec) => ({
-                        ...spec,
-                        parameters: updateEquationParameterSamplingMode(
-                          spec.parameters,
-                          parameter.name,
-                          parameter.samplingMode === 'discrete' ? 'continuous' : 'discrete',
-                        ),
-                      }));
-                      if (parameter.animating) {
-                        // Playback has different meanings in each mode, so a mode
-                        // switch always starts with the new mode paused.
-                        setParameterAnimation(plot.id, parameter.name, { animating: false });
-                      }
-                    }}
-                  >
-                    {parameter.samplingMode === 'discrete' ? 'Discrete' : 'Continuous'}
-                  </button>
-                ) : null}
+                <button
+                  type="button"
+                  className={parameter.samplingMode === 'discrete' ? 'equation-parameter__mode equation-parameter__mode--active' : 'equation-parameter__mode'}
+                  onClick={() => {
+                    updatePlotSpec(plot.id, (spec) => ({
+                      ...spec,
+                      parameters: updateEquationParameterSamplingMode(
+                        spec.parameters,
+                        parameter.name,
+                        parameter.samplingMode === 'discrete' ? 'continuous' : 'discrete',
+                      ),
+                    }));
+                    if (parameter.animating) {
+                      // Playback has different meanings in each mode, so a mode
+                      // switch always starts with the new mode paused.
+                      setParameterAnimation(plot.id, parameter.name, { animating: false });
+                    }
+                  }}
+                >
+                  {parameter.samplingMode === 'discrete' ? 'Discrete' : 'Continuous'}
+                </button>
                 <button
                   type="button"
                   className="parameter-editor__play"
@@ -798,7 +795,7 @@ function EquationParameterEditor({ plot }: { plot: PlotObject }) {
               </span>
             </div>
             <RangeField
-              label={discreteFamiliesEnabled ? 'Value' : parameter.name}
+              label="Value"
               min={parameter.min}
               max={parameter.max}
               step={isDiscrete

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createDefaultGraph } from '../../state/defaults';
 import type { PlotObject } from '../../types/contracts';
 import { analyzeEquationText } from '../classifier';
 import { compilePlotObject } from '../compile';
@@ -50,5 +51,16 @@ describe('plot compilation with parameters', () => {
     }
 
     expect(compiled.fn(4, 1.5)).toEqual([4, 1.5, 10]);
+  });
+
+  it('compiles a Graph expression as z = f(x,y)', () => {
+    const graph = createDefaultGraph();
+    const compiled = compilePlotObject(graph);
+    expect(compiled.kind).toBe('surface');
+    if (compiled.kind !== 'surface') {
+      throw new Error('Expected surface');
+    }
+    expect(graph.equation.source.rawText).toBe('x^2 - y^2');
+    expect(compiled.fn(3, 2)).toEqual([3, 2, 5]);
   });
 });

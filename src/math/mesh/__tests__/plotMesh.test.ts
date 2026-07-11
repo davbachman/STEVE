@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ParametricSurfaceSpec } from '../../../types/contracts';
+import type { ExplicitSurfaceSpec, ParametricSurfaceSpec } from '../../../types/contracts';
 import { analyzeEquationText } from '../../classifier';
 import { buildSerializedEquationMesh } from '../plotMesh';
 
@@ -29,6 +29,34 @@ function parametricSurfaceSpec(): ParametricSurfaceSpec {
   };
 }
 
+function explicitSurfaceSpec(): ExplicitSurfaceSpec {
+  return {
+    kind: 'explicit_surface',
+    source: analyzeEquationText('z = a*x').source,
+    parameters: [{
+      name: 'a',
+      value: 1,
+      min: 1,
+      max: 2,
+      step: 0.1,
+      samplingMode: 'discrete',
+      discreteCount: 2,
+      animating: true,
+    }],
+    solvedAxis: 'z',
+    domainAxes: ['x', 'y'],
+    domain: {
+      uMin: -1,
+      uMax: 1,
+      vMin: -1,
+      vMax: 1,
+      uSamples: 8,
+      vSamples: 6,
+    },
+    compileAsParametric: true,
+  };
+}
+
 describe('plot mesh families', () => {
   it('shows one snapped discrete copy until playback merges the full family', () => {
     const singleVariantMesh = buildSerializedEquationMesh(parametricSurfaceSpec(), {
@@ -53,5 +81,18 @@ describe('plot mesh families', () => {
     expect(familyMesh.indices.length).toBe(singleVariantMesh.indices.length * 2);
     expect(familyMesh.bounds?.max.z).toBeCloseTo(4, 4);
     expect(familyMesh.bounds?.min.z).toBeCloseTo(-4, 4);
+  });
+
+  it('builds discrete families for explicit surfaces', () => {
+    const familyMesh = buildSerializedEquationMesh(explicitSurfaceSpec());
+    const selectedMesh = buildSerializedEquationMesh({
+      ...explicitSurfaceSpec(),
+      parameters: explicitSurfaceSpec().parameters.map((parameter) => ({ ...parameter, animating: false })),
+    });
+
+    expect(familyMesh.positions.length).toBe(selectedMesh.positions.length * 2);
+    expect(familyMesh.indices.length).toBe(selectedMesh.indices.length * 2);
+    expect(familyMesh.bounds?.max.z).toBeCloseTo(2, 4);
+    expect(familyMesh.bounds?.min.z).toBeCloseTo(-2, 4);
   });
 });

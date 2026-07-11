@@ -591,6 +591,7 @@ export class SceneController {
     this.renderOpaqueScene(snapshot, pointLights, pointShadowLights);
     this.renderTransparentScene(snapshot, pointLights, pointShadowLights);
     this.renderSceneAxes(snapshot);
+    this.renderAxisLabels(snapshot);
     this.compositeScene(snapshot);
     this.renderTransparentContourOverlays(snapshot);
     this.renderSelectionMask(snapshot);
@@ -598,7 +599,6 @@ export class SceneController {
     this.renderSelectedFeatureEdges(snapshot);
     this.renderOverlayLines(snapshot);
     this.renderPointLightGizmos(snapshot, programs.gizmo);
-    this.renderAxisLabels(snapshot);
     this.syncRenderDiagnostics(snapshot, pointShadowLights);
   }
 
@@ -614,6 +614,8 @@ export class SceneController {
       return;
     }
     const program = this.renderPrograms!.label;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.renderTargets.sceneFramebuffer);
+    gl.viewport(0, 0, this.renderTargets.width, this.renderTargets.height);
     gl.useProgram(program.program);
     gl.uniformMatrix4fv(program.uniforms.u_view, false, this.viewMatrix);
     gl.uniformMatrix4fv(program.uniforms.u_projection, false, this.projectionMatrix);
@@ -626,13 +628,16 @@ export class SceneController {
     gl.uniform1i(program.uniforms.u_atlas, 0);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    gl.disable(gl.DEPTH_TEST);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.depthMask(false);
     gl.disable(gl.CULL_FACE);
     gl.bindVertexArray(labels.vao);
     gl.drawElements(gl.TRIANGLES, labels.indexCount, gl.UNSIGNED_SHORT, 0);
     gl.bindVertexArray(null);
     gl.disable(gl.BLEND);
-    gl.enable(gl.DEPTH_TEST);
+    gl.depthMask(true);
+    gl.depthFunc(gl.LESS);
   }
 
   private ensureAxisLabelResources(axesLength: number): void {

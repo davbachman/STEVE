@@ -77,7 +77,7 @@ describe('RangeField numeric entry', () => {
       store.addPlot('surface');
       const plot = useAppStore.getState().objects.find((object) => object.type === 'plot');
       if (!plot) throw new Error('Expected plot');
-      useAppStore.getState().updatePlotEquationText(plot.id, '(u, v, a*u)');
+      useAppStore.getState().updatePlotEquationText(plot.id, 'z = a*x');
       useAppStore.getState().setInspectorTab('object');
     });
 
@@ -91,6 +91,8 @@ describe('RangeField numeric entry', () => {
     const modeButton = Array.from(container.querySelectorAll('button')).find(
       (button) => button.textContent === 'Continuous',
     );
+    const plotBeforeToggle = useAppStore.getState().objects.find((object) => object.type === 'plot');
+    expect(plotBeforeToggle?.equation.kind).toBe('explicit_surface');
     expect(modeButton).toBeInstanceOf(HTMLButtonElement);
     act(() => {
       modeButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));

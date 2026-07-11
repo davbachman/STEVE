@@ -13,7 +13,7 @@ ST.E.V.E. is a browser-only interactive 3D graphing app for exploring mathematic
 - Graphs parametric curves in 3D.
 - Graphs parametric surfaces defined by `(x(u,v), y(u,v), z(u,v))`.
 - Graphs implicit surfaces defined by `F(x,y,z)=0`.
-- Graphs explicit surfaces along a single axis such as `z=f(x,y)`, `x=g(y,z)`, or `y=h(x,z)`.
+- Graphs functions `z=f(x,y)` by entering only `f(x,y)`, without requiring the `z=` prefix.
 - Lets you combine multiple plots and lights in one scene.
 - Animates equation constants: press play on any constant's slider to sweep it between its bounds while the surface re-meshes live.
 - Supports perspective and orthographic camera projections, with Top/Front/Side view presets, camera reset, and double-click to frame an object.
@@ -24,10 +24,10 @@ ST.E.V.E. is a browser-only interactive 3D graphing app for exploring mathematic
 
 ## Usage
 
-1. ST.E.V.E. starts with an empty scene. Create objects from the left panel with `+ Curve`, `+ Surface`, `+ Implicit`, and `+ Light`.
+1. ST.E.V.E. starts with an empty scene. Create objects from the left panel with `+ Curve`, `+ Graph`, `+ Parametric`, `+ Implicit`, and `+ Light`.
 2. Select an object from the object list to edit it. Plot objects open in the equation editor, and lights open in the inspector.
-3. Enter or revise the equation for the selected plot. ST.E.V.E. classifies the expression and updates the preview and mesh when the expression is valid.
-4. When ST.E.V.E. detects user-defined constants in a parametric or implicit equation, it adds them to the `Object` inspector under `Constants`.
+3. Enter or revise the equation for the selected plot. For a Graph, enter a function of `x` and `y`, such as `x^2-y^2`; ST.E.V.E. supplies `z=` automatically. Other plot types retain their tuple or equation syntax.
+4. When ST.E.V.E. detects user-defined constants in a plot equation, it adds them to the `Object` inspector under `Constants`.
 5. Constants default to `Continuous`, which evaluates the plot at one parameter value; press the play button to animate a constant between its bounds, and park the slider at either end and type in its box to move that end of the range.
 6. Switching a constant to `Discrete` keeps the same range slider interaction and adds `num copies`. The value slider snaps between those equally spaced levels and shows one copy at a time; press play to show every copy at once. Park the slider at either end and type to set the shared minimum or maximum.
 7. Use the right inspector tabs to change object name, position, domain bounds, sampling density, material settings, lighting, scene options, and render settings.

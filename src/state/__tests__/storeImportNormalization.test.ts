@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createBlankPlot } from '../defaults';
+import { createBlankPlot, createDefaultGraph } from '../defaults';
 import { useAppStore } from '../store';
 
 function baseProject(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -218,5 +218,19 @@ describe('project import normalization', () => {
     }
     expect('isoValue' in plot.equation).toBe(false);
     expect(plot.equation.quality).toBe('medium');
+  });
+
+  it('preserves expression-only Graph objects during import', () => {
+    const project = baseProject({ objects: [createDefaultGraph('Imported Graph')] });
+    useAppStore.getState().replaceProject(project as never);
+
+    const graph = useAppStore.getState().objects[0];
+    expect(graph?.type).toBe('plot');
+    if (graph?.type !== 'plot' || graph.equation.kind !== 'explicit_surface') {
+      throw new Error('Expected imported graph');
+    }
+    expect(graph.equation.graphExpression).toBe(true);
+    expect(graph.equation.source.rawText).toBe('x^2 - y^2');
+    expect(graph.equation.source.classification?.label).toBe('Graph');
   });
 });

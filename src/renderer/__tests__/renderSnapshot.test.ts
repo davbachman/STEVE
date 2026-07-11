@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { createDefaultImplicit, createDefaultSurface, defaultRenderSettings, defaultSceneSettings } from '../../state/defaults';
+import {
+  createDefaultGraph,
+  createDefaultImplicit,
+  createDefaultSurface,
+  defaultRenderSettings,
+  defaultSceneSettings,
+} from '../../state/defaults';
 import type { PlotJobStatus } from '../../types/contracts';
 import {
   INTERACTIVE_OPAQUE_OPACITY_EPSILON,
@@ -7,6 +13,7 @@ import {
   classifyInteractiveShadowMode,
   classifyPlotOpacity,
   createRendererSceneSnapshot,
+  plotSupportsWireframe,
   resolveDirectionalShadowFrustumSize,
   shouldPlotCastInteractiveShadows,
   shouldShowPlotWireframe,
@@ -56,6 +63,20 @@ describe('renderSnapshot helpers', () => {
     surface.material.opacity = 1;
     expect(classifyInteractiveShadowMode(surface)).toBe('solid');
     expect(shouldPlotCastInteractiveShadows(surface)).toBe(true);
+  });
+
+  it('supports wireframe grid lines on expression-only Graph objects', () => {
+    const graph = createDefaultGraph('Grid Graph');
+
+    expect(graph.equation).toMatchObject({
+      kind: 'explicit_surface',
+      graphExpression: true,
+      source: { rawText: 'x^2 - y^2' },
+    });
+    expect(plotSupportsWireframe(graph)).toBe(true);
+
+    graph.material.wireframeVisible = true;
+    expect(shouldShowPlotWireframe(graph)).toBe(true);
   });
 
   it('keeps all non-opaque surfaces on the continuous transparent path', () => {

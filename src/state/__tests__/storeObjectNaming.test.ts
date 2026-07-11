@@ -24,13 +24,22 @@ describe('store object naming', () => {
     const store = useAppStore.getState();
 
     store.addPlot('curve');
+    store.addPlot('graph');
     store.addPlot('surface');
     store.addPointLight();
     store.addPlot('curve');
+    store.addPlot('graph');
     store.addPlot('surface');
     store.addPointLight();
 
-    expect(plotsByName()).toEqual(['Curve 1', 'Surface 1', 'Curve 2', 'Surface 2']);
+    expect(plotsByName()).toEqual([
+      'Curve 1',
+      'Graph 1',
+      'Parametric 1',
+      'Curve 2',
+      'Graph 2',
+      'Parametric 2',
+    ]);
     expect(lightsByName()).toEqual(['Point Light 1', 'Point Light 2']);
   });
 });

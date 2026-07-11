@@ -96,10 +96,14 @@ function compileExplicitSurfaceFunction(
   spec: ExplicitSurfaceSpec,
   ast: Expression,
 ): (u: number, v: number) => [number, number, number] {
-  if (ast.type !== 'equality') {
+  if (!spec.graphExpression && ast.type !== 'equality') {
     throw new Error('Explicit surface must be an equality');
   }
-  const rhs = compileNumericExpression(ast.right);
+  if (spec.graphExpression && (ast.type === 'equality' || ast.type === 'tuple')) {
+    throw new Error('Graph must be a function expression');
+  }
+  const expression = spec.graphExpression ? ast : ast.type === 'equality' ? ast.right : ast;
+  const rhs = compileNumericExpression(expression);
   const parameterVars = equationParameterContext(spec.parameters);
   return (u, v) => {
     const [a1, a2] = spec.domainAxes;

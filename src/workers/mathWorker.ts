@@ -1,6 +1,6 @@
 /// <reference lib="webworker" />
 
-import { analyzeEquationText } from '../math/classifier';
+import { analyzeEquationText, analyzeGraphExpression } from '../math/classifier';
 import type { WorkerRequest, WorkerResponse } from '../types/contracts';
 
 const canceledByObject = new Map<string, number>();
@@ -33,7 +33,9 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
   });
 
   try {
-    const result = analyzeEquationText(req.rawText);
+    const result = req.graphExpression
+      ? analyzeGraphExpression(req.rawText)
+      : analyzeEquationText(req.rawText);
     if (isCanceled(req.objectId)) {
       return;
     }

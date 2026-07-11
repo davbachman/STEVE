@@ -175,6 +175,7 @@ function scheduleParse(
       jobId,
       objectId: plot.id,
       rawText: plot.equation.source.rawText,
+      graphExpression: plot.equation.kind === 'explicit_surface' && plot.equation.graphExpression,
     };
     workers.math?.postMessage(req);
   }, 120);

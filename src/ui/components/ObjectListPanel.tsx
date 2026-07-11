@@ -23,7 +23,7 @@ function objectKindLabel(obj: SceneObject): string {
     case 'parametric_surface':
       return 'Parametric surface';
     case 'explicit_surface':
-      return 'Explicit surface';
+      return obj.equation.graphExpression ? 'Graph' : 'Explicit surface';
     case 'implicit_surface':
       return 'Implicit surface';
   }
@@ -59,7 +59,8 @@ export function ObjectListPanel() {
         <h2>Create</h2>
         <div className="panel__actions panel__actions--stack">
           <button onClick={() => addPlot('curve')}>+ Curve</button>
-          <button onClick={() => addPlot('surface')}>+ Surface</button>
+          <button onClick={() => addPlot('graph')}>+ Graph</button>
+          <button onClick={() => addPlot('surface')}>+ Parametric</button>
           <button onClick={() => addPlot('implicit')}>+ Implicit</button>
           <button onClick={() => addPointLight()}>+ Light</button>
         </div>
