@@ -93,3 +93,57 @@ export function updateEquationParameterValue(
     };
   });
 }
+
+export type ParameterBoundEdge = 'min' | 'max';
+
+/**
+ * Re-pin one end of a parameter's slider range. The value moves to the new
+ * bound (the thumb was parked there when the edit was made), and the step is
+ * refined when the new span would leave the slider too coarse to be useful.
+ */
+export function setEquationParameterBound(
+  parameters: readonly EquationParameter[],
+  name: string,
+  edge: ParameterBoundEdge,
+  bound: number,
+): EquationParameter[] {
+  return parameters.map((parameter) => {
+    if (parameter.name !== name || !Number.isFinite(bound)) {
+      return parameter;
+    }
+    if (edge === 'min' && bound >= parameter.max) {
+      return parameter;
+    }
+    if (edge === 'max' && bound <= parameter.min) {
+      return parameter;
+    }
+    const min = edge === 'min' ? bound : parameter.min;
+    const max = edge === 'max' ? bound : parameter.max;
+    return {
+      ...parameter,
+      min,
+      max,
+      value: bound,
+      step: adaptStepForSpan(parameter.step, max - min),
+    };
+  });
+}
+
+/**
+ * Keep the existing step unless it would give the slider fewer than ~20
+ * positions, in which case refine it to a nice 1/2/5 decade fraction.
+ */
+export function adaptStepForSpan(step: number, span: number): number {
+  if (!Number.isFinite(step) || step <= 0 || !Number.isFinite(span) || span <= 0) {
+    return step;
+  }
+  if (span / step >= 20) {
+    return step;
+  }
+  const target = span / 100;
+  const power = 10 ** Math.floor(Math.log10(target));
+  const normalized = target / power;
+  // Tolerate float slop so a span of exactly 0.1 yields 0.001, not 0.002.
+  const factor = normalized <= 1 + 1e-9 ? 1 : normalized <= 2 + 1e-9 ? 2 : 5;
+  return factor * power;
+}

@@ -3,7 +3,9 @@ import {
   DEFAULT_PARAMETER_ANIMATION_SPEED,
   MAX_PARAMETER_ANIMATION_SPEED,
   MIN_PARAMETER_ANIMATION_SPEED,
+  setEquationParameterBound,
   updateEquationParameterValue,
+  type ParameterBoundEdge,
 } from '../../math/parameters';
 import { materialPresets } from '../../state/defaults';
 import { useAppStore } from '../../state/store';
@@ -729,6 +731,9 @@ function EquationParameterEditor({ plot }: { plot: PlotObject }) {
   return (
     <div className="inspector-section">
       <h3>Constants</h3>
+      <div className="inspector-note">
+        Slide a constant to either end, then type in its box to move that end of the range.
+      </div>
       {plot.equation.parameters.map((parameter) => (
         <div key={parameter.name} className="parameter-editor">
           <div className="parameter-editor__value">
@@ -745,6 +750,15 @@ function EquationParameterEditor({ plot }: { plot: PlotObject }) {
                   ...spec,
                   parameters: updateEquationParameterValue(spec.parameters, parameter.name, value),
                 }))
+              }
+              onSetBound={
+                parameter.animating
+                  ? undefined
+                  : (edge, bound) =>
+                      updatePlotSpec(plot.id, (spec) => ({
+                        ...spec,
+                        parameters: setEquationParameterBound(spec.parameters, parameter.name, edge, bound),
+                      }))
               }
             />
             <button
@@ -872,6 +886,7 @@ function RangeField({
   onChange,
   onDragStart,
   onDragEnd,
+  onSetBound,
 }: {
   label: string;
   min: number;
@@ -881,6 +896,7 @@ function RangeField({
   onChange: (value: number) => void;
   onDragStart?: () => void;
   onDragEnd?: () => void;
+  onSetBound?: (edge: ParameterBoundEdge, value: number) => void;
 }) {
   // Typed values may exceed the nominal slider bounds; the slider range grows
   // to include the current value so it never snaps the value back.
@@ -904,9 +920,101 @@ function RangeField({
           onPointerCancel={onDragEnd}
           onBlur={onDragEnd}
         />
-        <input type="number" step={step} value={Number.isFinite(value) ? value : 0} onChange={(e) => onChange(Number(e.target.value))} />
+        {onSetBound ? (
+          <BoundEditingNumberInput
+            value={value}
+            min={min}
+            max={max}
+            step={step}
+            onChange={onChange}
+            onSetBound={onSetBound}
+          />
+        ) : (
+          <input type="number" step={step} value={Number.isFinite(value) ? value : 0} onChange={(e) => onChange(Number(e.target.value))} />
+        )}
       </div>
     </label>
+  );
+}
+
+/**
+ * Number input for parameter sliders. When the thumb is parked at either end
+ * of the range, a typed number re-pins that end instead of just setting the
+ * value; edits commit on Enter or blur so half-typed numbers never apply.
+ */
+function BoundEditingNumberInput({
+  value,
+  min,
+  max,
+  step,
+  onChange,
+  onSetBound,
+}: {
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (value: number) => void;
+  onSetBound: (edge: ParameterBoundEdge, value: number) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+
+  const tolerance = Math.max(Math.abs(max - min), 1) * 1e-12;
+  const parkedEdge: ParameterBoundEdge | null =
+    Math.abs(value - min) <= tolerance ? 'min' : Math.abs(value - max) <= tolerance ? 'max' : null;
+
+  const commit = (raw: string) => {
+    setDraft(null);
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || raw.trim() === '') {
+      return;
+    }
+    if (parkedEdge === 'min' && parsed !== min && parsed < max) {
+      onSetBound('min', parsed);
+      return;
+    }
+    if (parkedEdge === 'max' && parsed !== max && parsed > min) {
+      onSetBound('max', parsed);
+      return;
+    }
+    if (parsed !== value) {
+      onChange(parsed);
+    }
+  };
+
+  return (
+    <span className="range-field__number">
+      <input
+        type="number"
+        step={step}
+        value={draft ?? (Number.isFinite(value) ? value : 0)}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={(e) => {
+          if (draft !== null) {
+            commit(e.target.value);
+          }
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            commit(e.currentTarget.value);
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            setDraft(null);
+          }
+        }}
+        title={
+          parkedEdge
+            ? `Typing here sets the slider ${parkedEdge === 'min' ? 'minimum' : 'maximum'} (Enter to apply)`
+            : 'Type a value; with the slider at either end, typing sets that end of the range'
+        }
+      />
+      {parkedEdge ? (
+        <span className="range-field__bound-chip" aria-hidden="true">
+          sets {parkedEdge}
+        </span>
+      ) : null}
+    </span>
   );
 }
 

@@ -894,6 +894,30 @@ input[type='color'] {
   opacity: 0.4;
 }
 
+.range-field__number {
+  position: relative;
+  display: flex;
+}
+
+.range-field__number input {
+  width: 100%;
+}
+
+.range-field__bound-chip {
+  position: absolute;
+  top: -1.15rem;
+  right: 0;
+  padding: 0 0.35rem;
+  border-radius: 6px;
+  background: rgba(96, 148, 220, 0.22);
+  border: 1px solid rgba(120, 170, 240, 0.45);
+  color: #a8c6ee;
+  font-size: 0.62rem;
+  line-height: 1.35;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 .parameter-editor {
   display: grid;
   gap: 0.35rem;
