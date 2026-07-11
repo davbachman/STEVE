@@ -114,7 +114,17 @@ describe('project import normalization', () => {
       throw new Error('Expected imported plot');
     }
     expect(plot.equation.parameters).toEqual([
-      { name: 'a', value: 3, min: -6, max: 6, step: 0.25 },
+      {
+        name: 'a',
+        value: 3,
+        min: -6,
+        max: 6,
+        step: 0.25,
+        samplingMode: 'continuous',
+        discreteMin: -10,
+        discreteMax: 10,
+        discreteCount: 5,
+      },
     ]);
   });
 

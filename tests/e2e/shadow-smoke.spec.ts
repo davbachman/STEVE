@@ -58,5 +58,5 @@ async function setRangeField(
   await expect(label).toBeVisible();
   const numberInput = label.locator('input[type="number"]').last();
   await numberInput.fill(numericValue);
-  await numberInput.dispatchEvent('change');
+  await numberInput.blur();
 }

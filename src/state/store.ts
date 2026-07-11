@@ -15,7 +15,12 @@ import type {
   UUID,
 } from '../types/contracts';
 import { analyzeEquationText } from '../math/classifier';
-import { clampAnimationSpeed, syncEquationParameters } from '../math/parameters';
+import {
+  DEFAULT_DISCRETE_PARAMETER_COUNT,
+  clampAnimationSpeed,
+  clampDiscreteParameterCount,
+  syncEquationParameters,
+} from '../math/parameters';
 import {
   APP_VERSION,
   createBlankPlot,
@@ -1245,6 +1250,8 @@ function normalizeEquationParameters(
     const min = rawMin ?? Math.min(parameter.min, value);
     const max = rawMax ?? Math.max(parameter.max, value);
     const animationSpeed = asFiniteNumber(record.animationSpeed) ?? parameter.animationSpeed;
+    const discreteMin = asFiniteNumber(record.discreteMin) ?? parameter.discreteMin;
+    const discreteMax = asFiniteNumber(record.discreteMax) ?? parameter.discreteMax;
     return {
       ...parameter,
       value,
@@ -1253,6 +1260,10 @@ function normalizeEquationParameters(
       step: positiveFiniteNumber(record.step) ?? parameter.step,
       animating: asBoolean(record.animating) ?? parameter.animating,
       animationSpeed: animationSpeed === undefined ? undefined : clampAnimationSpeed(animationSpeed),
+      samplingMode: asEnum(record.samplingMode, ['continuous', 'discrete']) ?? parameter.samplingMode,
+      discreteMin: Math.min(discreteMin, discreteMax),
+      discreteMax: Math.max(discreteMin, discreteMax),
+      discreteCount: clampDiscreteParameterCount(asFiniteInteger(record.discreteCount) ?? parameter.discreteCount ?? DEFAULT_DISCRETE_PARAMETER_COUNT),
     };
   });
 }
@@ -1352,13 +1363,29 @@ function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function plotParameterValue(objects: SceneObject[], plotId: UUID, parameterName: string): number | null {
+function plotParameterValue(objects: SceneObject[], plotId: UUID, parameterFieldKey: string): number | null {
   const plot = objects.find((candidate): candidate is PlotObject => candidate.id === plotId && candidate.type === 'plot');
   if (!plot) {
     return null;
   }
+  const [parameterName, field = 'value'] = parameterFieldKey.split(':');
   const parameter = plot.equation.parameters.find((candidate) => candidate.name === parameterName);
-  return typeof parameter?.value === 'number' ? parameter.value : null;
+  if (!parameter) {
+    return null;
+  }
+  if (field === 'value') {
+    return typeof parameter.value === 'number' ? parameter.value : null;
+  }
+  if (field === 'discreteMin') {
+    return typeof parameter.discreteMin === 'number' ? parameter.discreteMin : null;
+  }
+  if (field === 'discreteMax') {
+    return typeof parameter.discreteMax === 'number' ? parameter.discreteMax : null;
+  }
+  if (field === 'discreteCount') {
+    return typeof parameter.discreteCount === 'number' ? parameter.discreteCount : null;
+  }
+  return null;
 }
 
 function asEnum<T extends string>(value: unknown, allowed: readonly T[]): T | null {

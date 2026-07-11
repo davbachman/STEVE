@@ -9,9 +9,6 @@ test.describe('Implicit Mesher Smoke', () => {
       test.skip(true, 'WebGL2 not available in this Playwright browser session');
     }
 
-    await expect(page.getByRole('button', { name: /Surface 1/ })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Curve 1/ })).toBeVisible();
-
     await page.getByRole('button', { name: '+ Implicit' }).click();
 
     const implicitItem = page.getByRole('button', { name: /Implicit 1/ });

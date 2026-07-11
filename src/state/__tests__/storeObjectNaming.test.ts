@@ -15,9 +15,9 @@ describe('store object naming', () => {
     useAppStore.getState().newProject();
   });
 
-  it('uses numbered default object names in a new project', () => {
-    expect(plotsByName()).toEqual(['Surface 1', 'Curve 1']);
-    expect(lightsByName()).toEqual(['Point Light 1']);
+  it('starts a new project with no objects', () => {
+    expect(plotsByName()).toEqual([]);
+    expect(lightsByName()).toEqual([]);
   });
 
   it('increments names by object kind instead of by total object count', () => {
@@ -26,8 +26,11 @@ describe('store object naming', () => {
     store.addPlot('curve');
     store.addPlot('surface');
     store.addPointLight();
+    store.addPlot('curve');
+    store.addPlot('surface');
+    store.addPointLight();
 
-    expect(plotsByName()).toEqual(['Surface 1', 'Curve 1', 'Curve 2', 'Surface 2']);
+    expect(plotsByName()).toEqual(['Curve 1', 'Surface 1', 'Curve 2', 'Surface 2']);
     expect(lightsByName()).toEqual(['Point Light 1', 'Point Light 2']);
   });
 });

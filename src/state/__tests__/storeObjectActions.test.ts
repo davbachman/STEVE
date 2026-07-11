@@ -4,6 +4,9 @@ import { useAppStore } from '../store';
 describe('store object row actions', () => {
   beforeEach(() => {
     useAppStore.getState().newProject();
+    // The default scene is empty; create a plot and a light to act on.
+    useAppStore.getState().addPlot('surface');
+    useAppStore.getState().addPointLight();
   });
 
   it('duplicates an object right after the original and selects the copy', () => {

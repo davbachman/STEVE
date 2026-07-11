@@ -10,6 +10,12 @@ function selectedPlot(): PlotObject {
   return plot;
 }
 
+function addSurfacePlot(): PlotObject {
+  const store = useAppStore.getState();
+  store.addPlot('surface');
+  return selectedPlot();
+}
+
 describe('store equation parameters', () => {
   beforeEach(() => {
     useAppStore.getState().newProject();
@@ -17,7 +23,7 @@ describe('store equation parameters', () => {
 
   it('detects constants and preserves existing values across equation edits', () => {
     const store = useAppStore.getState();
-    const plot = selectedPlot();
+    const plot = addSurfacePlot();
 
     store.updatePlotEquationText(plot.id, 'z = a*sin(x)');
     let next = selectedPlot();
@@ -39,7 +45,7 @@ describe('store equation parameters', () => {
 
   it('toggles parameter animation and applies tick values without touching undo history', () => {
     const store = useAppStore.getState();
-    const plot = selectedPlot();
+    const plot = addSurfacePlot();
     store.updatePlotEquationText(plot.id, 'z = a*sin(x)');
     const historyDepth = useAppStore.getState().historyPast.length;
 
@@ -63,7 +69,7 @@ describe('store equation parameters', () => {
 
   it('preserves animation settings across equation edits', () => {
     const store = useAppStore.getState();
-    const plot = selectedPlot();
+    const plot = addSurfacePlot();
     store.updatePlotEquationText(plot.id, 'z = a*sin(x)');
     useAppStore.getState().setParameterAnimation(plot.id, 'a', { animating: true, animationSpeed: 0.7 });
 

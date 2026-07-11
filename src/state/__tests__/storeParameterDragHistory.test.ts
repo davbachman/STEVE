@@ -6,14 +6,20 @@ import { useAppStore } from '../store';
 function firstPlot(): PlotObject {
   const plot = useAppStore.getState().objects.find((obj): obj is PlotObject => obj.type === 'plot');
   if (!plot) {
-    throw new Error('Expected default plot in initial scene');
+    throw new Error('Expected a plot in the scene');
   }
   return plot;
 }
 
+function addSurfacePlot(): PlotObject {
+  const store = useAppStore.getState();
+  store.addPlot('surface');
+  return firstPlot();
+}
+
 function prepareParameterizedPlot(): PlotObject {
   const store = useAppStore.getState();
-  const plot = firstPlot();
+  const plot = addSurfacePlot();
   store.updatePlotEquationText(plot.id, 'z = a*sin(x)');
   useAppStore.setState((state) => ({
     ...state,

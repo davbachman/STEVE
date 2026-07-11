@@ -24,18 +24,23 @@ ST.E.V.E. is a browser-only interactive 3D graphing app for exploring mathematic
 
 ## Usage
 
-1. Create objects from the left panel with `+ Curve`, `+ Surface`, `+ Implicit`, and `+ Light`.
+1. ST.E.V.E. starts with an empty scene. Create objects from the left panel with `+ Curve`, `+ Surface`, `+ Implicit`, and `+ Light`.
 2. Select an object from the object list to edit it. Plot objects open in the equation editor, and lights open in the inspector.
 3. Enter or revise the equation for the selected plot. ST.E.V.E. classifies the expression and updates the preview and mesh when the expression is valid.
-4. Use the right inspector tabs to change object name, position, domain bounds, sampling density, material settings, lighting, scene options, and render settings.
-5. Navigate the viewport with right-drag to orbit and `Shift` + right-drag to pan. Drag selected objects with left-drag, and use `Shift` + left-drag to constrain object dragging along Z. Use the Top/Front/Side buttons for axis-aligned views, `⌂` to reset the camera, and double-click (or `⛶`) to frame objects.
-6. Toggle visibility for plots and light gizmos from the object list to isolate parts of a scene while editing.
-7. Use `Save` to write the current scene as a `.json` project file and `Open` to load a previously saved project.
-8. Use `Export PNG` to save the current viewport as an image.
-9. Select a plot object and use `Export STL` to export that plot's current triangle mesh for use in 3D modeling or fabrication workflows.
+4. When ST.E.V.E. detects user-defined constants in a parametric or implicit equation, it adds them to the `Object` inspector under `Constants`.
+5. Constants default to `Continuous`, which evaluates the plot at one parameter value; press the play button to animate a constant between its bounds, and park the slider at either end and type in its box to move that end of the range.
+6. Switching a constant to `Discrete` reveals `Min`, `Max`, and `n`. The app then generates a family of `n` equally spaced parameter values between `Min` and `Max` and renders one plot instance for each value.
+7. Use the right inspector tabs to change object name, position, domain bounds, sampling density, material settings, lighting, scene options, and render settings.
+8. Navigate the viewport with right-drag to orbit and `Shift` + right-drag to pan. Drag selected objects with left-drag, and use `Shift` + left-drag to constrain object dragging along Z. Use the Top/Front/Side buttons for axis-aligned views, `⌂` to reset the camera, and double-click (or `⛶`) to frame objects.
+9. Toggle visibility for plots and light gizmos from the object list to isolate parts of a scene while editing.
+10. Use `Save` to write the current scene as a `.json` project file and `Open` to load a previously saved project.
+11. Use `Export PNG` to save the current viewport as an image.
+12. Select a plot object and use `Export STL` to export that plot's current triangle mesh for use in 3D modeling or fabrication workflows.
 
 ## Notes
 
+- User-defined constants are discovered from the equation text automatically; built-in constants such as `pi` and `e` are not exposed as editable controls.
+- Discrete constants produce a rendered family inside a single plot object rather than duplicating entries in the object list.
 - `Export STL` applies to plot objects only, not point lights.
 - The STL export reflects the plot's current generated mesh and current position in the scene.
 - Curves export as their rendered mesh representation rather than as abstract mathematical paths.

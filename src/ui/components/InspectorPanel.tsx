@@ -3,7 +3,10 @@ import {
   DEFAULT_PARAMETER_ANIMATION_SPEED,
   MAX_PARAMETER_ANIMATION_SPEED,
   MIN_PARAMETER_ANIMATION_SPEED,
+  clampDiscreteParameterCount,
   setEquationParameterBound,
+  updateEquationParameterDiscreteSettings,
+  updateEquationParameterSamplingMode,
   updateEquationParameterValue,
   type ParameterBoundEdge,
 } from '../../math/parameters';
@@ -724,6 +727,7 @@ function EquationParameterEditor({ plot }: { plot: PlotObject }) {
   const beginEquationParameterDrag = useAppStore((s) => s.beginEquationParameterDrag);
   const commitEquationParameterDrag = useAppStore((s) => s.commitEquationParameterDrag);
   const setParameterAnimation = useAppStore((s) => s.setParameterAnimation);
+  const discreteFamiliesEnabled = plot.equation.kind === 'parametric_curve' || plot.equation.kind === 'parametric_surface' || plot.equation.kind === 'implicit_surface';
   if (plot.equation.parameters.length === 0) {
     return null;
   }
@@ -734,56 +738,141 @@ function EquationParameterEditor({ plot }: { plot: PlotObject }) {
       <div className="inspector-note">
         Slide a constant to either end, then type in its box to move that end of the range.
       </div>
-      {plot.equation.parameters.map((parameter) => (
-        <div key={parameter.name} className="parameter-editor">
-          <div className="parameter-editor__value">
-            <RangeField
-              label={parameter.name}
-              min={parameter.min}
-              max={parameter.max}
-              step={parameter.step}
-              value={parameter.value}
-              onDragStart={() => beginEquationParameterDrag(plot.id, parameter.name)}
-              onDragEnd={() => commitEquationParameterDrag(plot.id, parameter.name)}
-              onChange={(value) =>
-                updatePlotSpec(plot.id, (spec) => ({
-                  ...spec,
-                  parameters: updateEquationParameterValue(spec.parameters, parameter.name, value),
-                }))
-              }
-              onSetBound={
-                parameter.animating
-                  ? undefined
-                  : (edge, bound) =>
+      {plot.equation.parameters.map((parameter) => {
+        const isDiscrete = discreteFamiliesEnabled && parameter.samplingMode === 'discrete';
+        return (
+          <div key={parameter.name} className="equation-parameter">
+            <div className="equation-parameter__header">
+              <span>{parameter.name}</span>
+              <span className="equation-parameter__header-actions">
+                {discreteFamiliesEnabled ? (
+                  <button
+                    type="button"
+                    className={parameter.samplingMode === 'discrete' ? 'equation-parameter__mode equation-parameter__mode--active' : 'equation-parameter__mode'}
+                    onClick={() => {
+                      const switchingToDiscrete = parameter.samplingMode !== 'discrete';
                       updatePlotSpec(plot.id, (spec) => ({
                         ...spec,
-                        parameters: setEquationParameterBound(spec.parameters, parameter.name, edge, bound),
-                      }))
-              }
-            />
-            <button
-              type="button"
-              className="parameter-editor__play"
-              title={parameter.animating ? `Pause ${parameter.name}` : `Animate ${parameter.name} between its min and max`}
-              aria-label={parameter.animating ? `Pause ${parameter.name}` : `Animate ${parameter.name}`}
-              aria-pressed={Boolean(parameter.animating)}
-              onClick={() => setParameterAnimation(plot.id, parameter.name, { animating: !parameter.animating })}
-            >
-              {parameter.animating ? '⏸' : '▶'}
-            </button>
+                        parameters: updateEquationParameterSamplingMode(
+                          spec.parameters,
+                          parameter.name,
+                          parameter.samplingMode === 'discrete' ? 'continuous' : 'discrete',
+                        ),
+                      }));
+                      if (switchingToDiscrete && parameter.animating) {
+                        // Discrete families ignore the animated value, so stop the sweep.
+                        setParameterAnimation(plot.id, parameter.name, { animating: false });
+                      }
+                    }}
+                  >
+                    {parameter.samplingMode === 'discrete' ? 'Discrete' : 'Continuous'}
+                  </button>
+                ) : null}
+                {!isDiscrete ? (
+                  <button
+                    type="button"
+                    className="parameter-editor__play"
+                    title={parameter.animating ? `Pause ${parameter.name}` : `Animate ${parameter.name} between its min and max`}
+                    aria-label={parameter.animating ? `Pause ${parameter.name}` : `Animate ${parameter.name}`}
+                    aria-pressed={Boolean(parameter.animating)}
+                    onClick={() => setParameterAnimation(plot.id, parameter.name, { animating: !parameter.animating })}
+                  >
+                    {parameter.animating ? '⏸' : '▶'}
+                  </button>
+                ) : null}
+              </span>
+            </div>
+            {isDiscrete ? (
+              <div className="equation-parameter__discrete">
+                <RangeField
+                  label="Min"
+                  min={parameter.min}
+                  max={parameter.max}
+                  step={parameter.step}
+                  value={parameter.discreteMin}
+                  onDragStart={() => beginEquationParameterDrag(plot.id, `${parameter.name}:discreteMin`)}
+                  onDragEnd={() => commitEquationParameterDrag(plot.id, `${parameter.name}:discreteMin`)}
+                  onChange={(value) =>
+                    updatePlotSpec(plot.id, (spec) => ({
+                      ...spec,
+                      parameters: updateEquationParameterDiscreteSettings(spec.parameters, parameter.name, { discreteMin: value }),
+                    }))
+                  }
+                />
+                <RangeField
+                  label="Max"
+                  min={parameter.min}
+                  max={parameter.max}
+                  step={parameter.step}
+                  value={parameter.discreteMax}
+                  onDragStart={() => beginEquationParameterDrag(plot.id, `${parameter.name}:discreteMax`)}
+                  onDragEnd={() => commitEquationParameterDrag(plot.id, `${parameter.name}:discreteMax`)}
+                  onChange={(value) =>
+                    updatePlotSpec(plot.id, (spec) => ({
+                      ...spec,
+                      parameters: updateEquationParameterDiscreteSettings(spec.parameters, parameter.name, { discreteMax: value }),
+                    }))
+                  }
+                />
+                <RangeField
+                  label="n"
+                  min={1}
+                  max={64}
+                  step={1}
+                  value={parameter.discreteCount}
+                  onDragStart={() => beginEquationParameterDrag(plot.id, `${parameter.name}:discreteCount`)}
+                  onDragEnd={() => commitEquationParameterDrag(plot.id, `${parameter.name}:discreteCount`)}
+                  onChange={(value) =>
+                    updatePlotSpec(plot.id, (spec) => ({
+                      ...spec,
+                      parameters: updateEquationParameterDiscreteSettings(spec.parameters, parameter.name, {
+                        discreteCount: clampDiscreteParameterCount(value),
+                      }),
+                    }))
+                  }
+                />
+              </div>
+            ) : (
+              <>
+                <RangeField
+                  label={discreteFamiliesEnabled ? 'Value' : parameter.name}
+                  min={parameter.min}
+                  max={parameter.max}
+                  step={parameter.step}
+                  value={parameter.value}
+                  onDragStart={() => beginEquationParameterDrag(plot.id, parameter.name)}
+                  onDragEnd={() => commitEquationParameterDrag(plot.id, parameter.name)}
+                  onChange={(value) =>
+                    updatePlotSpec(plot.id, (spec) => ({
+                      ...spec,
+                      parameters: updateEquationParameterValue(spec.parameters, parameter.name, value),
+                    }))
+                  }
+                  onSetBound={
+                    parameter.animating
+                      ? undefined
+                      : (edge, bound) =>
+                          updatePlotSpec(plot.id, (spec) => ({
+                            ...spec,
+                            parameters: setEquationParameterBound(spec.parameters, parameter.name, edge, bound),
+                          }))
+                  }
+                />
+                {parameter.animating ? (
+                  <RangeField
+                    label={`${parameter.name} speed`}
+                    min={MIN_PARAMETER_ANIMATION_SPEED}
+                    max={MAX_PARAMETER_ANIMATION_SPEED}
+                    step={0.01}
+                    value={parameter.animationSpeed ?? DEFAULT_PARAMETER_ANIMATION_SPEED}
+                    onChange={(value) => setParameterAnimation(plot.id, parameter.name, { animationSpeed: value })}
+                  />
+                ) : null}
+              </>
+            )}
           </div>
-          {parameter.animating ? (
-            <RangeField
-              label={`${parameter.name} speed`}
-              min={MIN_PARAMETER_ANIMATION_SPEED}
-              max={MAX_PARAMETER_ANIMATION_SPEED}
-              step={0.01}
-              value={parameter.animationSpeed ?? DEFAULT_PARAMETER_ANIMATION_SPEED}
-              onChange={(value) => setParameterAnimation(plot.id, parameter.name, { animationSpeed: value })}
-            />
-          ) : null}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -877,7 +966,7 @@ function NumberTriplet({
   );
 }
 
-function RangeField({
+export function RangeField({
   label,
   min,
   max,
@@ -920,27 +1009,24 @@ function RangeField({
           onPointerCancel={onDragEnd}
           onBlur={onDragEnd}
         />
-        {onSetBound ? (
-          <BoundEditingNumberInput
-            value={value}
-            min={min}
-            max={max}
-            step={step}
-            onChange={onChange}
-            onSetBound={onSetBound}
-          />
-        ) : (
-          <input type="number" step={step} value={Number.isFinite(value) ? value : 0} onChange={(e) => onChange(Number(e.target.value))} />
-        )}
+        <BoundEditingNumberInput
+          value={value}
+          min={min}
+          max={max}
+          step={step}
+          onChange={onChange}
+          onSetBound={onSetBound}
+        />
       </div>
     </label>
   );
 }
 
 /**
- * Number input for parameter sliders. When the thumb is parked at either end
- * of the range, a typed number re-pins that end instead of just setting the
- * value; edits commit on Enter or blur so half-typed numbers never apply.
+ * Draft-based number input for all range fields: edits commit on Enter or
+ * blur so half-typed numbers never apply. When onSetBound is provided and the
+ * thumb is parked at either end of the range, a typed number re-pins that end
+ * instead of just setting the value.
  */
 function BoundEditingNumberInput({
   value,
@@ -955,13 +1041,14 @@ function BoundEditingNumberInput({
   max: number;
   step: number;
   onChange: (value: number) => void;
-  onSetBound: (edge: ParameterBoundEdge, value: number) => void;
+  onSetBound?: (edge: ParameterBoundEdge, value: number) => void;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
 
   const tolerance = Math.max(Math.abs(max - min), 1) * 1e-12;
-  const parkedEdge: ParameterBoundEdge | null =
-    Math.abs(value - min) <= tolerance ? 'min' : Math.abs(value - max) <= tolerance ? 'max' : null;
+  const parkedEdge: ParameterBoundEdge | null = onSetBound
+    ? Math.abs(value - min) <= tolerance ? 'min' : Math.abs(value - max) <= tolerance ? 'max' : null
+    : null;
 
   const commit = (raw: string) => {
     setDraft(null);
@@ -969,11 +1056,11 @@ function BoundEditingNumberInput({
     if (!Number.isFinite(parsed) || raw.trim() === '') {
       return;
     }
-    if (parkedEdge === 'min' && parsed !== min && parsed < max) {
+    if (onSetBound && parkedEdge === 'min' && parsed !== min && parsed < max) {
       onSetBound('min', parsed);
       return;
     }
-    if (parkedEdge === 'max' && parsed !== max && parsed > min) {
+    if (onSetBound && parkedEdge === 'max' && parsed !== max && parsed > min) {
       onSetBound('max', parsed);
       return;
     }
@@ -1006,7 +1093,9 @@ function BoundEditingNumberInput({
         title={
           parkedEdge
             ? `Typing here sets the slider ${parkedEdge === 'min' ? 'minimum' : 'maximum'} (Enter to apply)`
-            : 'Type a value; with the slider at either end, typing sets that end of the range'
+            : onSetBound
+              ? 'Type a value; with the slider at either end, typing sets that end of the range'
+              : 'Type a value (Enter to apply)'
         }
       />
       {parkedEdge ? (
@@ -1034,3 +1123,4 @@ function analyzeBounds(bounds: { min: { x: number; y: number; z: number }; max: 
     volumeWarning: valid && volume > 50_000,
   };
 }
+

@@ -70,6 +70,10 @@ export interface EquationParameter {
   min: number;
   max: number;
   step: number;
+  samplingMode: 'continuous' | 'discrete';
+  discreteMin: number;
+  discreteMax: number;
+  discreteCount: number;
   /** Sweep this parameter between min and max automatically (ping-pong). */
   animating?: boolean;
   /** Sweep speed as a fraction of the min→max range per second. */
@@ -241,6 +245,7 @@ export interface SerializedMesh {
   uvs?: Float32Array;
   lines?: Float32Array[];
   curvePath?: Float32Array;
+  curvePaths?: Float32Array[];
   bounds?: MeshBounds;
   boundaryEdges?: Float32Array;
   featureEdges?: Float32Array;

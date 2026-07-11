@@ -1,4 +1,5 @@
 import type {
+  EquationSpec,
   ExplicitSurfaceSpec,
   ImplicitSurfaceSpec,
   ParametricCurveSpec,
@@ -7,7 +8,7 @@ import type {
 } from '../types/contracts';
 import type { Expression } from './ast';
 import { compileNumericExpression, compileTuple3, normalizeEqualityToImplicit } from './evaluator';
-import { equationParameterContext } from './parameters';
+import { applyEquationParameterContext, equationParameterContext, equationParameterValueContexts } from './parameters';
 import { parseMath } from './parser';
 
 export interface CompiledCurve {
@@ -31,37 +32,49 @@ export interface CompiledImplicit {
 export type CompiledPlot = CompiledCurve | CompiledSurface | CompiledImplicit;
 
 export function compilePlotObject(plot: PlotObject): CompiledPlot {
-  const parsed = parseMath(plot.equation.source.rawText);
+  return compileEquationSpec(plot.equation);
+}
+
+export function compileEquationSpec(spec: EquationSpec): CompiledPlot {
+  const parsed = parseMath(spec.source.rawText);
   if (!parsed.ast || parsed.status === 'error') {
     throw new Error(parsed.diagnostics[0]?.message ?? 'Invalid equation');
   }
 
-  switch (plot.equation.kind) {
+  switch (spec.kind) {
     case 'parametric_curve':
       return {
         kind: 'curve',
-        spec: plot.equation,
-        fn: compileCurveFunction(plot.equation, parsed.ast),
+        spec,
+        fn: compileCurveFunction(spec, parsed.ast),
       };
     case 'parametric_surface':
       return {
         kind: 'surface',
-        spec: plot.equation,
-        fn: compileParametricSurfaceFunction(plot.equation, parsed.ast),
+        spec,
+        fn: compileParametricSurfaceFunction(spec, parsed.ast),
       };
     case 'explicit_surface':
       return {
         kind: 'surface',
-        spec: plot.equation,
-        fn: compileExplicitSurfaceFunction(plot.equation, parsed.ast),
+        spec,
+        fn: compileExplicitSurfaceFunction(spec, parsed.ast),
       };
     case 'implicit_surface':
       return {
         kind: 'implicit',
-        spec: plot.equation,
-        fn: compileImplicitSurfaceFunction(plot.equation, parsed.ast),
+        spec,
+        fn: compileImplicitSurfaceFunction(spec, parsed.ast),
       };
   }
+}
+
+export function expandEquationSpecVariants(spec: EquationSpec): EquationSpec[] {
+  const contexts = equationParameterValueContexts(spec.parameters);
+  return contexts.map((context) => ({
+    ...spec,
+    parameters: applyEquationParameterContext(spec.parameters, context),
+  }));
 }
 
 function compileCurveFunction(_spec: ParametricCurveSpec, ast: Expression): (t: number) => [number, number, number] {

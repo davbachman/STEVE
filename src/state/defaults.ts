@@ -374,5 +374,5 @@ export function createPointLight(name = 'Point Light', position = { x: 3, y: -3,
 }
 
 export function createDefaultObjects(): SceneObject[] {
-  return [createDefaultSurface('Surface 1'), createDefaultCurve('Curve 1'), createPointLight('Point Light 1')];
+  return [];
 }

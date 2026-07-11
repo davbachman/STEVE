@@ -1,4 +1,4 @@
-import type { MeshBounds, SerializedMeshTopology, Vec3 } from '../../types/contracts';
+import type { MeshBounds, SerializedMesh, SerializedMeshTopology, Vec3 } from '../../types/contracts';
 
 interface EdgeFace {
   ax: number;
@@ -121,6 +121,122 @@ export function computeMeshBounds(positions: ArrayLike<number>): MeshBounds {
   };
 }
 
+export function mergeMeshBounds(boundsList: readonly MeshBounds[]): MeshBounds {
+  if (boundsList.length === 0) {
+    return computeMeshBounds([]);
+  }
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let minZ = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  let maxZ = Number.NEGATIVE_INFINITY;
+  for (const bounds of boundsList) {
+    minX = Math.min(minX, bounds.min.x);
+    minY = Math.min(minY, bounds.min.y);
+    minZ = Math.min(minZ, bounds.min.z);
+    maxX = Math.max(maxX, bounds.max.x);
+    maxY = Math.max(maxY, bounds.max.y);
+    maxZ = Math.max(maxZ, bounds.max.z);
+  }
+  const center = {
+    x: (minX + maxX) * 0.5,
+    y: (minY + maxY) * 0.5,
+    z: (minZ + maxZ) * 0.5,
+  };
+  let radius = 0;
+  for (const bounds of boundsList) {
+    radius = Math.max(
+      radius,
+      Math.hypot(bounds.min.x - center.x, bounds.min.y - center.y, bounds.min.z - center.z),
+      Math.hypot(bounds.max.x - center.x, bounds.max.y - center.y, bounds.max.z - center.z),
+    );
+  }
+  return {
+    min: { x: minX, y: minY, z: minZ },
+    max: { x: maxX, y: maxY, z: maxZ },
+    center,
+    radius,
+  };
+}
+
+export function mergeSerializedMeshes(meshes: readonly SerializedMesh[]): SerializedMesh {
+  if (meshes.length === 0) {
+    return {
+      positions: new Float32Array(0),
+      indices: new Uint32Array(0),
+      lines: [],
+      boundaryEdges: new Float32Array(0),
+      featureEdges: new Float32Array(0),
+      topology: {
+        isClosedManifold: false,
+        hasBoundaryEdges: false,
+        hasFeatureEdges: false,
+        boundaryEdgeCount: 0,
+        featureEdgeCount: 0,
+      },
+    };
+  }
+  if (meshes.length === 1) {
+    return meshes[0] as SerializedMesh;
+  }
+
+  const totalPositions = meshes.reduce((sum, mesh) => sum + mesh.positions.length, 0);
+  const totalIndices = meshes.reduce((sum, mesh) => sum + mesh.indices.length, 0);
+  const positions = new Float32Array(totalPositions);
+  const indices = new Uint32Array(totalIndices);
+  const normals = meshes.every((mesh) => !!mesh.normals)
+    ? new Float32Array(meshes.reduce((sum, mesh) => sum + (mesh.normals?.length ?? 0), 0))
+    : undefined;
+  const lines = meshes.flatMap((mesh) => mesh.lines ?? []);
+  const boundaryEdges = concatFloat32Arrays(meshes.map((mesh) => mesh.boundaryEdges).filter((value): value is Float32Array => !!value));
+  const featureEdges = concatFloat32Arrays(meshes.map((mesh) => mesh.featureEdges).filter((value): value is Float32Array => !!value));
+  const bounds = mergeMeshBounds(
+    meshes
+      .map((mesh) => mesh.bounds ?? (mesh.positions.length > 0 ? computeMeshBounds(mesh.positions) : null))
+      .filter((value): value is MeshBounds => !!value),
+  );
+
+  let positionOffset = 0;
+  let vertexOffset = 0;
+  let indexOffset = 0;
+  let normalOffset = 0;
+  for (const mesh of meshes) {
+    positions.set(mesh.positions, positionOffset);
+    if (normals && mesh.normals) {
+      normals.set(mesh.normals, normalOffset);
+      normalOffset += mesh.normals.length;
+    }
+    const localVertexOffset = vertexOffset / 3;
+    for (let i = 0; i < mesh.indices.length; i += 1) {
+      indices[indexOffset + i] = mesh.indices[i] + localVertexOffset;
+    }
+    positionOffset += mesh.positions.length;
+    vertexOffset += mesh.positions.length;
+    indexOffset += mesh.indices.length;
+  }
+
+  const boundaryEdgeCount = meshes.reduce((sum, mesh) => sum + (mesh.topology?.boundaryEdgeCount ?? 0), 0);
+  const featureEdgeCount = meshes.reduce((sum, mesh) => sum + (mesh.topology?.featureEdgeCount ?? 0), 0);
+
+  return {
+    positions,
+    indices,
+    normals,
+    lines,
+    bounds,
+    boundaryEdges,
+    featureEdges,
+    topology: {
+      isClosedManifold: boundaryEdgeCount === 0,
+      hasBoundaryEdges: boundaryEdgeCount > 0,
+      hasFeatureEdges: featureEdgeCount > 0,
+      boundaryEdgeCount,
+      featureEdgeCount,
+    },
+  };
+}
+
 export function extractMeshEdges(
   positions: ArrayLike<number>,
   indices: ArrayLike<number>,
@@ -225,4 +341,15 @@ function readFaceNormal(
   const nz = abx * acy - aby * acx;
   const len = Math.hypot(nx, ny, nz) || 1;
   return { x: nx / len, y: ny / len, z: nz / len };
+}
+
+function concatFloat32Arrays(arrays: readonly Float32Array[]): Float32Array {
+  const totalLength = arrays.reduce((sum, array) => sum + array.length, 0);
+  const merged = new Float32Array(totalLength);
+  let offset = 0;
+  for (const array of arrays) {
+    merged.set(array, offset);
+    offset += array.length;
+  }
+  return merged;
 }
