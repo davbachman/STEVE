@@ -12,11 +12,9 @@ function parametricSurfaceSpec(): ParametricSurfaceSpec {
         name: 'a',
         value: 1,
         min: -4,
-        max: 4,
+        max: 2,
         step: 0.1,
         samplingMode: 'continuous',
-        discreteMin: 1,
-        discreteMax: 2,
         discreteCount: 2,
       },
     ],
@@ -54,7 +52,7 @@ describe('plot mesh families', () => {
     expect(singleVariantMesh.positions.length).toBeGreaterThan(0);
     expect(familyMesh.positions.length).toBe(singleVariantMesh.positions.length * 2);
     expect(familyMesh.indices.length).toBe(singleVariantMesh.indices.length * 2);
-    expect(familyMesh.bounds?.max.z).toBeCloseTo(2, 4);
-    expect(familyMesh.bounds?.min.z).toBeCloseTo(-2, 4);
+    expect(familyMesh.bounds?.max.z).toBeCloseTo(4, 4);
+    expect(familyMesh.bounds?.min.z).toBeCloseTo(-4, 4);
   });
 });

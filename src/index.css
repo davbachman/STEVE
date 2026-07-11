@@ -970,11 +970,6 @@ input[type='color'] {
   box-shadow: 0 0 0 1px rgba(97, 185, 255, 0.14) inset;
 }
 
-.equation-parameter__discrete {
-  display: grid;
-  gap: 0.45rem;
-}
-
 .control-grid {
   display: grid;
   gap: 0.45rem;

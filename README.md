@@ -29,7 +29,7 @@ ST.E.V.E. is a browser-only interactive 3D graphing app for exploring mathematic
 3. Enter or revise the equation for the selected plot. ST.E.V.E. classifies the expression and updates the preview and mesh when the expression is valid.
 4. When ST.E.V.E. detects user-defined constants in a parametric or implicit equation, it adds them to the `Object` inspector under `Constants`.
 5. Constants default to `Continuous`, which evaluates the plot at one parameter value; press the play button to animate a constant between its bounds, and park the slider at either end and type in its box to move that end of the range.
-6. Switching a constant to `Discrete` reveals `Min`, `Max`, and `n`. The app then generates a family of `n` equally spaced parameter values between `Min` and `Max` and renders one plot instance for each value.
+6. Switching a constant to `Discrete` keeps the same range slider interaction and adds `n`: park the slider at either end and type to set the discrete minimum or maximum. The app then generates a family of `n` equally spaced parameter values between those bounds and renders one plot instance for each value.
 7. Use the right inspector tabs to change object name, position, domain bounds, sampling density, material settings, lighting, scene options, and render settings.
 8. Navigate the viewport with right-drag to orbit and `Shift` + right-drag to pan. Drag selected objects with left-drag, and use `Shift` + left-drag to constrain object dragging along Z. Use the Top/Front/Side buttons for axis-aligned views, `⌂` to reset the camera, and double-click (or `⛶`) to frame objects.
 9. Toggle visibility for plots and light gizmos from the object list to isolate parts of a scene while editing.

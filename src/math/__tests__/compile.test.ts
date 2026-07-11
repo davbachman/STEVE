@@ -20,8 +20,6 @@ function explicitPlot(rawText: string, parameters: Array<{ name: string; value: 
         max: 10,
         step: 0.1,
         samplingMode: 'continuous',
-        discreteMin: -10,
-        discreteMax: 10,
         discreteCount: 5,
       })),
       solvedAxis: analyzed.explicitAxis ?? 'z',

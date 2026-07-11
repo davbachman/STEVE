@@ -121,8 +121,6 @@ describe('project import normalization', () => {
         max: 6,
         step: 0.25,
         samplingMode: 'continuous',
-        discreteMin: -10,
-        discreteMax: 10,
         discreteCount: 5,
       },
     ]);

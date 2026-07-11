@@ -5,7 +5,7 @@ import {
   MIN_PARAMETER_ANIMATION_SPEED,
   clampDiscreteParameterCount,
   setEquationParameterBound,
-  updateEquationParameterDiscreteSettings,
+  updateEquationParameterDiscreteCount,
   updateEquationParameterSamplingMode,
   updateEquationParameterValue,
   type ParameterBoundEdge,
@@ -782,94 +782,60 @@ function EquationParameterEditor({ plot }: { plot: PlotObject }) {
                 ) : null}
               </span>
             </div>
+            <RangeField
+              label={discreteFamiliesEnabled ? 'Value' : parameter.name}
+              min={parameter.min}
+              max={parameter.max}
+              step={parameter.step}
+              value={parameter.value}
+              onDragStart={() => beginEquationParameterDrag(plot.id, parameter.name)}
+              onDragEnd={() => commitEquationParameterDrag(plot.id, parameter.name)}
+              onChange={(value) =>
+                updatePlotSpec(plot.id, (spec) => ({
+                  ...spec,
+                  parameters: updateEquationParameterValue(spec.parameters, parameter.name, value),
+                }))
+              }
+              onSetBound={
+                parameter.animating && !isDiscrete
+                  ? undefined
+                  : (edge, bound) =>
+                      updatePlotSpec(plot.id, (spec) => ({
+                        ...spec,
+                        parameters: setEquationParameterBound(spec.parameters, parameter.name, edge, bound),
+                      }))
+              }
+            />
             {isDiscrete ? (
-              <div className="equation-parameter__discrete">
-                <RangeField
-                  label="Min"
-                  min={parameter.min}
-                  max={parameter.max}
-                  step={parameter.step}
-                  value={parameter.discreteMin}
-                  onDragStart={() => beginEquationParameterDrag(plot.id, `${parameter.name}:discreteMin`)}
-                  onDragEnd={() => commitEquationParameterDrag(plot.id, `${parameter.name}:discreteMin`)}
-                  onChange={(value) =>
-                    updatePlotSpec(plot.id, (spec) => ({
-                      ...spec,
-                      parameters: updateEquationParameterDiscreteSettings(spec.parameters, parameter.name, { discreteMin: value }),
-                    }))
-                  }
-                />
-                <RangeField
-                  label="Max"
-                  min={parameter.min}
-                  max={parameter.max}
-                  step={parameter.step}
-                  value={parameter.discreteMax}
-                  onDragStart={() => beginEquationParameterDrag(plot.id, `${parameter.name}:discreteMax`)}
-                  onDragEnd={() => commitEquationParameterDrag(plot.id, `${parameter.name}:discreteMax`)}
-                  onChange={(value) =>
-                    updatePlotSpec(plot.id, (spec) => ({
-                      ...spec,
-                      parameters: updateEquationParameterDiscreteSettings(spec.parameters, parameter.name, { discreteMax: value }),
-                    }))
-                  }
-                />
-                <RangeField
-                  label="n"
-                  min={1}
-                  max={64}
-                  step={1}
-                  value={parameter.discreteCount}
-                  onDragStart={() => beginEquationParameterDrag(plot.id, `${parameter.name}:discreteCount`)}
-                  onDragEnd={() => commitEquationParameterDrag(plot.id, `${parameter.name}:discreteCount`)}
-                  onChange={(value) =>
-                    updatePlotSpec(plot.id, (spec) => ({
-                      ...spec,
-                      parameters: updateEquationParameterDiscreteSettings(spec.parameters, parameter.name, {
-                        discreteCount: clampDiscreteParameterCount(value),
-                      }),
-                    }))
-                  }
-                />
-              </div>
-            ) : (
-              <>
-                <RangeField
-                  label={discreteFamiliesEnabled ? 'Value' : parameter.name}
-                  min={parameter.min}
-                  max={parameter.max}
-                  step={parameter.step}
-                  value={parameter.value}
-                  onDragStart={() => beginEquationParameterDrag(plot.id, parameter.name)}
-                  onDragEnd={() => commitEquationParameterDrag(plot.id, parameter.name)}
-                  onChange={(value) =>
-                    updatePlotSpec(plot.id, (spec) => ({
-                      ...spec,
-                      parameters: updateEquationParameterValue(spec.parameters, parameter.name, value),
-                    }))
-                  }
-                  onSetBound={
-                    parameter.animating
-                      ? undefined
-                      : (edge, bound) =>
-                          updatePlotSpec(plot.id, (spec) => ({
-                            ...spec,
-                            parameters: setEquationParameterBound(spec.parameters, parameter.name, edge, bound),
-                          }))
-                  }
-                />
-                {parameter.animating ? (
-                  <RangeField
-                    label={`${parameter.name} speed`}
-                    min={MIN_PARAMETER_ANIMATION_SPEED}
-                    max={MAX_PARAMETER_ANIMATION_SPEED}
-                    step={0.01}
-                    value={parameter.animationSpeed ?? DEFAULT_PARAMETER_ANIMATION_SPEED}
-                    onChange={(value) => setParameterAnimation(plot.id, parameter.name, { animationSpeed: value })}
-                  />
-                ) : null}
-              </>
-            )}
+              <RangeField
+                label="n"
+                min={1}
+                max={64}
+                step={1}
+                value={parameter.discreteCount}
+                onDragStart={() => beginEquationParameterDrag(plot.id, `${parameter.name}:discreteCount`)}
+                onDragEnd={() => commitEquationParameterDrag(plot.id, `${parameter.name}:discreteCount`)}
+                onChange={(value) =>
+                  updatePlotSpec(plot.id, (spec) => ({
+                    ...spec,
+                    parameters: updateEquationParameterDiscreteCount(
+                      spec.parameters,
+                      parameter.name,
+                      clampDiscreteParameterCount(value),
+                    ),
+                  }))
+                }
+              />
+            ) : parameter.animating ? (
+              <RangeField
+                label={`${parameter.name} speed`}
+                min={MIN_PARAMETER_ANIMATION_SPEED}
+                max={MAX_PARAMETER_ANIMATION_SPEED}
+                step={0.01}
+                value={parameter.animationSpeed ?? DEFAULT_PARAMETER_ANIMATION_SPEED}
+                onChange={(value) => setParameterAnimation(plot.id, parameter.name, { animationSpeed: value })}
+              />
+            ) : null}
           </div>
         );
       })}
@@ -1123,4 +1089,3 @@ function analyzeBounds(bounds: { min: { x: number; y: number; z: number }; max: 
     volumeWarning: valid && volume > 50_000,
   };
 }
-

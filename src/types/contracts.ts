@@ -71,8 +71,6 @@ export interface EquationParameter {
   max: number;
   step: number;
   samplingMode: 'continuous' | 'discrete';
-  discreteMin: number;
-  discreteMax: number;
   discreteCount: number;
   /** Sweep this parameter between min and max automatically (ping-pong). */
   animating?: boolean;

@@ -58,8 +58,6 @@ export function createEquationParameter(name: string): EquationParameter {
     max: DEFAULT_PARAMETER_RANGE,
     step: DEFAULT_PARAMETER_STEP,
     samplingMode: 'continuous',
-    discreteMin: -DEFAULT_PARAMETER_RANGE,
-    discreteMax: DEFAULT_PARAMETER_RANGE,
     discreteCount: DEFAULT_DISCRETE_PARAMETER_COUNT,
   };
 }
@@ -74,14 +72,10 @@ export function syncEquationParameters(
     if (!existingParameter) {
       return createEquationParameter(name);
     }
-    const discreteMin = Number.isFinite(existingParameter.discreteMin) ? existingParameter.discreteMin : existingParameter.min;
-    const discreteMax = Number.isFinite(existingParameter.discreteMax) ? existingParameter.discreteMax : existingParameter.max;
     return {
       ...existingParameter,
       samplingMode: existingParameter.samplingMode === 'discrete' ? 'discrete' : 'continuous',
       discreteCount: clampDiscreteParameterCount(existingParameter.discreteCount),
-      discreteMin: Math.min(discreteMin, discreteMax),
-      discreteMax: Math.max(discreteMin, discreteMax),
     };
   });
 }
@@ -178,29 +172,23 @@ export function updateEquationParameterSamplingMode(
     return {
       ...parameter,
       samplingMode,
-      discreteMin: Math.min(parameter.discreteMin, parameter.discreteMax),
-      discreteMax: Math.max(parameter.discreteMin, parameter.discreteMax),
       discreteCount: clampDiscreteParameterCount(parameter.discreteCount),
     };
   });
 }
 
-export function updateEquationParameterDiscreteSettings(
+export function updateEquationParameterDiscreteCount(
   parameters: readonly EquationParameter[],
   name: string,
-  patch: Partial<Pick<EquationParameter, 'discreteMin' | 'discreteMax' | 'discreteCount'>>,
+  discreteCount: number,
 ): EquationParameter[] {
   return parameters.map((parameter) => {
     if (parameter.name !== name) {
       return parameter;
     }
-    const rawMin = patch.discreteMin ?? parameter.discreteMin;
-    const rawMax = patch.discreteMax ?? parameter.discreteMax;
     return {
       ...parameter,
-      discreteMin: Math.min(rawMin, rawMax),
-      discreteMax: Math.max(rawMin, rawMax),
-      discreteCount: clampDiscreteParameterCount(patch.discreteCount ?? parameter.discreteCount),
+      discreteCount: clampDiscreteParameterCount(discreteCount),
     };
   });
 }
@@ -209,7 +197,7 @@ export function equationParameterValueContexts(parameters: readonly EquationPara
   let contexts: Array<Record<string, number>> = [{}];
   for (const parameter of parameters) {
     const values = parameter.samplingMode === 'discrete'
-      ? discreteParameterValues(parameter.discreteMin, parameter.discreteMax, parameter.discreteCount)
+      ? discreteParameterValues(parameter.min, parameter.max, parameter.discreteCount)
       : [parameter.value];
     const nextContexts: Array<Record<string, number>> = [];
     for (const context of contexts) {

@@ -7,6 +7,7 @@ import {
   adaptStepForSpan,
   advanceAnimatedParameter,
   clampAnimationSpeed,
+  equationParameterValueContexts,
   setEquationParameterBound,
 } from '../parameters';
 
@@ -18,8 +19,6 @@ function parameter(overrides: Partial<EquationParameter> = {}): EquationParamete
     max: 10,
     step: 0.1,
     samplingMode: 'continuous',
-    discreteMin: -10,
-    discreteMax: 10,
     discreteCount: 5,
     animating: true,
     animationSpeed: 0.25,
@@ -107,6 +106,16 @@ describe('setEquationParameterBound', () => {
     // span 0.5 at step 0.5 = one position; expect a fine 1/2/5 fraction instead
     expect(next[0].step).toBeLessThanOrEqual(0.005);
     expect(next[0].step).toBeGreaterThan(0);
+  });
+
+  it('also sets the bounds sampled by discrete parameters', () => {
+    const next = setEquationParameterBound(
+      [parameter({ value: -10, samplingMode: 'discrete', discreteCount: 3 })],
+      'a',
+      'min',
+      -2,
+    );
+    expect(equationParameterValueContexts(next)).toEqual([{ a: -2 }, { a: 4 }, { a: 10 }]);
   });
 });
 
