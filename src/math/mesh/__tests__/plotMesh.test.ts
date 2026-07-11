@@ -30,26 +30,25 @@ function parametricSurfaceSpec(): ParametricSurfaceSpec {
 }
 
 describe('plot mesh families', () => {
-  it('merges discrete parameter variants into a single surface mesh', () => {
+  it('shows one snapped discrete copy until playback merges the full family', () => {
     const singleVariantMesh = buildSerializedEquationMesh(parametricSurfaceSpec(), {
       wireframeCellSize: 2,
     });
-    const familyMesh = buildSerializedEquationMesh(
-      {
-        ...parametricSurfaceSpec(),
-        parameters: [
-          {
-            ...parametricSurfaceSpec().parameters[0],
-            samplingMode: 'discrete',
-          },
-        ],
-      },
-      {
-        wireframeCellSize: 2,
-      },
-    );
+    const discreteSpec: ParametricSurfaceSpec = {
+      ...parametricSurfaceSpec(),
+      parameters: [{ ...parametricSurfaceSpec().parameters[0], samplingMode: 'discrete' }],
+    };
+    const selectedCopyMesh = buildSerializedEquationMesh(discreteSpec, { wireframeCellSize: 2 });
+    const familyMesh = buildSerializedEquationMesh({
+      ...discreteSpec,
+      parameters: discreteSpec.parameters.map((parameter) => ({ ...parameter, animating: true })),
+    }, { wireframeCellSize: 2 });
 
     expect(singleVariantMesh.positions.length).toBeGreaterThan(0);
+    expect(selectedCopyMesh.positions.length).toBe(singleVariantMesh.positions.length);
+    expect(selectedCopyMesh.indices.length).toBe(singleVariantMesh.indices.length);
+    expect(selectedCopyMesh.bounds?.max.z).toBeCloseTo(2, 4);
+    expect(selectedCopyMesh.bounds?.min.z).toBeCloseTo(-2, 4);
     expect(familyMesh.positions.length).toBe(singleVariantMesh.positions.length * 2);
     expect(familyMesh.indices.length).toBe(singleVariantMesh.indices.length * 2);
     expect(familyMesh.bounds?.max.z).toBeCloseTo(4, 4);

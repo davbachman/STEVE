@@ -119,7 +119,9 @@ export function useWorkerPipeline(): void {
       // Animated parameters stream value changes every frame, so they take the
       // same throttled interactive path as an active slider drag.
       const isInteractive = activeEquationParameterDrag?.plotId === object.id
-        || object.equation.parameters.some((parameter) => parameter.animating);
+        || object.equation.parameters.some(
+          (parameter) => parameter.samplingMode === 'continuous' && parameter.animating,
+        );
       const nextSigs = {
         parse: object.equation.source.rawText,
         mesh: buildMeshSignature(object, isInteractive),

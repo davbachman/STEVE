@@ -7,8 +7,13 @@ import {
   adaptStepForSpan,
   advanceAnimatedParameter,
   clampAnimationSpeed,
+  discreteParameterStep,
   equationParameterValueContexts,
   setEquationParameterBound,
+  snapDiscreteParameterValue,
+  updateEquationParameterDiscreteCount,
+  updateEquationParameterSamplingMode,
+  updateEquationParameterValue,
 } from '../parameters';
 
 function parameter(overrides: Partial<EquationParameter> = {}): EquationParameter {
@@ -110,12 +115,46 @@ describe('setEquationParameterBound', () => {
 
   it('also sets the bounds sampled by discrete parameters', () => {
     const next = setEquationParameterBound(
-      [parameter({ value: -10, samplingMode: 'discrete', discreteCount: 3 })],
+      [parameter({ value: -10, samplingMode: 'discrete', discreteCount: 3, animating: true })],
       'a',
       'min',
       -2,
     );
     expect(equationParameterValueContexts(next)).toEqual([{ a: -2 }, { a: 4 }, { a: 10 }]);
+  });
+});
+
+describe('discrete parameter playback', () => {
+  it('snaps an inactive discrete parameter to one sampled level', () => {
+    const discrete = parameter({ value: 3, samplingMode: 'discrete', discreteCount: 5, animating: false });
+    expect(equationParameterValueContexts([discrete])).toEqual([{ a: 5 }]);
+    expect(discreteParameterStep(discrete.min, discrete.max, discrete.discreteCount)).toBe(5);
+  });
+
+  it('expands every sampled level while discrete playback is active', () => {
+    const discrete = parameter({ value: 3, samplingMode: 'discrete', discreteCount: 5, animating: true });
+    expect(equationParameterValueContexts([discrete])).toEqual([
+      { a: -10 },
+      { a: -5 },
+      { a: 0 },
+      { a: 5 },
+      { a: 10 },
+    ]);
+  });
+
+  it('snaps slider, mode-switch, and copy-count updates to the nearest level', () => {
+    expect(updateEquationParameterValue(
+      [parameter({ samplingMode: 'discrete', discreteCount: 5 })],
+      'a',
+      3,
+    )[0].value).toBe(5);
+    expect(updateEquationParameterSamplingMode([parameter({ value: 3 })], 'a', 'discrete')[0].value).toBe(5);
+    expect(updateEquationParameterDiscreteCount(
+      [parameter({ value: 4, samplingMode: 'discrete', discreteCount: 5 })],
+      'a',
+      3,
+    )[0].value).toBe(0);
+    expect(snapDiscreteParameterValue(99, -10, 10, 5)).toBe(10);
   });
 });
 

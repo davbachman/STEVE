@@ -1,7 +1,8 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { RangeField } from '../InspectorPanel';
+import { useAppStore } from '../../../state/store';
+import { InspectorPanel, RangeField } from '../InspectorPanel';
 
 // React 19 expects the test environment to opt into act() support.
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -17,6 +18,7 @@ describe('RangeField numeric entry', () => {
       });
     }
     container?.remove();
+    useAppStore.getState().newProject();
     root = null;
     container = null;
   });
@@ -66,6 +68,51 @@ describe('RangeField numeric entry', () => {
       numberInput.blur();
     });
     expect(onChange).toHaveBeenCalledWith(7);
+  });
+
+  it('uses a play button and discrete slider levels instead of always showing every copy', () => {
+    act(() => {
+      const store = useAppStore.getState();
+      store.newProject();
+      store.addPlot('surface');
+      const plot = useAppStore.getState().objects.find((object) => object.type === 'plot');
+      if (!plot) throw new Error('Expected plot');
+      useAppStore.getState().updatePlotEquationText(plot.id, '(u, v, a*u)');
+      useAppStore.getState().setInspectorTab('object');
+    });
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root?.render(<InspectorPanel />);
+    });
+
+    const modeButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Continuous',
+    );
+    expect(modeButton).toBeInstanceOf(HTMLButtonElement);
+    act(() => {
+      modeButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(modeButton?.textContent).toBe('Discrete');
+
+    const playButton = container.querySelector('button[aria-label="Show all a copies"]');
+    expect(playButton).toBeInstanceOf(HTMLButtonElement);
+    expect(playButton?.getAttribute('aria-pressed')).toBe('false');
+
+    const rangeFields = Array.from(container.querySelectorAll('.range-field'));
+    const valueField = rangeFields.find((field) => field.firstElementChild?.textContent === 'Value');
+    const copyCountField = rangeFields.find((field) => field.firstElementChild?.textContent === 'num copies');
+    expect(valueField?.querySelector('input[type="range"]')?.getAttribute('step')).toBe('5');
+    expect(copyCountField).toBeInstanceOf(HTMLLabelElement);
+
+    act(() => {
+      playButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(playButton?.getAttribute('aria-pressed')).toBe('true');
+    const plot = useAppStore.getState().objects.find((object) => object.type === 'plot');
+    expect(plot?.equation.parameters[0]?.animating).toBe(true);
   });
 });
 

@@ -19,6 +19,7 @@ import {
   DEFAULT_DISCRETE_PARAMETER_COUNT,
   clampAnimationSpeed,
   clampDiscreteParameterCount,
+  snapDiscreteParameterValue,
   syncEquationParameters,
 } from '../math/parameters';
 import {
@@ -1249,17 +1250,25 @@ function normalizeEquationParameters(
     const rawMax = asFiniteNumber(record.max);
     const min = rawMin ?? Math.min(parameter.min, value);
     const max = rawMax ?? Math.max(parameter.max, value);
+    const normalizedMin = Math.min(min, max, value);
+    const normalizedMax = Math.max(min, max, value);
     const animationSpeed = asFiniteNumber(record.animationSpeed) ?? parameter.animationSpeed;
+    const samplingMode = asEnum(record.samplingMode, ['continuous', 'discrete']) ?? parameter.samplingMode;
+    const discreteCount = clampDiscreteParameterCount(
+      asFiniteInteger(record.discreteCount) ?? parameter.discreteCount ?? DEFAULT_DISCRETE_PARAMETER_COUNT,
+    );
     return {
       ...parameter,
-      value,
-      min: Math.min(min, max, value),
-      max: Math.max(min, max, value),
+      value: samplingMode === 'discrete'
+        ? snapDiscreteParameterValue(value, normalizedMin, normalizedMax, discreteCount)
+        : value,
+      min: normalizedMin,
+      max: normalizedMax,
       step: positiveFiniteNumber(record.step) ?? parameter.step,
       animating: asBoolean(record.animating) ?? parameter.animating,
       animationSpeed: animationSpeed === undefined ? undefined : clampAnimationSpeed(animationSpeed),
-      samplingMode: asEnum(record.samplingMode, ['continuous', 'discrete']) ?? parameter.samplingMode,
-      discreteCount: clampDiscreteParameterCount(asFiniteInteger(record.discreteCount) ?? parameter.discreteCount ?? DEFAULT_DISCRETE_PARAMETER_COUNT),
+      samplingMode,
+      discreteCount,
     };
   });
 }

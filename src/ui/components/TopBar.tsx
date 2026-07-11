@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { exportPlotAsStl } from '../../persistence/meshExport';
 import { readProjectFile, saveProjectFile } from '../../persistence/projectFile';
 import { useAppStore } from '../../state/store';
@@ -23,7 +23,10 @@ export function TopBar({
   onToggleRightSidebar,
 }: TopBarProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const menuBarRef = useRef<HTMLDivElement | null>(null);
   const [exportScale, setExportScale] = useState(1);
+  const [activeMenu, setActiveMenu] = useState<'steve' | 'file' | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const exportProjectFile = useAppStore((s) => s.exportProjectFile);
   const replaceProject = useAppStore((s) => s.replaceProject);
   const newProject = useAppStore((s) => s.newProject);
@@ -34,6 +37,30 @@ export function TopBar({
   const selectedPlot = selectedId
     ? objects.find((obj): obj is PlotObject => obj.id === selectedId && obj.type === 'plot') ?? null
     : null;
+
+  useEffect(() => {
+    if (!activeMenu) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!menuBarRef.current?.contains(event.target as Node)) {
+        setActiveMenu(null);
+      }
+    };
+    document.addEventListener('pointerdown', closeOnOutsidePointer);
+    return () => document.removeEventListener('pointerdown', closeOnOutsidePointer);
+  }, [activeMenu]);
+
+  useEffect(() => {
+    if (!activeMenu && !settingsOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      setActiveMenu(null);
+      setSettingsOpen(false);
+    };
+    document.addEventListener('keydown', closeOnEscape, true);
+    return () => document.removeEventListener('keydown', closeOnEscape, true);
+  }, [activeMenu, settingsOpen]);
 
   const handleSaveProject = () => {
     void (async () => {
@@ -89,86 +116,159 @@ export function TopBar({
     window.location.assign(APP_GITHUB_URL);
   };
 
+  const openSettings = () => {
+    setActiveMenu(null);
+    setSettingsOpen(true);
+  };
+
+  const closeMenusThen = (action: () => void) => {
+    setActiveMenu(null);
+    action();
+  };
+
   return (
-    <header className="top-bar">
-      <div className="top-bar__group">
-        <button onClick={handleOpenAbout}>About</button>
-        <button onClick={() => newProject()}>New</button>
-        <button onClick={handleSaveProject}>Save</button>
-        <button onClick={() => fileInputRef.current?.click()}>Open</button>
-        <button onClick={handleExportPng}>Export PNG</button>
-        <select
-          className="top-bar__export-scale"
-          value={exportScale}
-          onChange={(e) => setExportScale(Number(e.target.value))}
-          title="PNG export resolution multiplier"
-          aria-label="PNG export scale"
-        >
-          <option value={1}>1×</option>
-          <option value={2}>2×</option>
-          <option value={4}>4×</option>
-        </select>
-        <button onClick={handleExportStl} disabled={!selectedPlot}>Export STL</button>
-      </div>
+    <>
+      <header className="top-bar">
+        <div ref={menuBarRef} className="top-bar__menu-bar" aria-label="Application menus">
+          <div className="top-bar__menu">
+            <button
+              type="button"
+              className={activeMenu === 'steve' ? 'top-bar__menu-trigger is-active' : 'top-bar__menu-trigger'}
+              aria-haspopup="menu"
+              aria-expanded={activeMenu === 'steve'}
+              onClick={() => setActiveMenu((menu) => menu === 'steve' ? null : 'steve')}
+            >
+              <strong>STEVE</strong>
+              <span className="top-bar__menu-caret" aria-hidden="true">▾</span>
+            </button>
+            {activeMenu === 'steve' ? (
+              <div className="top-bar__menu-popover" role="menu" aria-label="STEVE menu">
+                <button type="button" role="menuitem" onClick={() => closeMenusThen(handleOpenAbout)}>About</button>
+                <button type="button" role="menuitem" onClick={openSettings}>Settings</button>
+              </div>
+            ) : null}
+          </div>
 
-      <div className="top-bar__group top-bar__group--center">
-        <label>
-          Interactive Quality
-          <select
-            value={render.interactiveQuality}
-            onChange={(e) => updateRender({ interactiveQuality: e.target.value as typeof render.interactiveQuality })}
-          >
-            <option value="performance">Performance</option>
-            <option value="balanced">Balanced</option>
-            <option value="quality">Quality</option>
-          </select>
-        </label>
-      </div>
-
-      <div className="top-bar__group top-bar__group--right">
-        <div className="top-bar__sidebar-toggles" aria-label="Sidebar visibility">
-          <button
-            className={leftSidebarVisible ? 'top-bar__toggle top-bar__toggle--icon is-active' : 'top-bar__toggle top-bar__toggle--icon'}
-            onClick={onToggleLeftSidebar}
-            title={leftSidebarVisible ? 'Hide left panel' : 'Show left panel'}
-            aria-label={leftSidebarVisible ? 'Hide left panel' : 'Show left panel'}
-            aria-pressed={leftSidebarVisible}
-          >
-            <PanelToggleIcon side="left" />
-          </button>
-          <button
-            className={rightSidebarVisible ? 'top-bar__toggle top-bar__toggle--icon is-active' : 'top-bar__toggle top-bar__toggle--icon'}
-            onClick={onToggleRightSidebar}
-            title={rightSidebarVisible ? 'Hide right panel' : 'Show right panel'}
-            aria-label={rightSidebarVisible ? 'Hide right panel' : 'Show right panel'}
-            aria-pressed={rightSidebarVisible}
-          >
-            <PanelToggleIcon side="right" />
-          </button>
+          <div className="top-bar__menu">
+            <button
+              type="button"
+              className={activeMenu === 'file' ? 'top-bar__menu-trigger is-active' : 'top-bar__menu-trigger'}
+              aria-haspopup="menu"
+              aria-expanded={activeMenu === 'file'}
+              onClick={() => setActiveMenu((menu) => menu === 'file' ? null : 'file')}
+            >
+              File
+              <span className="top-bar__menu-caret" aria-hidden="true">▾</span>
+            </button>
+            {activeMenu === 'file' ? (
+              <div className="top-bar__menu-popover" role="menu" aria-label="File menu">
+                <button type="button" role="menuitem" onClick={() => closeMenusThen(newProject)}>New</button>
+                <button type="button" role="menuitem" onClick={() => closeMenusThen(handleSaveProject)}>Save</button>
+                <button type="button" role="menuitem" onClick={() => closeMenusThen(() => fileInputRef.current?.click())}>Open</button>
+                <button type="button" role="menuitem" disabled={!viewportApi} onClick={() => closeMenusThen(handleExportPng)}>Export PNG</button>
+                <button type="button" role="menuitem" disabled={!selectedPlot} onClick={() => closeMenusThen(handleExportStl)}>Export STL</button>
+              </div>
+            ) : null}
+          </div>
         </div>
-      </div>
 
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".json,.3dplot.json,application/json"
-        hidden
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          if (!file) return;
-          void (async () => {
-            try {
-              const project = await readProjectFile(file);
-              replaceProject(project);
-            } catch (err) {
-              console.error(err instanceof Error ? err.message : 'Failed to open project');
-            } finally {
-              e.target.value = '';
-            }
-          })();
-        }}
-      />
-    </header>
+        <div className="top-bar__group top-bar__group--right">
+          <div className="top-bar__sidebar-toggles" aria-label="Sidebar visibility">
+            <button
+              className={leftSidebarVisible ? 'top-bar__toggle top-bar__toggle--icon is-active' : 'top-bar__toggle top-bar__toggle--icon'}
+              onClick={onToggleLeftSidebar}
+              title={leftSidebarVisible ? 'Hide left panel' : 'Show left panel'}
+              aria-label={leftSidebarVisible ? 'Hide left panel' : 'Show left panel'}
+              aria-pressed={leftSidebarVisible}
+            >
+              <PanelToggleIcon side="left" />
+            </button>
+            <button
+              className={rightSidebarVisible ? 'top-bar__toggle top-bar__toggle--icon is-active' : 'top-bar__toggle top-bar__toggle--icon'}
+              onClick={onToggleRightSidebar}
+              title={rightSidebarVisible ? 'Hide right panel' : 'Show right panel'}
+              aria-label={rightSidebarVisible ? 'Hide right panel' : 'Show right panel'}
+              aria-pressed={rightSidebarVisible}
+            >
+              <PanelToggleIcon side="right" />
+            </button>
+          </div>
+        </div>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".json,.3dplot.json,application/json"
+          hidden
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            void (async () => {
+              try {
+                const project = await readProjectFile(file);
+                replaceProject(project);
+              } catch (err) {
+                console.error(err instanceof Error ? err.message : 'Failed to open project');
+              } finally {
+                e.target.value = '';
+              }
+            })();
+          }}
+        />
+      </header>
+
+      {settingsOpen ? (
+        <div
+          className="settings-overlay"
+          role="presentation"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) setSettingsOpen(false);
+          }}
+        >
+          <section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+            <header className="settings-dialog__header">
+              <h2 id="settings-title">Settings</h2>
+              <button
+                type="button"
+                className="settings-dialog__close"
+                aria-label="Close settings"
+                title="Close settings"
+                autoFocus
+                onClick={() => setSettingsOpen(false)}
+              >
+                ×
+              </button>
+            </header>
+            <div className="settings-dialog__body">
+              <label>
+                <span>PNG Export Quality</span>
+                <select
+                  value={exportScale}
+                  onChange={(e) => setExportScale(Number(e.target.value))}
+                  aria-label="PNG Export Quality"
+                >
+                  <option value={1}>Standard (1×)</option>
+                  <option value={2}>High (2×)</option>
+                  <option value={4}>Ultra (4×)</option>
+                </select>
+              </label>
+              <label>
+                <span>Interactive Quality</span>
+                <select
+                  value={render.interactiveQuality}
+                  onChange={(e) => updateRender({ interactiveQuality: e.target.value as typeof render.interactiveQuality })}
+                  aria-label="Interactive Quality"
+                >
+                  <option value="performance">Performance</option>
+                  <option value="balanced">Balanced</option>
+                  <option value="quality">Quality</option>
+                </select>
+              </label>
+            </div>
+          </section>
+        </div>
+      ) : null}
+    </>
   );
 }
 

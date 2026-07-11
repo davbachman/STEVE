@@ -4,6 +4,7 @@ import {
   MAX_PARAMETER_ANIMATION_SPEED,
   MIN_PARAMETER_ANIMATION_SPEED,
   clampDiscreteParameterCount,
+  discreteParameterStep,
   setEquationParameterBound,
   updateEquationParameterDiscreteCount,
   updateEquationParameterSamplingMode,
@@ -750,7 +751,6 @@ function EquationParameterEditor({ plot }: { plot: PlotObject }) {
                     type="button"
                     className={parameter.samplingMode === 'discrete' ? 'equation-parameter__mode equation-parameter__mode--active' : 'equation-parameter__mode'}
                     onClick={() => {
-                      const switchingToDiscrete = parameter.samplingMode !== 'discrete';
                       updatePlotSpec(plot.id, (spec) => ({
                         ...spec,
                         parameters: updateEquationParameterSamplingMode(
@@ -759,8 +759,9 @@ function EquationParameterEditor({ plot }: { plot: PlotObject }) {
                           parameter.samplingMode === 'discrete' ? 'continuous' : 'discrete',
                         ),
                       }));
-                      if (switchingToDiscrete && parameter.animating) {
-                        // Discrete families ignore the animated value, so stop the sweep.
+                      if (parameter.animating) {
+                        // Playback has different meanings in each mode, so a mode
+                        // switch always starts with the new mode paused.
                         setParameterAnimation(plot.id, parameter.name, { animating: false });
                       }
                     }}
@@ -768,25 +769,41 @@ function EquationParameterEditor({ plot }: { plot: PlotObject }) {
                     {parameter.samplingMode === 'discrete' ? 'Discrete' : 'Continuous'}
                   </button>
                 ) : null}
-                {!isDiscrete ? (
-                  <button
-                    type="button"
-                    className="parameter-editor__play"
-                    title={parameter.animating ? `Pause ${parameter.name}` : `Animate ${parameter.name} between its min and max`}
-                    aria-label={parameter.animating ? `Pause ${parameter.name}` : `Animate ${parameter.name}`}
-                    aria-pressed={Boolean(parameter.animating)}
-                    onClick={() => setParameterAnimation(plot.id, parameter.name, { animating: !parameter.animating })}
-                  >
-                    {parameter.animating ? '⏸' : '▶'}
-                  </button>
-                ) : null}
+                <button
+                  type="button"
+                  className="parameter-editor__play"
+                  title={
+                    isDiscrete
+                      ? parameter.animating
+                        ? `Show only the selected ${parameter.name} copy`
+                        : `Show all ${parameter.discreteCount} ${parameter.name} copies`
+                      : parameter.animating
+                        ? `Pause ${parameter.name}`
+                        : `Animate ${parameter.name} between its min and max`
+                  }
+                  aria-label={
+                    isDiscrete
+                      ? parameter.animating
+                        ? `Show only selected ${parameter.name} copy`
+                        : `Show all ${parameter.name} copies`
+                      : parameter.animating
+                        ? `Pause ${parameter.name}`
+                        : `Animate ${parameter.name}`
+                  }
+                  aria-pressed={Boolean(parameter.animating)}
+                  onClick={() => setParameterAnimation(plot.id, parameter.name, { animating: !parameter.animating })}
+                >
+                  {parameter.animating ? '⏸' : '▶'}
+                </button>
               </span>
             </div>
             <RangeField
               label={discreteFamiliesEnabled ? 'Value' : parameter.name}
               min={parameter.min}
               max={parameter.max}
-              step={parameter.step}
+              step={isDiscrete
+                ? discreteParameterStep(parameter.min, parameter.max, parameter.discreteCount)
+                : parameter.step}
               value={parameter.value}
               onDragStart={() => beginEquationParameterDrag(plot.id, parameter.name)}
               onDragEnd={() => commitEquationParameterDrag(plot.id, parameter.name)}
@@ -808,7 +825,7 @@ function EquationParameterEditor({ plot }: { plot: PlotObject }) {
             />
             {isDiscrete ? (
               <RangeField
-                label="n"
+                label="num copies"
                 min={1}
                 max={64}
                 step={1}

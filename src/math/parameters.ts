@@ -76,6 +76,14 @@ export function syncEquationParameters(
       ...existingParameter,
       samplingMode: existingParameter.samplingMode === 'discrete' ? 'discrete' : 'continuous',
       discreteCount: clampDiscreteParameterCount(existingParameter.discreteCount),
+      value: existingParameter.samplingMode === 'discrete'
+        ? snapDiscreteParameterValue(
+            existingParameter.value,
+            existingParameter.min,
+            existingParameter.max,
+            existingParameter.discreteCount,
+          )
+        : existingParameter.value,
     };
   });
 }
@@ -94,8 +102,14 @@ export function updateEquationParameterValue(
   value: number,
 ): EquationParameter[] {
   return parameters.map((parameter) => {
-    if (parameter.name !== name) {
+    if (parameter.name !== name || !Number.isFinite(value)) {
       return parameter;
+    }
+    if (parameter.samplingMode === 'discrete') {
+      return {
+        ...parameter,
+        value: snapDiscreteParameterValue(value, parameter.min, parameter.max, parameter.discreteCount),
+      };
     }
     return {
       ...parameter,
@@ -173,6 +187,9 @@ export function updateEquationParameterSamplingMode(
       ...parameter,
       samplingMode,
       discreteCount: clampDiscreteParameterCount(parameter.discreteCount),
+      value: samplingMode === 'discrete'
+        ? snapDiscreteParameterValue(parameter.value, parameter.min, parameter.max, parameter.discreteCount)
+        : parameter.value,
     };
   });
 }
@@ -189,6 +206,7 @@ export function updateEquationParameterDiscreteCount(
     return {
       ...parameter,
       discreteCount: clampDiscreteParameterCount(discreteCount),
+      value: snapDiscreteParameterValue(parameter.value, parameter.min, parameter.max, discreteCount),
     };
   });
 }
@@ -197,7 +215,9 @@ export function equationParameterValueContexts(parameters: readonly EquationPara
   let contexts: Array<Record<string, number>> = [{}];
   for (const parameter of parameters) {
     const values = parameter.samplingMode === 'discrete'
-      ? discreteParameterValues(parameter.min, parameter.max, parameter.discreteCount)
+      ? parameter.animating
+        ? discreteParameterValues(parameter.min, parameter.max, parameter.discreteCount)
+        : [snapDiscreteParameterValue(parameter.value, parameter.min, parameter.max, parameter.discreteCount)]
       : [parameter.value];
     const nextContexts: Array<Record<string, number>> = [];
     for (const context of contexts) {
@@ -230,11 +250,38 @@ export function clampDiscreteParameterCount(value: number): number {
   return Math.min(MAX_DISCRETE_PARAMETER_COUNT, Math.max(MIN_DISCRETE_PARAMETER_COUNT, Math.round(value)));
 }
 
+export function discreteParameterStep(min: number, max: number, count: number): number {
+  const span = max - min;
+  const normalizedCount = clampDiscreteParameterCount(count);
+  if (!Number.isFinite(span) || span <= 0) {
+    return 1;
+  }
+  return normalizedCount <= 1 ? span : span / (normalizedCount - 1);
+}
+
+export function snapDiscreteParameterValue(
+  value: number,
+  min: number,
+  max: number,
+  count: number,
+): number {
+  if (![value, min, max].every(Number.isFinite) || max <= min) {
+    return value;
+  }
+  const normalizedCount = clampDiscreteParameterCount(count);
+  if (normalizedCount <= 1) {
+    return min;
+  }
+  const step = discreteParameterStep(min, max, normalizedCount);
+  const index = Math.min(normalizedCount - 1, Math.max(0, Math.round((value - min) / step)));
+  return min + index * step;
+}
+
 function discreteParameterValues(min: number, max: number, count: number): number[] {
   const normalizedCount = clampDiscreteParameterCount(count);
   if (normalizedCount <= 1) {
     return [min];
   }
-  const step = (max - min) / (normalizedCount - 1);
+  const step = discreteParameterStep(min, max, normalizedCount);
   return Array.from({ length: normalizedCount }, (_, index) => min + step * index);
 }

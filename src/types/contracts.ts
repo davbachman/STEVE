@@ -72,9 +72,9 @@ export interface EquationParameter {
   step: number;
   samplingMode: 'continuous' | 'discrete';
   discreteCount: number;
-  /** Sweep this parameter between min and max automatically (ping-pong). */
+  /** Continuous: sweep automatically. Discrete: show every sampled copy. */
   animating?: boolean;
-  /** Sweep speed as a fraction of the min→max range per second. */
+  /** Continuous sweep speed as a fraction of the min→max range per second. */
   animationSpeed?: number;
 }
 
