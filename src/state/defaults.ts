@@ -250,7 +250,7 @@ export const defaultSceneSettings = (): SceneSettings => ({
   gridLineOpacity: 0.6,
   axesVisible: true,
   axesLength: 6,
-  axisLabelsVisible: true,
+  axisLabelsVisible: false,
   defaultGraphBounds: structuredClone(defaultBounds),
   ambient: { enabled: true, color: '#eef4ff', intensity: 0.22 },
   directional: {
