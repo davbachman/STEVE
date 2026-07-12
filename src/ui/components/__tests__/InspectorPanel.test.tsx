@@ -116,6 +116,64 @@ describe('RangeField numeric entry', () => {
     const plot = useAppStore.getState().objects.find((object) => object.type === 'plot');
     expect(plot?.equation.parameters[0]?.animating).toBe(true);
   });
+
+  it('uses compact numeric bounds tables while retaining sampling sliders', () => {
+    act(() => {
+      const store = useAppStore.getState();
+      store.newProject();
+      store.addPlot('curve');
+      store.setInspectorTab('object');
+    });
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root?.render(<InspectorPanel />);
+    });
+
+    const curveTable = container.querySelector('[aria-label="Curve parameter bounds"]');
+    expect(curveTable).toBeInstanceOf(HTMLDivElement);
+    expect(curveTable?.querySelectorAll('input[type="number"]')).toHaveLength(2);
+    expect(curveTable?.querySelector('input[type="range"]')).toBeNull();
+    expect(curveTable?.querySelector('input[aria-label="t min"]')).toBeInstanceOf(HTMLInputElement);
+    expect(curveTable?.querySelector('input[aria-label="t max"]')).toBeInstanceOf(HTMLInputElement);
+    expect(Array.from(container.querySelectorAll('.range-field')).some(
+      (field) => field.firstElementChild?.textContent === 'Samples',
+    )).toBe(true);
+
+    act(() => {
+      const store = useAppStore.getState();
+      store.newProject();
+      store.addPlot('graph');
+    });
+
+    const graphTable = container.querySelector('[aria-label="Graph parameter bounds"]');
+    expect(graphTable).toBeInstanceOf(HTMLDivElement);
+    expect(graphTable?.querySelectorAll('input[type="number"]')).toHaveLength(4);
+    expect(graphTable?.querySelector('input[type="range"]')).toBeNull();
+    for (const label of ['x min', 'x max', 'y min', 'y max']) {
+      expect(graphTable?.querySelector(`input[aria-label="${label}"]`)).toBeInstanceOf(HTMLInputElement);
+    }
+    const samplingFields = Array.from(container.querySelectorAll('.range-field')).filter(
+      (field) => field.firstElementChild?.textContent?.endsWith('samples'),
+    );
+    expect(samplingFields).toHaveLength(2);
+
+    act(() => {
+      const store = useAppStore.getState();
+      store.newProject();
+      store.addPlot('implicit');
+    });
+
+    const implicitTable = container.querySelector('[aria-label="Implicit surface object bounds"]');
+    expect(implicitTable).toBeInstanceOf(HTMLDivElement);
+    expect(implicitTable?.querySelectorAll('input[type="number"]')).toHaveLength(6);
+    expect(implicitTable?.querySelector('input[type="range"]')).toBeNull();
+    for (const label of ['x min', 'x max', 'y min', 'y max', 'z min', 'z max']) {
+      expect(implicitTable?.querySelector(`input[aria-label="${label}"]`)).toBeInstanceOf(HTMLInputElement);
+    }
+  });
 });
 
 function setNativeInputValue(input: HTMLInputElement, value: string): void {

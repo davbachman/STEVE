@@ -102,31 +102,37 @@ function ObjectTab({ selected }: { selected: PlotObject | PointLightObject | nul
         onChange={(next) => setObjectPosition(selected.id, next)}
       />
       {selected.type === 'plot' && selected.equation.kind === 'parametric_curve' ? (
-        <div className="control-grid">
-          <RangeField
-            label="t min"
-            min={-40}
-            max={40}
-            step={0.1}
-            value={selected.equation.tDomain.min}
-            onChange={(value) =>
-              updatePlotSpec(selected.id, (spec) =>
-                spec.kind === 'parametric_curve' ? { ...spec, tDomain: { ...spec.tDomain, min: value } } : spec,
-              )
-            }
-          />
-          <RangeField
-            label="t max"
-            min={-40}
-            max={40}
-            step={0.1}
-            value={selected.equation.tDomain.max}
-            onChange={(value) =>
-              updatePlotSpec(selected.id, (spec) =>
-                spec.kind === 'parametric_curve' ? { ...spec, tDomain: { ...spec.tDomain, max: value } } : spec,
-              )
-            }
-          />
+        <>
+          <div className="domain-editor">
+            <h4>Parameter Bounds</h4>
+            <div className="domain-table domain-table--bounds" role="table" aria-label="Curve parameter bounds">
+              <span className="domain-table__heading" aria-hidden="true" />
+              <span className="domain-table__heading" role="columnheader">Min</span>
+              <span className="domain-table__heading" role="columnheader">Max</span>
+              <span className="domain-table__axis" role="rowheader">t</span>
+              <CompactNumberInput
+                ariaLabel="t min"
+                step={0.1}
+                value={selected.equation.tDomain.min}
+                onChange={(value) =>
+                  updatePlotSpec(selected.id, (spec) =>
+                    spec.kind === 'parametric_curve' ? { ...spec, tDomain: { ...spec.tDomain, min: value } } : spec,
+                  )
+                }
+              />
+              <CompactNumberInput
+                ariaLabel="t max"
+                step={0.1}
+                value={selected.equation.tDomain.max}
+                onChange={(value) =>
+                  updatePlotSpec(selected.id, (spec) =>
+                    spec.kind === 'parametric_curve' ? { ...spec, tDomain: { ...spec.tDomain, max: value } } : spec,
+                  )
+                }
+              />
+            </div>
+          </div>
+          <div className="control-grid">
           {selected.equation.renderAsTube ? (
             <RangeField
               label="Width"
@@ -153,7 +159,8 @@ function ObjectTab({ selected }: { selected: PlotObject | PointLightObject | nul
               )
             }
           />
-        </div>
+          </div>
+        </>
       ) : null}
       {selected.type === 'plot' && (selected.equation.kind === 'parametric_surface' || selected.equation.kind === 'explicit_surface') ? (
         <SurfaceDomainEditor plot={selected} />
@@ -680,14 +687,33 @@ function SurfaceDomainEditor({ plot }: { plot: PlotObject }) {
   const [firstAxisLabel, secondAxisLabel] = plot.equation.kind === 'explicit_surface'
     ? plot.equation.domainAxes
     : ['u', 'v'];
+  const updateDomain = (patch: Partial<typeof domain>) => {
+    updatePlotSpec(plot.id, (spec) => (
+      (spec.kind === 'parametric_surface' || spec.kind === 'explicit_surface')
+        ? { ...spec, domain: { ...spec.domain, ...patch } }
+        : spec
+    ));
+  };
   return (
-    <div className="control-grid">
-      <RangeField label={`${firstAxisLabel} min`} min={-20} max={20} step={0.1} value={domain.uMin} onChange={(v) => updatePlotSpec(plot.id, (spec) => ((spec.kind === 'parametric_surface' || spec.kind === 'explicit_surface') ? { ...spec, domain: { ...spec.domain, uMin: v } } : spec))} />
-      <RangeField label={`${firstAxisLabel} max`} min={-20} max={20} step={0.1} value={domain.uMax} onChange={(v) => updatePlotSpec(plot.id, (spec) => ((spec.kind === 'parametric_surface' || spec.kind === 'explicit_surface') ? { ...spec, domain: { ...spec.domain, uMax: v } } : spec))} />
-      <RangeField label={`${secondAxisLabel} min`} min={-20} max={20} step={0.1} value={domain.vMin} onChange={(v) => updatePlotSpec(plot.id, (spec) => ((spec.kind === 'parametric_surface' || spec.kind === 'explicit_surface') ? { ...spec, domain: { ...spec.domain, vMin: v } } : spec))} />
-      <RangeField label={`${secondAxisLabel} max`} min={-20} max={20} step={0.1} value={domain.vMax} onChange={(v) => updatePlotSpec(plot.id, (spec) => ((spec.kind === 'parametric_surface' || spec.kind === 'explicit_surface') ? { ...spec, domain: { ...spec.domain, vMax: v } } : spec))} />
-      <RangeField label={`${firstAxisLabel} samples`} min={8} max={256} step={1} value={domain.uSamples} onChange={(v) => updatePlotSpec(plot.id, (spec) => ((spec.kind === 'parametric_surface' || spec.kind === 'explicit_surface') ? { ...spec, domain: { ...spec.domain, uSamples: Math.round(v) } } : spec))} />
-      <RangeField label={`${secondAxisLabel} samples`} min={8} max={256} step={1} value={domain.vSamples} onChange={(v) => updatePlotSpec(plot.id, (spec) => ((spec.kind === 'parametric_surface' || spec.kind === 'explicit_surface') ? { ...spec, domain: { ...spec.domain, vSamples: Math.round(v) } } : spec))} />
+    <div className="domain-editor">
+      <h4>Parameter Bounds</h4>
+      <div
+        className="domain-table domain-table--bounds"
+        role="table"
+        aria-label={plot.equation.kind === 'explicit_surface' ? 'Graph parameter bounds' : 'Parametric surface parameter bounds'}
+      >
+        <span className="domain-table__heading" aria-hidden="true" />
+        <span className="domain-table__heading" role="columnheader">Min</span>
+        <span className="domain-table__heading" role="columnheader">Max</span>
+        <span className="domain-table__axis" role="rowheader">{firstAxisLabel}</span>
+        <CompactNumberInput ariaLabel={`${firstAxisLabel} min`} step={0.1} value={domain.uMin} onChange={(value) => updateDomain({ uMin: value })} />
+        <CompactNumberInput ariaLabel={`${firstAxisLabel} max`} step={0.1} value={domain.uMax} onChange={(value) => updateDomain({ uMax: value })} />
+        <span className="domain-table__axis" role="rowheader">{secondAxisLabel}</span>
+        <CompactNumberInput ariaLabel={`${secondAxisLabel} min`} step={0.1} value={domain.vMin} onChange={(value) => updateDomain({ vMin: value })} />
+        <CompactNumberInput ariaLabel={`${secondAxisLabel} max`} step={0.1} value={domain.vMax} onChange={(value) => updateDomain({ vMax: value })} />
+      </div>
+      <RangeField label={`${firstAxisLabel} samples`} min={8} max={256} step={1} value={domain.uSamples} onChange={(value) => updateDomain({ uSamples: Math.round(value) })} />
+      <RangeField label={`${secondAxisLabel} samples`} min={8} max={256} step={1} value={domain.vSamples} onChange={(value) => updateDomain({ vSamples: Math.round(value) })} />
     </div>
   );
 }
@@ -906,18 +932,30 @@ function BoundsEditor({ objectId }: { objectId?: string } = {}) {
   return (
     <div className="bounds-editor">
       <h4>{objectId ? 'Object Bounds' : 'Default Graph Bounds'}</h4>
-      <div className="control-grid control-grid--bounds">
+      <div
+        className="domain-table domain-table--bounds"
+        role="table"
+        aria-label={objectId ? 'Implicit surface object bounds' : 'Default graph bounds'}
+      >
+        <span className="domain-table__heading" aria-hidden="true" />
+        <span className="domain-table__heading" role="columnheader">Min</span>
+        <span className="domain-table__heading" role="columnheader">Max</span>
         {(['x', 'y', 'z'] as const).map((axis) => (
-          <label key={`${axis}-min`}>
-            {axis} min
-            <input type="number" step={0.1} value={targetBounds.min[axis]} onChange={(e) => setBounds(axis, 'min', Number(e.target.value))} />
-          </label>
-        ))}
-        {(['x', 'y', 'z'] as const).map((axis) => (
-          <label key={`${axis}-max`}>
-            {axis} max
-            <input type="number" step={0.1} value={targetBounds.max[axis]} onChange={(e) => setBounds(axis, 'max', Number(e.target.value))} />
-          </label>
+          <div className="domain-table__row" role="row" key={axis}>
+            <span className="domain-table__axis" role="rowheader">{axis}</span>
+            <CompactNumberInput
+              ariaLabel={`${axis} min`}
+              step={0.1}
+              value={targetBounds.min[axis]}
+              onChange={(value) => setBounds(axis, 'min', value)}
+            />
+            <CompactNumberInput
+              ariaLabel={`${axis} max`}
+              step={0.1}
+              value={targetBounds.max[axis]}
+              onChange={(value) => setBounds(axis, 'max', value)}
+            />
+          </div>
         ))}
       </div>
     </div>
@@ -943,6 +981,49 @@ function NumberTriplet({
         </label>
       ))}
     </div>
+  );
+}
+
+function CompactNumberInput({
+  ariaLabel,
+  value,
+  step,
+  onChange,
+}: {
+  ariaLabel: string;
+  value: number;
+  step: number;
+  onChange: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const commit = (raw: string) => {
+    setDraft(null);
+    const parsed = Number(raw);
+    if (raw.trim() !== '' && Number.isFinite(parsed) && parsed !== value) {
+      onChange(parsed);
+    }
+  };
+
+  return (
+    <input
+      type="number"
+      aria-label={ariaLabel}
+      step={step}
+      value={draft ?? value}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={(event) => {
+        if (draft !== null) commit(event.target.value);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          commit(event.currentTarget.value);
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          setDraft(null);
+        }
+      }}
+    />
   );
 }
 

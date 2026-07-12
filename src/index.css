@@ -1101,6 +1101,49 @@ input[type='color'] {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.domain-editor {
+  display: grid;
+  gap: 0.45rem;
+  padding-top: 0.25rem;
+}
+
+.domain-editor h4 {
+  margin: 0.2rem 0 0;
+  font-size: 0.95rem;
+}
+
+.domain-table {
+  display: grid;
+  grid-template-columns: 1.6rem repeat(3, minmax(0, 1fr));
+  gap: 0.35rem 0.4rem;
+  align-items: center;
+}
+
+.domain-table--bounds {
+  grid-template-columns: 1.6rem repeat(2, minmax(0, 1fr));
+}
+
+.domain-table__row {
+  display: contents;
+}
+
+.domain-table__heading {
+  color: #92a1b7;
+  font-size: 0.72rem;
+  text-align: center;
+}
+
+.domain-table__axis {
+  color: #c6d4e9;
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.domain-table input[type='number'] {
+  width: 100%;
+  min-width: 0;
+}
+
 .bounds-editor {
   display: grid;
   gap: 0.45rem;
