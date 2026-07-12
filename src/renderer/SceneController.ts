@@ -210,6 +210,23 @@ const DEFAULT_CAMERA_ALPHA = -Math.PI / 3;
 const DEFAULT_CAMERA_BETA = 1.1;
 const DEFAULT_CAMERA_RADIUS = 20;
 const DEFAULT_CAMERA_TARGET = vec3.fromValues(0, 0, 1.5);
+
+export function resolveViewPresetOrientation(preset: ViewPreset): {
+  alpha: number;
+  beta: number;
+  upVector: readonly [number, number, number];
+} {
+  switch (preset) {
+    case 'top':
+      return { alpha: -Math.PI / 2, beta: 0, upVector: [0, 1, 0] };
+    case 'front':
+      return { alpha: -Math.PI / 2, beta: Math.PI / 2, upVector: [0, 0, 1] };
+    case 'side':
+      return { alpha: 0, beta: Math.PI / 2, upVector: [0, 0, 1] };
+    case 'default':
+      return { alpha: DEFAULT_CAMERA_ALPHA, beta: DEFAULT_CAMERA_BETA, upVector: [0, 0, 1] };
+  }
+}
 const POINT_SHADOW_FACE_VECTORS: Array<{ target: vec3; up: vec3 }> = [
   { target: vec3.fromValues(1, 0, 0), up: vec3.fromValues(0, -1, 0) },
   { target: vec3.fromValues(-1, 0, 0), up: vec3.fromValues(0, -1, 0) },
@@ -423,26 +440,15 @@ export class SceneController {
   }
 
   setViewPreset(preset: ViewPreset): void {
+    const orientation = resolveViewPresetOrientation(preset);
+    this.camera.alpha = orientation.alpha;
+    this.camera.beta = orientation.beta;
+    vec3.set(this.camera.upVector, ...orientation.upVector);
     if (preset === 'default') {
-      this.camera.alpha = DEFAULT_CAMERA_ALPHA;
-      this.camera.beta = DEFAULT_CAMERA_BETA;
       this.camera.radius = DEFAULT_CAMERA_RADIUS;
       vec3.copy(this.camera.target, DEFAULT_CAMERA_TARGET);
-      return;
     }
     // Axis views keep the current target and distance so the subject stays framed.
-    if (preset === 'top') {
-      this.camera.alpha = -Math.PI / 2;
-      this.camera.beta = 0.1;
-      return;
-    }
-    if (preset === 'front') {
-      this.camera.alpha = -Math.PI / 2;
-      this.camera.beta = Math.PI / 2;
-      return;
-    }
-    this.camera.alpha = 0;
-    this.camera.beta = Math.PI / 2;
   }
 
   frameObject(objectId: string | null): void {
@@ -2441,6 +2447,7 @@ export class SceneController {
       if (this.cameraDrag.mode === 'orbit') {
         this.camera.alpha -= dx * 0.01;
         this.camera.beta = clamp(this.camera.beta - dy * 0.01, 0.1, Math.PI - 0.1);
+        vec3.set(this.camera.upVector, 0, 0, 1);
       } else {
         const scale = this.camera.radius * 0.002;
         const position = this.getCameraPosition();
