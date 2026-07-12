@@ -131,5 +131,19 @@ describe('plot mesh families', () => {
     expect(interactiveMesh.lines?.slice(3).map((line) => line[0])).toEqual(
       fullMesh.lines?.slice(3).map((line) => line[0]),
     );
+
+    const surfaceVertices = new Set<string>();
+    for (let offset = 0; offset < interactiveMesh.positions.length; offset += 3) {
+      surfaceVertices.add([
+        interactiveMesh.positions[offset],
+        interactiveMesh.positions[offset + 1],
+        interactiveMesh.positions[offset + 2],
+      ].join('|'));
+    }
+    for (const line of interactiveMesh.lines ?? []) {
+      for (let offset = 0; offset < line.length; offset += 3) {
+        expect(surfaceVertices.has([line[offset], line[offset + 1], line[offset + 2]].join('|'))).toBe(true);
+      }
+    }
   });
 });

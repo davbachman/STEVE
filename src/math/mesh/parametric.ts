@@ -36,8 +36,15 @@ export function buildSurfaceMesh(
   wireframeCellSize = 1,
   wireframeReferenceSamples?: { uSamples: number; vSamples: number },
 ): SerializedMesh {
-  const uSamples = Math.max(2, Math.floor(domain.uSamples));
-  const vSamples = Math.max(2, Math.floor(domain.vSamples));
+  const targetUSamples = Math.max(2, Math.floor(domain.uSamples));
+  const targetVSamples = Math.max(2, Math.floor(domain.vSamples));
+  const step = Math.max(1, Math.floor(wireframeCellSize));
+  const referenceUSamples = Math.max(2, Math.floor(wireframeReferenceSamples?.uSamples ?? targetUSamples));
+  const referenceVSamples = Math.max(2, Math.floor(wireframeReferenceSamples?.vSamples ?? targetVSamples));
+  const uSampling = buildAxisSampling(targetUSamples, referenceUSamples, step);
+  const vSampling = buildAxisSampling(targetVSamples, referenceVSamples, step);
+  const uSamples = uSampling.fractions.length;
+  const vSamples = vSampling.fractions.length;
 
   const positions: number[] = [];
   const uvs: number[] = [];
@@ -45,14 +52,16 @@ export function buildSurfaceMesh(
   const valid: boolean[] = [];
 
   for (let j = 0; j < vSamples; j += 1) {
-    const v = domain.vMin + ((domain.vMax - domain.vMin) * j) / (vSamples - 1);
+    const vFraction = vSampling.fractions[j];
+    const v = domain.vMin + (domain.vMax - domain.vMin) * vFraction;
     for (let i = 0; i < uSamples; i += 1) {
-      const u = domain.uMin + ((domain.uMax - domain.uMin) * i) / (uSamples - 1);
+      const uFraction = uSampling.fractions[i];
+      const u = domain.uMin + (domain.uMax - domain.uMin) * uFraction;
       const [x, y, z] = fn(u, v);
       const ok = Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z);
       valid.push(ok);
       positions.push(ok ? x : 0, ok ? y : 0, ok ? z : 0);
-      uvs.push(i / (uSamples - 1), j / (vSamples - 1));
+      uvs.push(uFraction, vFraction);
     }
   }
 
@@ -76,48 +85,21 @@ export function buildSurfaceMesh(
   const edgeData = extractMeshEdges(positions, indices);
 
   const lines: Float32Array[] = [];
-  const step = Math.max(1, Math.floor(wireframeCellSize));
-  const referenceUSamples = Math.max(2, Math.floor(wireframeReferenceSamples?.uSamples ?? uSamples));
-  const referenceVSamples = Math.max(2, Math.floor(wireframeReferenceSamples?.vSamples ?? vSamples));
-  if (referenceUSamples === uSamples && referenceVSamples === vSamples) {
-    for (let j = 0; j < vSamples; j += step) {
-      const line: number[] = [];
-      for (let i = 0; i < uSamples; i += 1) {
-        const k = idx(i, j) * 3;
-        line.push(positions[k], positions[k + 1], positions[k + 2]);
-      }
-      lines.push(new Float32Array(line));
+  for (const j of vSampling.wireIndices) {
+    const line: number[] = [];
+    for (let i = 0; i < uSamples; i += 1) {
+      const k = idx(i, j) * 3;
+      line.push(positions[k], positions[k + 1], positions[k + 2]);
     }
-    for (let i = 0; i < uSamples; i += step) {
-      const line: number[] = [];
-      for (let j = 0; j < vSamples; j += 1) {
-        const k = idx(i, j) * 3;
-        line.push(positions[k], positions[k + 1], positions[k + 2]);
-      }
-      lines.push(new Float32Array(line));
+    lines.push(new Float32Array(line));
+  }
+  for (const i of uSampling.wireIndices) {
+    const line: number[] = [];
+    for (let j = 0; j < vSamples; j += 1) {
+      const k = idx(i, j) * 3;
+      line.push(positions[k], positions[k + 1], positions[k + 2]);
     }
-  } else {
-    // Interactive/preview meshes use fewer surface samples. Keep the grid at
-    // the full-resolution parameter values so its cells do not grow or shrink
-    // while a parameter is dragged or animated; only line smoothness changes.
-    for (let j = 0; j < referenceVSamples; j += step) {
-      const v = domain.vMin + ((domain.vMax - domain.vMin) * j) / (referenceVSamples - 1);
-      const line: number[] = [];
-      for (let i = 0; i < uSamples; i += 1) {
-        const u = domain.uMin + ((domain.uMax - domain.uMin) * i) / (uSamples - 1);
-        pushFinitePoint(line, fn(u, v));
-      }
-      lines.push(new Float32Array(line));
-    }
-    for (let i = 0; i < referenceUSamples; i += step) {
-      const u = domain.uMin + ((domain.uMax - domain.uMin) * i) / (referenceUSamples - 1);
-      const line: number[] = [];
-      for (let j = 0; j < vSamples; j += 1) {
-        const v = domain.vMin + ((domain.vMax - domain.vMin) * j) / (vSamples - 1);
-        pushFinitePoint(line, fn(u, v));
-      }
-      lines.push(new Float32Array(line));
-    }
+    lines.push(new Float32Array(line));
   }
 
   return {
@@ -133,11 +115,49 @@ export function buildSurfaceMesh(
   };
 }
 
-function pushFinitePoint(target: number[], point: [number, number, number]): void {
-  const [x, y, z] = point;
-  if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
-    target.push(x, y, z);
-  } else {
-    target.push(0, 0, 0);
+function buildAxisSampling(
+  targetSamples: number,
+  referenceSamples: number,
+  wireframeStep: number,
+): { fractions: number[]; wireIndices: number[] } {
+  if (targetSamples === referenceSamples) {
+    return {
+      fractions: Array.from({ length: targetSamples }, (_, index) => index / (targetSamples - 1)),
+      wireIndices: Array.from(
+        { length: Math.ceil(referenceSamples / wireframeStep) },
+        (_, index) => index * wireframeStep,
+      ),
+    };
   }
+
+  // Anchor the lower-resolution mesh at every full-resolution wireframe
+  // coordinate. This keeps both grid-line families on mesh rows/columns, so
+  // depth testing cannot hide one family behind the coarser animated surface.
+  const locations = new Map<number, boolean>();
+  for (let index = 0; index < referenceSamples; index += wireframeStep) {
+    locations.set(index / (referenceSamples - 1), true);
+  }
+  locations.set(0, locations.get(0) ?? false);
+  locations.set(1, locations.get(1) ?? false);
+
+  while (locations.size < targetSamples) {
+    const sorted = [...locations.keys()].sort((a, b) => a - b);
+    let widestStart = sorted[0];
+    let widestGap = -1;
+    for (let index = 0; index < sorted.length - 1; index += 1) {
+      const gap = sorted[index + 1] - sorted[index];
+      if (gap > widestGap) {
+        widestGap = gap;
+        widestStart = sorted[index];
+      }
+    }
+    if (widestGap <= 0) break;
+    locations.set(widestStart + widestGap / 2, false);
+  }
+
+  const entries = [...locations.entries()].sort(([a], [b]) => a - b);
+  return {
+    fractions: entries.map(([fraction]) => fraction),
+    wireIndices: entries.flatMap(([, isWire], index) => isWire ? [index] : []),
+  };
 }
