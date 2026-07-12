@@ -219,6 +219,13 @@ export function resolveOrbitUpVector(alpha: number, beta: number): readonly [num
   ];
 }
 
+export function advanceTurntableAlpha(alpha: number, speedDegreesPerSecond: number, elapsedMs: number): number {
+  if (![alpha, speedDegreesPerSecond, elapsedMs].every(Number.isFinite)) return alpha;
+  const elapsedSeconds = clamp(elapsedMs / 1000, 0, 0.1);
+  const next = alpha + speedDegreesPerSecond * (Math.PI / 180) * elapsedSeconds;
+  return ((next + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+}
+
 export function resolveViewPresetOrientation(preset: ViewPreset): {
   alpha: number;
   beta: number;
@@ -280,6 +287,7 @@ export class SceneController {
   private resizeListener?: () => void;
   private dragState: DragState | null = null;
   private cameraDrag: { mode: 'orbit' | 'pan'; pointerId: number; lastX: number; lastY: number } | null = null;
+  private turntableTarget: vec3 | null = null;
   private lastFrameTime = 0;
   private frameTimeMs = 16.67;
   private fps = 60;
@@ -571,17 +579,30 @@ export class SceneController {
     if (this.disposed || !this.gl || !this.renderPrograms) {
       return;
     }
-    if (this.lastFrameTime > 0) {
-      const dt = Math.max(1, timestamp - this.lastFrameTime);
-      this.frameTimeMs = this.frameTimeMs * 0.85 + dt * 0.15;
-      this.fps = this.fps * 0.85 + (1000 / dt) * 0.15;
+    const elapsedMs = this.lastFrameTime > 0 ? Math.max(1, timestamp - this.lastFrameTime) : 0;
+    if (elapsedMs > 0) {
+      this.frameTimeMs = this.frameTimeMs * 0.85 + elapsedMs * 0.15;
+      this.fps = this.fps * 0.85 + (1000 / elapsedMs) * 0.15;
     }
     this.lastFrameTime = timestamp;
 
+    this.updateTurntableCamera(elapsedMs);
     this.updateCameraMatrices();
     this.renderScene();
     this.animationFrame = window.requestAnimationFrame(this.renderFrame);
   };
+
+  private updateTurntableCamera(elapsedMs: number): void {
+    const scene = this.latestSnapshot?.scene;
+    if (!scene?.turntableEnabled) {
+      this.turntableTarget = null;
+      return;
+    }
+    this.turntableTarget ??= vec3.clone(this.camera.target);
+    vec3.copy(this.camera.target, this.turntableTarget);
+    this.camera.alpha = advanceTurntableAlpha(this.camera.alpha, scene.turntableSpeed, elapsedMs);
+    vec3.set(this.camera.upVector, ...resolveOrbitUpVector(this.camera.alpha, this.camera.beta));
+  }
 
   private renderScene(): void {
     const gl = this.gl!;

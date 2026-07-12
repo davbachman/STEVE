@@ -177,6 +177,40 @@ describe('RangeField numeric entry', () => {
       expect(implicitTable?.querySelector(`input[aria-label="${label}"]`)).toBeInstanceOf(HTMLInputElement);
     }
   });
+
+  it('shows orbit speed only while turntable animation is active', () => {
+    act(() => {
+      const store = useAppStore.getState();
+      store.newProject();
+      store.setInspectorTab('scene');
+    });
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root?.render(<InspectorPanel />);
+    });
+
+    const turntableButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Turntable animation',
+    );
+    expect(turntableButton).toBeInstanceOf(HTMLButtonElement);
+    expect(turntableButton?.getAttribute('aria-pressed')).toBe('false');
+    expect(Array.from(container.querySelectorAll('.range-field')).some(
+      (field) => field.firstElementChild?.textContent === 'Orbit speed (°/s)',
+    )).toBe(false);
+
+    act(() => {
+      turntableButton?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+
+    expect(turntableButton?.getAttribute('aria-pressed')).toBe('true');
+    expect(useAppStore.getState().scene.turntableEnabled).toBe(true);
+    expect(Array.from(container.querySelectorAll('.range-field')).some(
+      (field) => field.firstElementChild?.textContent === 'Orbit speed (°/s)',
+    )).toBe(true);
+  });
 });
 
 function setNativeInputValue(input: HTMLInputElement, value: string): void {

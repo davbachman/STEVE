@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { resolveOrbitUpVector, resolveViewPresetOrientation } from '../SceneController';
+import {
+  advanceTurntableAlpha,
+  resolveOrbitUpVector,
+  resolveViewPresetOrientation,
+} from '../SceneController';
 
 describe('camera view presets', () => {
   it('makes Top exactly vertical with a non-collinear screen-up vector', () => {
@@ -40,5 +44,12 @@ describe('camera view presets', () => {
     expect(justOffTop[0]).toBeCloseTo(atTop[0], 11);
     expect(justOffTop[1]).toBeCloseTo(atTop[1], 11);
     expect(justOffTop[2]).toBeCloseTo(atTop[2], 5);
+  });
+
+  it('advances turntable rotation by elapsed time and caps long-frame jumps', () => {
+    expect(advanceTurntableAlpha(0, 30, 100)).toBeCloseTo(Math.PI / 60, 12);
+    expect(advanceTurntableAlpha(0, 30, 10_000)).toBeCloseTo(Math.PI / 60, 12);
+    expect(advanceTurntableAlpha(Math.PI - 0.01, 90, 100)).toBeGreaterThan(-Math.PI);
+    expect(advanceTurntableAlpha(Math.PI - 0.01, 90, 100)).toBeLessThan(Math.PI);
   });
 });

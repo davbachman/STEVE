@@ -31,6 +31,8 @@ import {
   createDefaultObjects,
   createDefaultSurface,
   createPointLight,
+  MAX_TURNTABLE_SPEED,
+  MIN_TURNTABLE_SPEED,
   defaultBounds,
   defaultRenderSettings,
   defaultSceneSettings,
@@ -1018,6 +1020,12 @@ function normalizeSceneSettingsImport(
   return {
     ...defaults,
     cameraProjection: asEnum(sceneInput.cameraProjection, ['perspective', 'orthographic']) ?? defaults.cameraProjection,
+    turntableEnabled: asBoolean(sceneInput.turntableEnabled) ?? defaults.turntableEnabled,
+    turntableSpeed: clampNumber(
+      asFiniteNumber(sceneInput.turntableSpeed) ?? defaults.turntableSpeed,
+      MIN_TURNTABLE_SPEED,
+      MAX_TURNTABLE_SPEED,
+    ),
     backgroundMode: asEnum(sceneInput.backgroundMode, ['solid', 'gradient']) ?? defaults.backgroundMode,
     backgroundColor: asNonEmptyString(sceneInput.backgroundColor) ?? defaults.backgroundColor,
     gradientTopColor: asNonEmptyString(sceneInput.gradientTopColor) ?? defaults.gradientTopColor,

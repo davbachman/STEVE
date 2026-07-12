@@ -12,7 +12,11 @@ import {
   type ParameterBoundEdge,
 } from '../../math/parameters';
 import { evaluateNumericInputExpression } from '../../math/numericInput';
-import { materialPresets } from '../../state/defaults';
+import {
+  MAX_TURNTABLE_SPEED,
+  MIN_TURNTABLE_SPEED,
+  materialPresets,
+} from '../../state/defaults';
 import { useAppStore } from '../../state/store';
 import type { MaterialParams, PlotObject, PointLightObject } from '../../types/contracts';
 
@@ -566,6 +570,26 @@ function SceneTab() {
           <option value="orthographic">Orthographic</option>
         </select>
       </label>
+      <button
+        type="button"
+        className={scene.turntableEnabled ? 'turntable-toggle is-active' : 'turntable-toggle'}
+        aria-pressed={scene.turntableEnabled}
+        onClick={() => updateScene({ turntableEnabled: !scene.turntableEnabled })}
+      >
+        Turntable animation
+      </button>
+      {scene.turntableEnabled ? (
+        <RangeField
+          label="Orbit speed (°/s)"
+          min={MIN_TURNTABLE_SPEED}
+          max={MAX_TURNTABLE_SPEED}
+          step={1}
+          value={scene.turntableSpeed}
+          onChange={(value) => updateScene({
+            turntableSpeed: Math.min(MAX_TURNTABLE_SPEED, Math.max(MIN_TURNTABLE_SPEED, value)),
+          })}
+        />
+      ) : null}
       <label>
         Background Mode
         <select value={scene.backgroundMode} onChange={(e) => updateScene({ backgroundMode: e.target.value as 'solid' | 'gradient' })}>

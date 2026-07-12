@@ -12,6 +12,9 @@ import { analyzeEquationText, analyzeGraphExpression } from '../math/classifier'
 import { syncEquationParameters } from '../math/parameters';
 
 export const APP_VERSION = '0.1.0-dev';
+export const DEFAULT_TURNTABLE_SPEED = 20;
+export const MIN_TURNTABLE_SPEED = 1;
+export const MAX_TURNTABLE_SPEED = 90;
 
 export const defaultBounds: Bounds3D = {
   min: { x: -5, y: -5, z: -5 },
@@ -235,6 +238,8 @@ export const defaultMaterial = (): MaterialParams => ({ ...materialPresets['Glos
 
 export const defaultSceneSettings = (): SceneSettings => ({
   cameraProjection: 'perspective',
+  turntableEnabled: false,
+  turntableSpeed: DEFAULT_TURNTABLE_SPEED,
   backgroundMode: 'gradient',
   backgroundColor: '#0f172a',
   gradientTopColor: '#263652',

@@ -126,9 +126,9 @@ describe('project import normalization', () => {
     ]);
   });
 
-  it('imports parameter animation settings and camera projection', () => {
+  it('imports parameter animation and turntable camera settings', () => {
     const project = baseProject({
-      scene: { cameraProjection: 'orthographic' },
+      scene: { cameraProjection: 'orthographic', turntableEnabled: true, turntableSpeed: 200 },
       objects: [
         {
           ...createBlankPlot('Animated Plot'),
@@ -146,6 +146,8 @@ describe('project import normalization', () => {
     useAppStore.getState().replaceProject(project as never);
     const state = useAppStore.getState();
     expect(state.scene.cameraProjection).toBe('orthographic');
+    expect(state.scene.turntableEnabled).toBe(true);
+    expect(state.scene.turntableSpeed).toBe(90);
     const plot = state.objects[0];
     if (plot?.type !== 'plot') {
       throw new Error('Expected imported plot');

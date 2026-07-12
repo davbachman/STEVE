@@ -184,6 +184,8 @@ export interface ShadowSettings {
 
 export interface SceneSettings {
   cameraProjection: 'perspective' | 'orthographic';
+  turntableEnabled: boolean;
+  turntableSpeed: number;
   backgroundMode: 'solid' | 'gradient';
   backgroundColor: string;
   gradientTopColor: string;

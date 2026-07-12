@@ -947,6 +947,16 @@ input[type='color'] {
   gap: 0.45rem;
 }
 
+.turntable-toggle {
+  width: 100%;
+}
+
+.turntable-toggle.is-active {
+  border-color: rgba(97, 185, 255, 0.55);
+  background: linear-gradient(180deg, #24456a, #183454);
+  box-shadow: 0 0 0 1px rgba(97, 185, 255, 0.16) inset;
+}
+
 .range-field {
   display: grid;
   gap: 0.25rem;
