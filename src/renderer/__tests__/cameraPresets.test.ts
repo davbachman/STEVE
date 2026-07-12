@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveViewPresetOrientation } from '../SceneController';
+import { resolveOrbitUpVector, resolveViewPresetOrientation } from '../SceneController';
 
 describe('camera view presets', () => {
   it('makes Top exactly vertical with a non-collinear screen-up vector', () => {
@@ -27,5 +27,18 @@ describe('camera view presets', () => {
     expect(resolveViewPresetOrientation('front').upVector).toEqual([0, 0, 1]);
     expect(resolveViewPresetOrientation('side').upVector).toEqual([0, 0, 1]);
     expect(resolveViewPresetOrientation('default').upVector).toEqual([0, 0, 1]);
+  });
+
+  it('keeps orbit orientation continuous as the camera leaves the vertical pole', () => {
+    const top = resolveViewPresetOrientation('top');
+    const atTop = resolveOrbitUpVector(top.alpha, 0);
+    const justOffTop = resolveOrbitUpVector(top.alpha, 1e-6);
+
+    expect(atTop[0]).toBeCloseTo(top.upVector[0], 12);
+    expect(atTop[1]).toBeCloseTo(top.upVector[1], 12);
+    expect(atTop[2]).toBeCloseTo(top.upVector[2], 12);
+    expect(justOffTop[0]).toBeCloseTo(atTop[0], 11);
+    expect(justOffTop[1]).toBeCloseTo(atTop[1], 11);
+    expect(justOffTop[2]).toBeCloseTo(atTop[2], 5);
   });
 });

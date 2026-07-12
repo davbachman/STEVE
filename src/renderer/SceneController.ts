@@ -211,6 +211,14 @@ const DEFAULT_CAMERA_BETA = 1.1;
 const DEFAULT_CAMERA_RADIUS = 20;
 const DEFAULT_CAMERA_TARGET = vec3.fromValues(0, 0, 1.5);
 
+export function resolveOrbitUpVector(alpha: number, beta: number): readonly [number, number, number] {
+  return [
+    -Math.cos(alpha) * Math.cos(beta),
+    -Math.sin(alpha) * Math.cos(beta),
+    Math.sin(beta),
+  ];
+}
+
 export function resolveViewPresetOrientation(preset: ViewPreset): {
   alpha: number;
   beta: number;
@@ -2446,8 +2454,8 @@ export class SceneController {
       this.cameraDrag.lastY = event.clientY;
       if (this.cameraDrag.mode === 'orbit') {
         this.camera.alpha -= dx * 0.01;
-        this.camera.beta = clamp(this.camera.beta - dy * 0.01, 0.1, Math.PI - 0.1);
-        vec3.set(this.camera.upVector, 0, 0, 1);
+        this.camera.beta = clamp(this.camera.beta - dy * 0.01, 0, Math.PI);
+        vec3.set(this.camera.upVector, ...resolveOrbitUpVector(this.camera.alpha, this.camera.beta));
       } else {
         const scale = this.camera.radius * 0.002;
         const position = this.getCameraPosition();
