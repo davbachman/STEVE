@@ -11,6 +11,7 @@ import {
   updateEquationParameterValue,
   type ParameterBoundEdge,
 } from '../../math/parameters';
+import { evaluateNumericInputExpression } from '../../math/numericInput';
 import { materialPresets } from '../../state/defaults';
 import { useAppStore } from '../../state/store';
 import type { MaterialParams, PlotObject, PointLightObject } from '../../types/contracts';
@@ -370,15 +371,12 @@ function ContourAxisRow({
         aria-label={`${axis.toUpperCase()} contour color`}
         onChange={(e) => onPatch(contourAxisPatch(axis, { color: e.target.value }))}
       />
-      <input
-        type="number"
-        min={0.1}
-        max={5}
-        step={0.1}
+      <NumericExpressionInput
         value={state.spacing}
         disabled={!state.visible}
-        aria-label={`${axis.toUpperCase()} contour spacing`}
-        onChange={(e) => onPatch(contourAxisPatch(axis, { spacing: clampSpacing(Number(e.target.value)) }))}
+        ariaLabel={`${axis.toUpperCase()} contour spacing`}
+        step={0.1}
+        onChange={(value) => onPatch(contourAxisPatch(axis, { spacing: clampSpacing(value) }))}
       />
     </>
   );
@@ -977,7 +975,12 @@ function NumberTriplet({
       {(['x', 'y', 'z'] as const).map((axis) => (
         <label key={axis}>
           {axis}
-          <input type="number" step={0.1} value={value[axis]} onChange={(e) => onChange({ ...value, [axis]: Number(e.target.value) })} />
+          <NumericExpressionInput
+            value={value[axis]}
+            step={0.1}
+            ariaLabel={`${label} ${axis}`}
+            onChange={(next) => onChange({ ...value, [axis]: next })}
+          />
         </label>
       ))}
     </div>
@@ -995,34 +998,12 @@ function CompactNumberInput({
   step: number;
   onChange: (value: number) => void;
 }) {
-  const [draft, setDraft] = useState<string | null>(null);
-  const commit = (raw: string) => {
-    setDraft(null);
-    const parsed = Number(raw);
-    if (raw.trim() !== '' && Number.isFinite(parsed) && parsed !== value) {
-      onChange(parsed);
-    }
-  };
-
   return (
-    <input
-      type="number"
-      aria-label={ariaLabel}
+    <NumericExpressionInput
+      ariaLabel={ariaLabel}
+      value={value}
       step={step}
-      value={draft ?? value}
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={(event) => {
-        if (draft !== null) commit(event.target.value);
-      }}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter') {
-          event.preventDefault();
-          commit(event.currentTarget.value);
-        } else if (event.key === 'Escape') {
-          event.preventDefault();
-          setDraft(null);
-        }
-      }}
+      onChange={onChange}
     />
   );
 }
@@ -1104,19 +1085,12 @@ function BoundEditingNumberInput({
   onChange: (value: number) => void;
   onSetBound?: (edge: ParameterBoundEdge, value: number) => void;
 }) {
-  const [draft, setDraft] = useState<string | null>(null);
-
   const tolerance = Math.max(Math.abs(max - min), 1) * 1e-12;
   const parkedEdge: ParameterBoundEdge | null = onSetBound
     ? Math.abs(value - min) <= tolerance ? 'min' : Math.abs(value - max) <= tolerance ? 'max' : null
     : null;
 
-  const commit = (raw: string) => {
-    setDraft(null);
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed) || raw.trim() === '') {
-      return;
-    }
+  const commit = (parsed: number) => {
     if (onSetBound && parkedEdge === 'min' && parsed !== min && parsed < max) {
       onSetBound('min', parsed);
       return;
@@ -1132,25 +1106,10 @@ function BoundEditingNumberInput({
 
   return (
     <span className="range-field__number">
-      <input
-        type="number"
+      <NumericExpressionInput
         step={step}
-        value={draft ?? (Number.isFinite(value) ? value : 0)}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={(e) => {
-          if (draft !== null) {
-            commit(e.target.value);
-          }
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            e.preventDefault();
-            commit(e.currentTarget.value);
-          } else if (e.key === 'Escape') {
-            e.preventDefault();
-            setDraft(null);
-          }
-        }}
+        value={Number.isFinite(value) ? value : 0}
+        onChange={commit}
         title={
           parkedEdge
             ? `Typing here sets the slider ${parkedEdge === 'min' ? 'minimum' : 'maximum'} (Enter to apply)`
@@ -1165,6 +1124,67 @@ function BoundEditingNumberInput({
         </span>
       ) : null}
     </span>
+  );
+}
+
+function NumericExpressionInput({
+  value,
+  step,
+  onChange,
+  disabled,
+  ariaLabel,
+  title,
+}: {
+  value: number;
+  step?: number;
+  onChange: (value: number) => void;
+  disabled?: boolean;
+  ariaLabel?: string;
+  title?: string;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const [invalid, setInvalid] = useState(false);
+
+  const commit = (raw: string) => {
+    const evaluated = evaluateNumericInputExpression(raw);
+    if (evaluated === null) {
+      setInvalid(true);
+      return;
+    }
+    setDraft(null);
+    setInvalid(false);
+    if (evaluated !== value) onChange(evaluated);
+  };
+
+  return (
+    <input
+      type="text"
+      inputMode="text"
+      className="numeric-expression-input"
+      aria-label={ariaLabel}
+      aria-invalid={invalid || undefined}
+      data-step={step}
+      value={draft ?? (Number.isFinite(value) ? value : 0)}
+      disabled={disabled}
+      onChange={(event) => {
+        setDraft(event.target.value);
+        setInvalid(false);
+      }}
+      onBlur={(event) => {
+        if (draft !== null) commit(event.target.value);
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          commit(event.currentTarget.value);
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          setDraft(null);
+          setInvalid(false);
+        }
+      }}
+      title={title ?? 'Enter a number or expression, such as pi/2 or sqrt(2)'}
+    />
   );
 }
 

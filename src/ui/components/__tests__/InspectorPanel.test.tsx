@@ -42,7 +42,7 @@ describe('RangeField numeric entry', () => {
       );
     });
 
-    const numberInput = container.querySelector('input[type="number"]');
+    const numberInput = container.querySelector('.numeric-expression-input');
     expect(numberInput).toBeInstanceOf(HTMLInputElement);
     if (!(numberInput instanceof HTMLInputElement)) {
       throw new Error('Expected number input');
@@ -59,15 +59,15 @@ describe('RangeField numeric entry', () => {
     expect(numberInput.value).toBe('');
 
     act(() => {
-      setNativeInputValue(numberInput, '7');
+      setNativeInputValue(numberInput, '5*sqrt(2)');
       numberInput.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    expect(numberInput.value).toBe('7');
+    expect(numberInput.value).toBe('5*sqrt(2)');
 
     act(() => {
       numberInput.blur();
     });
-    expect(onChange).toHaveBeenCalledWith(7);
+    expect(onChange).toHaveBeenCalledWith(expect.closeTo(5 * Math.sqrt(2), 12));
   });
 
   it('uses a play button and discrete slider levels instead of always showing every copy', () => {
@@ -134,7 +134,7 @@ describe('RangeField numeric entry', () => {
 
     const curveTable = container.querySelector('[aria-label="Curve parameter bounds"]');
     expect(curveTable).toBeInstanceOf(HTMLDivElement);
-    expect(curveTable?.querySelectorAll('input[type="number"]')).toHaveLength(2);
+    expect(curveTable?.querySelectorAll('.numeric-expression-input')).toHaveLength(2);
     expect(curveTable?.querySelector('input[type="range"]')).toBeNull();
     expect(curveTable?.querySelector('input[aria-label="t min"]')).toBeInstanceOf(HTMLInputElement);
     expect(curveTable?.querySelector('input[aria-label="t max"]')).toBeInstanceOf(HTMLInputElement);
@@ -150,7 +150,7 @@ describe('RangeField numeric entry', () => {
 
     const graphTable = container.querySelector('[aria-label="Graph parameter bounds"]');
     expect(graphTable).toBeInstanceOf(HTMLDivElement);
-    expect(graphTable?.querySelectorAll('input[type="number"]')).toHaveLength(4);
+    expect(graphTable?.querySelectorAll('.numeric-expression-input')).toHaveLength(4);
     expect(graphTable?.querySelector('input[type="range"]')).toBeNull();
     for (const label of ['x min', 'x max', 'y min', 'y max']) {
       expect(graphTable?.querySelector(`input[aria-label="${label}"]`)).toBeInstanceOf(HTMLInputElement);
@@ -168,7 +168,7 @@ describe('RangeField numeric entry', () => {
 
     const implicitTable = container.querySelector('[aria-label="Implicit surface object bounds"]');
     expect(implicitTable).toBeInstanceOf(HTMLDivElement);
-    expect(implicitTable?.querySelectorAll('input[type="number"]')).toHaveLength(6);
+    expect(implicitTable?.querySelectorAll('.numeric-expression-input')).toHaveLength(6);
     expect(implicitTable?.querySelector('input[type="range"]')).toBeNull();
     for (const label of ['x min', 'x max', 'y min', 'y max', 'z min', 'z max']) {
       expect(implicitTable?.querySelector(`input[aria-label="${label}"]`)).toBeInstanceOf(HTMLInputElement);

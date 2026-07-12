@@ -51,6 +51,7 @@ button:disabled:hover {
 }
 
 input[type='number'],
+input.numeric-expression-input,
 select,
 input[type='color'] {
   border-radius: 8px;
@@ -998,7 +999,7 @@ input[type='color'] {
   padding: 0;
 }
 
-.contour-grid input[type='number'] {
+.contour-grid input.numeric-expression-input {
   width: 100%;
 }
 
@@ -1139,7 +1140,7 @@ input[type='color'] {
   text-align: center;
 }
 
-.domain-table input[type='number'] {
+.domain-table input.numeric-expression-input {
   width: 100%;
   min-width: 0;
 }
