@@ -310,6 +310,23 @@ function clipboardPlainText(object: SceneObject): string {
   return object.type === 'plot' ? object.equation.source.rawText : object.name;
 }
 
+function surfaceDecorationSettings(material: PlotObject['material']): Partial<PlotObject['material']> {
+  return {
+    wireframeVisible: material.wireframeVisible,
+    wireframeCellSize: material.wireframeCellSize,
+    wireframeColor: material.wireframeColor,
+    xContoursVisible: material.xContoursVisible,
+    xContourSpacing: material.xContourSpacing,
+    xContourColor: material.xContourColor,
+    yContoursVisible: material.yContoursVisible,
+    yContourSpacing: material.yContourSpacing,
+    yContourColor: material.yContourColor,
+    zContoursVisible: material.zContoursVisible,
+    zContourSpacing: material.zContourSpacing,
+    zContourColor: material.zContourColor,
+  };
+}
+
 function maybeWriteClipboard(json: string, plainText?: string): Promise<void> {
   if (!navigator.clipboard) {
     return Promise.resolve();
@@ -506,7 +523,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (idx === -1) return state;
       const next = produce(state, (draft) => {
         const plot = draft.objects[idx] as PlotObject;
-        plot.material = { ...preset };
+        plot.material = {
+          ...preset,
+          ...surfaceDecorationSettings(plot.material),
+        };
       });
       return {
         ...next,
