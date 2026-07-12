@@ -290,18 +290,24 @@ function coerceEquationSpec(existing: EquationSpec, rawText: string, forcedKind?
   return { ...existing, source, parameters: nextParameters };
 }
 
-function cloneWithNewId(object: SceneObject): SceneObject {
+function cloneWithNewId(object: SceneObject, offsetPosition = true): SceneObject {
   const cloned = structuredClone(object) as SceneObject;
   cloned.id = uuidv4();
   cloned.name = `${cloned.name} Copy`;
-  if (cloned.type === 'plot') {
-    cloned.transform.position.x += 0.4;
-    cloned.transform.position.y += 0.4;
-  } else {
-    cloned.position.x += 0.4;
-    cloned.position.y += 0.4;
+  if (offsetPosition) {
+    if (cloned.type === 'plot') {
+      cloned.transform.position.x += 0.4;
+      cloned.transform.position.y += 0.4;
+    } else {
+      cloned.position.x += 0.4;
+      cloned.position.y += 0.4;
+    }
   }
   return cloned;
+}
+
+function clipboardPlainText(object: SceneObject): string {
+  return object.type === 'plot' ? object.equation.source.rawText : object.name;
 }
 
 function maybeWriteClipboard(json: string, plainText?: string): Promise<void> {
@@ -762,7 +768,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
     const json = JSON.stringify(selected);
-    const plainText = selected.type === 'plot' ? selected.equation.source.rawText : selected.name;
+    const plainText = clipboardPlainText(selected);
     try {
       await maybeWriteClipboard(json, plainText);
       set((s) => ({ ...s, clipboardObject: structuredClone(selected) }));
@@ -774,7 +780,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   pasteClipboard: async () => {
     const state = get();
     const pasteFromObject = (obj: SceneObject) => {
-      const cloned = cloneWithNewId(obj);
+      const cloned = cloneWithNewId(obj, false);
       set((s) => ({
         ...s,
         objects: [...s.objects, cloned],
@@ -792,6 +798,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       if (clip.text) {
         const trimmed = clip.text.trim();
+        if (state.clipboardObject && trimmed === clipboardPlainText(state.clipboardObject).trim()) {
+          pasteFromObject(state.clipboardObject);
+          return;
+        }
         try {
           const parsed = JSON.parse(trimmed) as SceneObject;
           if (parsed && typeof parsed === 'object' && 'id' in parsed && 'type' in parsed) {
