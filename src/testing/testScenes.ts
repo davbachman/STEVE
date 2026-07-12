@@ -42,6 +42,7 @@ function createShadowRegressionScene(): ProjectFileV1 {
     reflectiveness: 0.04,
   };
   if (ribbon.equation.kind === 'parametric_surface') {
+    ribbon.equation.source = analyzeEquationText('(u*cos(v), u*sin(v), 0.7*sin(2*u)+0.15*v)').source;
     ribbon.equation.domain = {
       uMin: -1.8,
       uMax: 1.8,

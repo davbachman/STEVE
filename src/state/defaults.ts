@@ -310,7 +310,7 @@ export function createDefaultCurve(name = 'Curve'): PlotObject {
 }
 
 export function createDefaultSurface(name = 'Surface'): PlotObject {
-  const rawText = '(u*cos(v), u*sin(v), 0.7*sin(2*u)+0.15*v)';
+  const rawText = '((2 + 0.7*cos(v))*cos(u), (2 + 0.7*cos(v))*sin(u), 0.7*sin(v))';
   const equationMeta = analyzedEquation(rawText);
   return {
     id: uuidv4(),
@@ -321,7 +321,7 @@ export function createDefaultSurface(name = 'Surface'): PlotObject {
     equation: {
       kind: 'parametric_surface',
       ...equationMeta,
-      domain: { uMin: -2, uMax: 2, vMin: -3.14, vMax: 3.14, uSamples: 60, vSamples: 80 },
+      domain: { uMin: -Math.PI, uMax: Math.PI, vMin: -Math.PI, vMax: Math.PI, uSamples: 80, vSamples: 48 },
     },
     material: { ...materialPresets['Glossy Plastic'], baseColor: '#4ea1ff' },
   };

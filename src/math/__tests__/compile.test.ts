@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createDefaultGraph } from '../../state/defaults';
+import { createDefaultGraph, createDefaultSurface } from '../../state/defaults';
 import type { PlotObject } from '../../types/contracts';
 import { analyzeEquationText } from '../classifier';
 import { compilePlotObject } from '../compile';
@@ -62,5 +62,20 @@ describe('plot compilation with parameters', () => {
     }
     expect(graph.equation.source.rawText).toBe('x^2 - y^2');
     expect(compiled.fn(3, 2)).toEqual([3, 2, 5]);
+  });
+
+  it('uses a torus as the default parametric surface', () => {
+    const torus = createDefaultSurface();
+    const compiled = compilePlotObject(torus);
+    expect(compiled.kind).toBe('surface');
+    if (compiled.kind !== 'surface') {
+      throw new Error('Expected surface');
+    }
+
+    expect(torus.equation.source.rawText).toContain('(2 + 0.7*cos(v))');
+    expect(compiled.fn(0, 0)).toEqual([2.7, 0, 0]);
+    expect(compiled.fn(Math.PI / 2, 0)[0]).toBeCloseTo(0, 12);
+    expect(compiled.fn(Math.PI / 2, 0)[1]).toBeCloseTo(2.7, 12);
+    expect(compiled.fn(0, Math.PI)[0]).toBeCloseTo(1.3, 12);
   });
 });
