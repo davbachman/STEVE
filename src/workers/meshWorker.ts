@@ -43,6 +43,10 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
         emitMeshProgress(req.jobId, req.objectId, 'mesh_surface', 0.65);
         const mesh = buildSerializedEquationMesh(spec, {
           wireframeCellSize: req.wireframeCellSize ?? 4,
+          wireframeReferenceSamples: {
+            uSamples: req.spec.domain.uSamples,
+            vSamples: req.spec.domain.vSamples,
+          },
         });
         if (isCanceled(req.objectId)) return;
         postMesh(meshResponseTypeForPriority(req.priority), req.jobId, req.objectId, mesh);

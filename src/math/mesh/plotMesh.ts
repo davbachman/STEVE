@@ -12,7 +12,10 @@ export function buildSerializedPlotMesh(plot: PlotObject): SerializedMesh {
 
 export function buildSerializedEquationMesh(
   spec: EquationSpec,
-  options: { wireframeCellSize?: number } = {},
+  options: {
+    wireframeCellSize?: number;
+    wireframeReferenceSamples?: { uSamples: number; vSamples: number };
+  } = {},
 ): SerializedMesh {
   const variants = expandEquationSpecVariants(spec);
   if (variants.length <= 1) {
@@ -26,7 +29,10 @@ export function buildSerializedEquationMesh(
 
 function buildSerializedEquationMeshSingle(
   spec: EquationSpec,
-  options: { wireframeCellSize?: number },
+  options: {
+    wireframeCellSize?: number;
+    wireframeReferenceSamples?: { uSamples: number; vSamples: number };
+  },
 ): SerializedMesh {
   const compiled = compileEquationSpec(spec);
   if (compiled.kind === 'curve') {
@@ -59,6 +65,7 @@ function buildSerializedEquationMeshSingle(
       compiled.spec.domain,
       (u, v) => compiled.fn(u, v),
       options.wireframeCellSize ?? 4,
+      options.wireframeReferenceSamples,
     );
   }
   return buildImplicitMeshFromScalarField(

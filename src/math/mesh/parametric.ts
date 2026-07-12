@@ -34,6 +34,7 @@ export function buildSurfaceMesh(
   },
   fn: (u: number, v: number) => [number, number, number],
   wireframeCellSize = 1,
+  wireframeReferenceSamples?: { uSamples: number; vSamples: number },
 ): SerializedMesh {
   const uSamples = Math.max(2, Math.floor(domain.uSamples));
   const vSamples = Math.max(2, Math.floor(domain.vSamples));
@@ -76,21 +77,47 @@ export function buildSurfaceMesh(
 
   const lines: Float32Array[] = [];
   const step = Math.max(1, Math.floor(wireframeCellSize));
-  for (let j = 0; j < vSamples; j += step) {
-    const line: number[] = [];
-    for (let i = 0; i < uSamples; i += 1) {
-      const k = idx(i, j) * 3;
-      line.push(positions[k], positions[k + 1], positions[k + 2]);
+  const referenceUSamples = Math.max(2, Math.floor(wireframeReferenceSamples?.uSamples ?? uSamples));
+  const referenceVSamples = Math.max(2, Math.floor(wireframeReferenceSamples?.vSamples ?? vSamples));
+  if (referenceUSamples === uSamples && referenceVSamples === vSamples) {
+    for (let j = 0; j < vSamples; j += step) {
+      const line: number[] = [];
+      for (let i = 0; i < uSamples; i += 1) {
+        const k = idx(i, j) * 3;
+        line.push(positions[k], positions[k + 1], positions[k + 2]);
+      }
+      lines.push(new Float32Array(line));
     }
-    lines.push(new Float32Array(line));
-  }
-  for (let i = 0; i < uSamples; i += step) {
-    const line: number[] = [];
-    for (let j = 0; j < vSamples; j += 1) {
-      const k = idx(i, j) * 3;
-      line.push(positions[k], positions[k + 1], positions[k + 2]);
+    for (let i = 0; i < uSamples; i += step) {
+      const line: number[] = [];
+      for (let j = 0; j < vSamples; j += 1) {
+        const k = idx(i, j) * 3;
+        line.push(positions[k], positions[k + 1], positions[k + 2]);
+      }
+      lines.push(new Float32Array(line));
     }
-    lines.push(new Float32Array(line));
+  } else {
+    // Interactive/preview meshes use fewer surface samples. Keep the grid at
+    // the full-resolution parameter values so its cells do not grow or shrink
+    // while a parameter is dragged or animated; only line smoothness changes.
+    for (let j = 0; j < referenceVSamples; j += step) {
+      const v = domain.vMin + ((domain.vMax - domain.vMin) * j) / (referenceVSamples - 1);
+      const line: number[] = [];
+      for (let i = 0; i < uSamples; i += 1) {
+        const u = domain.uMin + ((domain.uMax - domain.uMin) * i) / (uSamples - 1);
+        pushFinitePoint(line, fn(u, v));
+      }
+      lines.push(new Float32Array(line));
+    }
+    for (let i = 0; i < referenceUSamples; i += step) {
+      const u = domain.uMin + ((domain.uMax - domain.uMin) * i) / (referenceUSamples - 1);
+      const line: number[] = [];
+      for (let j = 0; j < vSamples; j += 1) {
+        const v = domain.vMin + ((domain.vMax - domain.vMin) * j) / (vSamples - 1);
+        pushFinitePoint(line, fn(u, v));
+      }
+      lines.push(new Float32Array(line));
+    }
   }
 
   return {
@@ -104,4 +131,13 @@ export function buildSurfaceMesh(
     featureEdges: edgeData.featureEdges,
     topology: edgeData.topology,
   };
+}
+
+function pushFinitePoint(target: number[], point: [number, number, number]): void {
+  const [x, y, z] = point;
+  if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+    target.push(x, y, z);
+  } else {
+    target.push(0, 0, 0);
+  }
 }

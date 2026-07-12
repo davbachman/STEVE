@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ExplicitSurfaceSpec, ParametricSurfaceSpec } from '../../../types/contracts';
+import { createDefaultGraph } from '../../../state/defaults';
 import { analyzeEquationText } from '../../classifier';
 import { buildSerializedEquationMesh } from '../plotMesh';
 
@@ -94,5 +95,41 @@ describe('plot mesh families', () => {
     expect(familyMesh.indices.length).toBe(selectedMesh.indices.length * 2);
     expect(familyMesh.bounds?.max.z).toBeCloseTo(2, 4);
     expect(familyMesh.bounds?.min.z).toBeCloseTo(-2, 4);
+  });
+
+  it('keeps Graph wireframe cells fixed when interactive sampling is reduced', () => {
+    const graph = createDefaultGraph('Animated Grid Graph');
+    expect(graph.equation.kind).toBe('explicit_surface');
+    if (graph.equation.kind !== 'explicit_surface') return;
+
+    const fullSpec: ExplicitSurfaceSpec = {
+      ...graph.equation,
+      domain: {
+        ...graph.equation.domain,
+        uSamples: 8,
+        vSamples: 6,
+      },
+    };
+    const interactiveSpec: ExplicitSurfaceSpec = {
+      ...fullSpec,
+      domain: {
+        ...fullSpec.domain,
+        uSamples: 4,
+        vSamples: 3,
+      },
+    };
+    const fullMesh = buildSerializedEquationMesh(fullSpec, { wireframeCellSize: 2 });
+    const interactiveMesh = buildSerializedEquationMesh(interactiveSpec, {
+      wireframeCellSize: 2,
+      wireframeReferenceSamples: fullSpec.domain,
+    });
+
+    expect(interactiveMesh.lines).toHaveLength(fullMesh.lines?.length ?? 0);
+    expect(interactiveMesh.lines?.slice(0, 3).map((line) => line[1])).toEqual(
+      fullMesh.lines?.slice(0, 3).map((line) => line[1]),
+    );
+    expect(interactiveMesh.lines?.slice(3).map((line) => line[0])).toEqual(
+      fullMesh.lines?.slice(3).map((line) => line[0]),
+    );
   });
 });
