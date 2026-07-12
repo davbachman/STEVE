@@ -132,6 +132,9 @@ describe('RangeField numeric entry', () => {
       root?.render(<InspectorPanel />);
     });
 
+    expect(Array.from(container.querySelectorAll('button')).some((button) => button.textContent === 'Appearance')).toBe(true);
+    expect(Array.from(container.querySelectorAll('button')).some((button) => button.textContent === 'Material')).toBe(false);
+
     const curveTable = container.querySelector('[aria-label="Curve parameter bounds"]');
     expect(curveTable).toBeInstanceOf(HTMLDivElement);
     expect(curveTable?.querySelectorAll('.numeric-expression-input')).toHaveLength(2);

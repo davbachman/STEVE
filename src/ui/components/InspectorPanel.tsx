@@ -18,7 +18,7 @@ import type { MaterialParams, PlotObject, PointLightObject } from '../../types/c
 
 const tabs = [
   { id: 'object', label: 'Object' },
-  { id: 'material', label: 'Material' },
+  { id: 'material', label: 'Appearance' },
   { id: 'lighting', label: 'Lighting' },
   { id: 'scene', label: 'Scene' },
   { id: 'render', label: 'Render' },
