@@ -1508,6 +1508,22 @@ export class SceneController {
       this.renderPrograms!.composite.uniforms.u_bloomStrength,
       clamp(snapshot.render.bloomStrength ?? 0.65, 0, 2),
     );
+    gl.uniform1i(
+      this.renderPrograms!.composite.uniforms.u_backgroundMode,
+      snapshot.scene.backgroundMode === 'gradient' ? 1 : 0,
+    );
+    gl.uniform3fv(
+      this.renderPrograms!.composite.uniforms.u_backgroundColor,
+      hexToRgb(snapshot.scene.backgroundColor),
+    );
+    gl.uniform3fv(
+      this.renderPrograms!.composite.uniforms.u_gradientTop,
+      hexToRgb(snapshot.scene.gradientTopColor),
+    );
+    gl.uniform3fv(
+      this.renderPrograms!.composite.uniforms.u_gradientBottom,
+      hexToRgb(snapshot.scene.gradientBottomColor),
+    );
     gl.uniform1i(this.renderPrograms!.composite.uniforms.u_toneMapping, toneMappingMode(snapshot.render.toneMapping));
     gl.uniform1f(this.renderPrograms!.composite.uniforms.u_exposure, clamp(snapshot.render.exposure, 0.01, 5));
     gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -2987,6 +3003,10 @@ function createPrograms(gl: WebGL2RenderingContext): RenderPrograms {
       'u_bloomColor',
       'u_bloomEnabled',
       'u_bloomStrength',
+      'u_backgroundMode',
+      'u_backgroundColor',
+      'u_gradientTop',
+      'u_gradientBottom',
       'u_toneMapping',
       'u_exposure',
     ]),
@@ -3706,6 +3726,10 @@ uniform sampler2D u_sceneColor;
 uniform sampler2D u_bloomColor;
 uniform int u_bloomEnabled;
 uniform float u_bloomStrength;
+uniform int u_backgroundMode;
+uniform vec3 u_backgroundColor;
+uniform vec3 u_gradientTop;
+uniform vec3 u_gradientBottom;
 uniform int u_toneMapping;
 uniform float u_exposure;
 in vec2 v_uv;
@@ -3724,7 +3748,14 @@ vec3 toneMap(vec3 color) {
 void main() {
   vec4 scene = texture(u_sceneColor, v_uv);
   vec3 bloom = u_bloomEnabled == 1 ? texture(u_bloomColor, v_uv).rgb * u_bloomStrength : vec3(0.0);
-  outColor = vec4(toneMap(scene.rgb + bloom), clamp(scene.a, 0.0, 1.0));
+  vec3 background = u_backgroundMode == 1
+    ? mix(u_gradientBottom, u_gradientTop, clamp(v_uv.y, 0.0, 1.0))
+    : u_backgroundColor;
+  vec3 mappedScene = toneMap(scene.rgb);
+  vec3 mappedWithBloom = toneMap(scene.rgb + bloom);
+  vec3 bloomContribution = max(mappedWithBloom - mappedScene, vec3(0.0));
+  vec3 color = mix(background, mappedScene, clamp(scene.a, 0.0, 1.0)) + bloomContribution;
+  outColor = vec4(clamp(color, 0.0, 1.0), 1.0);
 }
 `;
 
