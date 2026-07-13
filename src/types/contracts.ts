@@ -215,6 +215,10 @@ export interface SceneSettings {
 export interface RenderSettings {
   toneMapping: 'aces' | 'filmic' | 'none';
   exposure: number;
+  bloomEnabled: boolean;
+  bloomStrength: number;
+  bloomRadius: number;
+  bloomThreshold: number;
   interactiveQuality: 'performance' | 'balanced' | 'quality';
   showDiagnostics: boolean;
 }

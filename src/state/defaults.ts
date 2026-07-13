@@ -274,6 +274,10 @@ export const defaultSceneSettings = (): SceneSettings => ({
 export const defaultRenderSettings = (): RenderSettings => ({
   toneMapping: 'aces',
   exposure: 1,
+  bloomEnabled: true,
+  bloomStrength: 0.65,
+  bloomRadius: 1.5,
+  bloomThreshold: 1,
   interactiveQuality: 'balanced',
   showDiagnostics: false,
 });

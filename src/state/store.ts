@@ -1076,6 +1076,22 @@ function normalizeRenderSettingsImport(
     interactiveQuality: asEnum(renderInput.interactiveQuality, ['performance', 'balanced', 'quality']) ?? mergedRender.interactiveQuality,
     showDiagnostics: asBoolean(renderInput.showDiagnostics) ?? mergedRender.showDiagnostics ?? defaults.showDiagnostics,
     exposure: asFiniteNumber(renderInput.exposure) ?? mergedRender.exposure,
+    bloomEnabled: asBoolean(renderInput.bloomEnabled) ?? mergedRender.bloomEnabled ?? defaults.bloomEnabled,
+    bloomStrength: clampNumber(
+      asFiniteNumber(renderInput.bloomStrength) ?? mergedRender.bloomStrength ?? defaults.bloomStrength,
+      0,
+      2,
+    ),
+    bloomRadius: clampNumber(
+      asFiniteNumber(renderInput.bloomRadius) ?? mergedRender.bloomRadius ?? defaults.bloomRadius,
+      0.25,
+      4,
+    ),
+    bloomThreshold: clampNumber(
+      asFiniteNumber(renderInput.bloomThreshold) ?? mergedRender.bloomThreshold ?? defaults.bloomThreshold,
+      0,
+      5,
+    ),
   };
 }
 

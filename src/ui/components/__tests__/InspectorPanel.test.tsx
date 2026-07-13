@@ -235,6 +235,40 @@ describe('RangeField numeric entry', () => {
       (field) => field.firstElementChild?.textContent === 'Emission strength',
     )).toBe(true);
   });
+
+  it('exposes bloom controls in Render and hides tuning controls when disabled', () => {
+    act(() => {
+      const store = useAppStore.getState();
+      store.newProject();
+      store.setInspectorTab('render');
+    });
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root?.render(<InspectorPanel />);
+    });
+
+    const bloomCheckbox = Array.from(container.querySelectorAll('input[type="checkbox"]')).find(
+      (input) => input.parentElement?.textContent?.includes('Bloom'),
+    );
+    expect(bloomCheckbox).toBeInstanceOf(HTMLInputElement);
+    expect((bloomCheckbox as HTMLInputElement | undefined)?.checked).toBe(true);
+    for (const label of ['Bloom strength', 'Bloom radius', 'Bloom threshold']) {
+      expect(Array.from(container.querySelectorAll('.range-field')).some(
+        (field) => field.firstElementChild?.textContent === label,
+      )).toBe(true);
+    }
+
+    act(() => {
+      bloomCheckbox?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(useAppStore.getState().render.bloomEnabled).toBe(false);
+    expect(Array.from(container.querySelectorAll('.range-field')).some(
+      (field) => field.firstElementChild?.textContent === 'Bloom strength',
+    )).toBe(false);
+  });
 });
 
 function setNativeInputValue(input: HTMLInputElement, value: string): void {

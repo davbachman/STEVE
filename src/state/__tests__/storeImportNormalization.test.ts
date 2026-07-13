@@ -93,6 +93,24 @@ describe('project import normalization', () => {
     expect(useAppStore.getState().exportProjectFile().schemaVersion).toBe(1);
   });
 
+  it('normalizes imported bloom settings', () => {
+    useAppStore.getState().replaceProject(baseProject({
+      render: {
+        bloomEnabled: false,
+        bloomStrength: 12,
+        bloomRadius: 0,
+        bloomThreshold: -4,
+      },
+    }) as never);
+
+    expect(useAppStore.getState().render).toMatchObject({
+      bloomEnabled: false,
+      bloomStrength: 2,
+      bloomRadius: 0.25,
+      bloomThreshold: 0,
+    });
+  });
+
   it('preserves imported parameter values for detected constants', () => {
     const project = baseProject({
       objects: [

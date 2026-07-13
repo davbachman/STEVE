@@ -696,6 +696,42 @@ function RenderTab() {
       </label>
       <RangeField label="Exposure" min={0.2} max={3} step={0.01} value={render.exposure} onChange={(v) => updateRender({ exposure: v })} />
       <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={render.bloomEnabled ?? true}
+          onChange={(e) => updateRender({ bloomEnabled: e.target.checked })}
+        />
+        Bloom
+      </label>
+      {(render.bloomEnabled ?? true) ? (
+        <>
+          <RangeField
+            label="Bloom strength"
+            min={0}
+            max={2}
+            step={0.01}
+            value={render.bloomStrength ?? 0.65}
+            onChange={(v) => updateRender({ bloomStrength: v })}
+          />
+          <RangeField
+            label="Bloom radius"
+            min={0.25}
+            max={4}
+            step={0.05}
+            value={render.bloomRadius ?? 1.5}
+            onChange={(v) => updateRender({ bloomRadius: v })}
+          />
+          <RangeField
+            label="Bloom threshold"
+            min={0}
+            max={5}
+            step={0.05}
+            value={render.bloomThreshold ?? 1}
+            onChange={(v) => updateRender({ bloomThreshold: v })}
+          />
+        </>
+      ) : null}
+      <label className="checkbox-row">
         <input type="checkbox" checked={render.showDiagnostics} onChange={(e) => updateRender({ showDiagnostics: e.target.checked })} />
         Render diagnostics overlay
       </label>

@@ -85,6 +85,12 @@ interface RenderTargets {
   sceneFramebuffer: WebGLFramebuffer | null;
   sceneColor: WebGLTexture | null;
   sceneDepth: WebGLTexture | null;
+  bloomWidth: number;
+  bloomHeight: number;
+  bloomFramebufferA: WebGLFramebuffer | null;
+  bloomTextureA: WebGLTexture | null;
+  bloomFramebufferB: WebGLFramebuffer | null;
+  bloomTextureB: WebGLTexture | null;
   refractionFramebuffer: WebGLFramebuffer | null;
   refractionTexture: WebGLTexture | null;
   maskFramebuffer: WebGLFramebuffer | null;
@@ -147,6 +153,8 @@ interface RenderPrograms {
   line: ProgramBundle;
   gizmo: ProgramBundle;
   mask: ProgramBundle;
+  bloomExtract: ProgramBundle;
+  bloomBlur: ProgramBundle;
   composite: ProgramBundle;
   outline: ProgramBundle;
   label: ProgramBundle;
@@ -411,6 +419,8 @@ export class SceneController {
         deleteProgramBundle(gl, this.renderPrograms.line);
         deleteProgramBundle(gl, this.renderPrograms.gizmo);
         deleteProgramBundle(gl, this.renderPrograms.mask);
+        deleteProgramBundle(gl, this.renderPrograms.bloomExtract);
+        deleteProgramBundle(gl, this.renderPrograms.bloomBlur);
         deleteProgramBundle(gl, this.renderPrograms.composite);
         deleteProgramBundle(gl, this.renderPrograms.outline);
         deleteProgramBundle(gl, this.renderPrograms.label);
@@ -627,6 +637,7 @@ export class SceneController {
     this.renderTransparentScene(snapshot, pointLights, pointShadowLights);
     this.renderSceneAxes(snapshot);
     this.renderAxisLabels(snapshot);
+    this.renderBloom(snapshot);
     this.compositeScene(snapshot);
     this.renderTransparentContourOverlays(snapshot);
     this.renderSelectionMask(snapshot);
@@ -1415,6 +1426,65 @@ export class SceneController {
     }
   }
 
+  private renderBloom(snapshot: RendererSceneSnapshot): void {
+    const enabled = snapshot.render.bloomEnabled ?? true;
+    const strength = clamp(snapshot.render.bloomStrength ?? 0.65, 0, 2);
+    const targets = this.renderTargets;
+    if (
+      !enabled
+      || strength <= 0
+      || !targets.sceneColor
+      || !targets.bloomFramebufferA
+      || !targets.bloomTextureA
+      || !targets.bloomFramebufferB
+      || !targets.bloomTextureB
+    ) {
+      return;
+    }
+
+    const gl = this.gl!;
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.CULL_FACE);
+    gl.disable(gl.BLEND);
+    gl.bindVertexArray(this.fullscreenVao);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, targets.bloomFramebufferA);
+    gl.viewport(0, 0, targets.bloomWidth, targets.bloomHeight);
+    gl.useProgram(this.renderPrograms!.bloomExtract.program);
+    bindTexture(gl, targets.sceneColor, 0, gl.TEXTURE_2D);
+    gl.uniform1i(this.renderPrograms!.bloomExtract.uniforms.u_sceneColor, 0);
+    gl.uniform1f(
+      this.renderPrograms!.bloomExtract.uniforms.u_threshold,
+      clamp(snapshot.render.bloomThreshold ?? 1, 0, 5),
+    );
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    const nativeWidth = Math.max(1, Math.floor(this.canvas.clientWidth * window.devicePixelRatio));
+    const exportScale = Math.max(1, this.canvas.width / nativeWidth);
+    const radius = clamp(snapshot.render.bloomRadius ?? 1.5, 0.25, 4) * exportScale;
+    gl.useProgram(this.renderPrograms!.bloomBlur.program);
+    gl.uniform1i(this.renderPrograms!.bloomBlur.uniforms.u_source, 0);
+    gl.uniform2f(
+      this.renderPrograms!.bloomBlur.uniforms.u_texelSize,
+      1 / Math.max(1, targets.bloomWidth),
+      1 / Math.max(1, targets.bloomHeight),
+    );
+    gl.uniform1f(this.renderPrograms!.bloomBlur.uniforms.u_radius, radius);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, targets.bloomFramebufferB);
+    bindTexture(gl, targets.bloomTextureA, 0, gl.TEXTURE_2D);
+    gl.uniform2f(this.renderPrograms!.bloomBlur.uniforms.u_direction, 1, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, targets.bloomFramebufferA);
+    bindTexture(gl, targets.bloomTextureB, 0, gl.TEXTURE_2D);
+    gl.uniform2f(this.renderPrograms!.bloomBlur.uniforms.u_direction, 0, 1);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+    gl.bindVertexArray(null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
   private compositeScene(snapshot: RendererSceneSnapshot): void {
     const gl = this.gl!;
     const targets = this.renderTargets;
@@ -1428,6 +1498,16 @@ export class SceneController {
     gl.bindVertexArray(this.fullscreenVao);
     bindTexture(gl, targets.sceneColor, 0, gl.TEXTURE_2D);
     gl.uniform1i(this.renderPrograms!.composite.uniforms.u_sceneColor, 0);
+    bindTexture(gl, targets.bloomTextureA, 1, gl.TEXTURE_2D);
+    gl.uniform1i(this.renderPrograms!.composite.uniforms.u_bloomColor, 1);
+    gl.uniform1i(
+      this.renderPrograms!.composite.uniforms.u_bloomEnabled,
+      (snapshot.render.bloomEnabled ?? true) && (snapshot.render.bloomStrength ?? 0.65) > 0 ? 1 : 0,
+    );
+    gl.uniform1f(
+      this.renderPrograms!.composite.uniforms.u_bloomStrength,
+      clamp(snapshot.render.bloomStrength ?? 0.65, 0, 2),
+    );
     gl.uniform1i(this.renderPrograms!.composite.uniforms.u_toneMapping, toneMappingMode(snapshot.render.toneMapping));
     gl.uniform1f(this.renderPrograms!.composite.uniforms.u_exposure, clamp(snapshot.render.exposure, 0.01, 5));
     gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -2584,6 +2664,30 @@ export class SceneController {
       { attachment: gl.COLOR_ATTACHMENT0, texture: sceneColor, target: gl.TEXTURE_2D },
       { attachment: gl.DEPTH_ATTACHMENT, texture: sceneDepth, target: gl.TEXTURE_2D },
     ]);
+    const bloomWidth = Math.max(1, Math.ceil(width / 2));
+    const bloomHeight = Math.max(1, Math.ceil(height / 2));
+    const bloomTextureA = createColorTexture(
+      gl,
+      bloomWidth,
+      bloomHeight,
+      hdrColorFormat.internalFormat,
+      hdrColorFormat.format,
+      hdrColorFormat.type,
+    );
+    const bloomFramebufferA = createFramebuffer(gl, [
+      { attachment: gl.COLOR_ATTACHMENT0, texture: bloomTextureA, target: gl.TEXTURE_2D },
+    ]);
+    const bloomTextureB = createColorTexture(
+      gl,
+      bloomWidth,
+      bloomHeight,
+      hdrColorFormat.internalFormat,
+      hdrColorFormat.format,
+      hdrColorFormat.type,
+    );
+    const bloomFramebufferB = createFramebuffer(gl, [
+      { attachment: gl.COLOR_ATTACHMENT0, texture: bloomTextureB, target: gl.TEXTURE_2D },
+    ]);
     const refractionTexture = createColorTexture(gl, width, height, hdrColorFormat.internalFormat, hdrColorFormat.format, hdrColorFormat.type);
     gl.bindTexture(gl.TEXTURE_2D, refractionTexture);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
@@ -2604,6 +2708,12 @@ export class SceneController {
       sceneFramebuffer,
       sceneColor,
       sceneDepth,
+      bloomWidth,
+      bloomHeight,
+      bloomFramebufferA,
+      bloomTextureA,
+      bloomFramebufferB,
+      bloomTextureB,
       refractionFramebuffer,
       refractionTexture,
       maskFramebuffer,
@@ -2614,10 +2724,14 @@ export class SceneController {
 
   private deleteRenderTargets(gl: WebGL2RenderingContext): void {
     deleteFramebuffer(gl, this.renderTargets.sceneFramebuffer);
+    deleteFramebuffer(gl, this.renderTargets.bloomFramebufferA);
+    deleteFramebuffer(gl, this.renderTargets.bloomFramebufferB);
     deleteFramebuffer(gl, this.renderTargets.refractionFramebuffer);
     deleteFramebuffer(gl, this.renderTargets.maskFramebuffer);
     deleteTexture(gl, this.renderTargets.sceneColor);
     deleteTexture(gl, this.renderTargets.sceneDepth);
+    deleteTexture(gl, this.renderTargets.bloomTextureA);
+    deleteTexture(gl, this.renderTargets.bloomTextureB);
     deleteTexture(gl, this.renderTargets.refractionTexture);
     deleteTexture(gl, this.renderTargets.maskTexture);
     deleteTexture(gl, this.renderTargets.maskDepth);
@@ -2858,8 +2972,21 @@ function createPrograms(gl: WebGL2RenderingContext): RenderPrograms {
       'u_view',
       'u_projection',
     ]),
+    bloomExtract: createProgramBundle(gl, fullscreenVertexShaderSource, bloomExtractFragmentShaderSource, [
+      'u_sceneColor',
+      'u_threshold',
+    ]),
+    bloomBlur: createProgramBundle(gl, fullscreenVertexShaderSource, bloomBlurFragmentShaderSource, [
+      'u_source',
+      'u_texelSize',
+      'u_direction',
+      'u_radius',
+    ]),
     composite: createProgramBundle(gl, fullscreenVertexShaderSource, compositeFragmentShaderSource, [
       'u_sceneColor',
+      'u_bloomColor',
+      'u_bloomEnabled',
+      'u_bloomStrength',
       'u_toneMapping',
       'u_exposure',
     ]),
@@ -3537,9 +3664,48 @@ void main() {
 }
 `;
 
+const bloomExtractFragmentShaderSource = `#version 300 es
+precision highp float;
+uniform sampler2D u_sceneColor;
+uniform float u_threshold;
+in vec2 v_uv;
+out vec4 outColor;
+
+void main() {
+  vec3 color = texture(u_sceneColor, v_uv).rgb;
+  float brightness = max(max(color.r, color.g), color.b);
+  float knee = max(0.05, u_threshold * 0.25);
+  float contribution = smoothstep(u_threshold - knee, u_threshold + knee, brightness);
+  outColor = vec4(color * contribution, 1.0);
+}
+`;
+
+const bloomBlurFragmentShaderSource = `#version 300 es
+precision highp float;
+uniform sampler2D u_source;
+uniform vec2 u_texelSize;
+uniform vec2 u_direction;
+uniform float u_radius;
+in vec2 v_uv;
+out vec4 outColor;
+
+void main() {
+  vec2 offset = u_texelSize * u_direction * max(u_radius, 0.01);
+  vec3 color = texture(u_source, v_uv).rgb * 0.227027;
+  color += texture(u_source, v_uv + offset * 1.384615).rgb * 0.316216;
+  color += texture(u_source, v_uv - offset * 1.384615).rgb * 0.316216;
+  color += texture(u_source, v_uv + offset * 3.230769).rgb * 0.070270;
+  color += texture(u_source, v_uv - offset * 3.230769).rgb * 0.070270;
+  outColor = vec4(color, 1.0);
+}
+`;
+
 const compositeFragmentShaderSource = `#version 300 es
 precision highp float;
 uniform sampler2D u_sceneColor;
+uniform sampler2D u_bloomColor;
+uniform int u_bloomEnabled;
+uniform float u_bloomStrength;
 uniform int u_toneMapping;
 uniform float u_exposure;
 in vec2 v_uv;
@@ -3557,7 +3723,8 @@ vec3 toneMap(vec3 color) {
 
 void main() {
   vec4 scene = texture(u_sceneColor, v_uv);
-  outColor = vec4(toneMap(scene.rgb), clamp(scene.a, 0.0, 1.0));
+  vec3 bloom = u_bloomEnabled == 1 ? texture(u_bloomColor, v_uv).rgb * u_bloomStrength : vec3(0.0);
+  outColor = vec4(toneMap(scene.rgb + bloom), clamp(scene.a, 0.0, 1.0));
 }
 `;
 
@@ -4409,6 +4576,12 @@ function emptyRenderTargets(): RenderTargets {
     sceneFramebuffer: null,
     sceneColor: null,
     sceneDepth: null,
+    bloomWidth: 0,
+    bloomHeight: 0,
+    bloomFramebufferA: null,
+    bloomTextureA: null,
+    bloomFramebufferB: null,
+    bloomTextureB: null,
     refractionFramebuffer: null,
     refractionTexture: null,
     maskFramebuffer: null,
