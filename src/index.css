@@ -1189,6 +1189,14 @@ input[type='color'] {
   .top-bar__group--right {
     order: 2;
   }
+  .tabs {
+    gap: 0.15rem;
+    padding-inline: 0.4rem;
+  }
+  .tabs__tab {
+    padding-inline: 0.15rem;
+    font-size: 0.78rem;
+  }
 }
 
 @media (max-width: 560px) {
