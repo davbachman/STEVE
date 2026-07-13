@@ -48,10 +48,22 @@ describe('TopBar menus', () => {
     const steveButton = buttonWithText(host, 'STEVE');
     expect(steveButton.querySelector('strong')?.textContent).toBe('STEVE');
     act(() => steveButton.click());
-    expect(menuItemTexts(host, 'STEVE menu')).toEqual(['About', 'Settings']);
-    const aboutLink = host.querySelector('[role="menuitem"][href="https://github.com/davbachman/STEVE"]');
-    expect(aboutLink?.getAttribute('target')).toBe('_blank');
-    expect(aboutLink?.getAttribute('rel')).toBe('noopener noreferrer');
+    expect(menuItemTexts(host, 'STEVE menu')).toEqual(['About', 'Instructions', 'Settings']);
+    const instructionsLink = host.querySelector('[role="menuitem"][href="https://github.com/davbachman/STEVE"]');
+    expect(instructionsLink?.getAttribute('target')).toBe('_blank');
+    expect(instructionsLink?.getAttribute('rel')).toBe('noopener noreferrer');
+
+    act(() => buttonWithText(host, 'About').click());
+    const aboutDialog = host.querySelector('[role="dialog"][aria-labelledby="about-title"]');
+    expect(aboutDialog?.textContent).toContain('S.T.E.V.E.');
+    expect(aboutDialog?.textContent).toContain('STudio for Equation Visualization and Exploration');
+    expect(aboutDialog?.textContent).toContain('with GPT 5.4, 5.5, 5.6 Sol, and Fable 5.');
+    expect(aboutDialog?.textContent).toContain('For more apps and AI info, subscribe to Entropy Bonus.');
+    expect(aboutDialog?.querySelector('a[href="https://davidbachmandesign.com"]')?.textContent).toBe('David Bachman');
+    expect(aboutDialog?.querySelector('a[href="https://profbachman.substack.com"]')?.textContent).toBe('Entropy Bonus');
+
+    act(() => buttonWithText(host, 'Close about').click());
+    act(() => steveButton.click());
 
     act(() => buttonWithText(host, 'Settings').click());
     expect(host.querySelector('[role="dialog"]')).toBeInstanceOf(HTMLElement);

@@ -6,6 +6,8 @@ import type { ViewportApi } from '../../renderer/SceneController';
 import type { PlotObject } from '../../types/contracts';
 
 const APP_GITHUB_URL = 'https://github.com/davbachman/STEVE';
+const DAVID_BACHMAN_URL = 'https://davidbachmandesign.com';
+const ENTROPY_BONUS_URL = 'https://profbachman.substack.com';
 
 interface TopBarProps {
   viewportApi: ViewportApi | null;
@@ -26,6 +28,7 @@ export function TopBar({
   const menuBarRef = useRef<HTMLDivElement | null>(null);
   const [exportScale, setExportScale] = useState(1);
   const [activeMenu, setActiveMenu] = useState<'steve' | 'file' | null>(null);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const exportProjectFile = useAppStore((s) => s.exportProjectFile);
   const replaceProject = useAppStore((s) => s.replaceProject);
@@ -50,17 +53,18 @@ export function TopBar({
   }, [activeMenu]);
 
   useEffect(() => {
-    if (!activeMenu && !settingsOpen) return;
+    if (!activeMenu && !aboutOpen && !settingsOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
       event.stopPropagation();
       setActiveMenu(null);
+      setAboutOpen(false);
       setSettingsOpen(false);
     };
     document.addEventListener('keydown', closeOnEscape, true);
     return () => document.removeEventListener('keydown', closeOnEscape, true);
-  }, [activeMenu, settingsOpen]);
+  }, [aboutOpen, activeMenu, settingsOpen]);
 
   const handleSaveProject = () => {
     void (async () => {
@@ -107,6 +111,11 @@ export function TopBar({
     })();
   };
 
+  const openAbout = () => {
+    setActiveMenu(null);
+    setAboutOpen(true);
+  };
+
   const openSettings = () => {
     setActiveMenu(null);
     setSettingsOpen(true);
@@ -134,6 +143,7 @@ export function TopBar({
             </button>
             {activeMenu === 'steve' ? (
               <div className="top-bar__menu-popover" role="menu" aria-label="STEVE menu">
+                <button type="button" role="menuitem" onClick={openAbout}>About</button>
                 <a
                   role="menuitem"
                   href={APP_GITHUB_URL}
@@ -141,7 +151,7 @@ export function TopBar({
                   rel="noopener noreferrer"
                   onClick={() => setActiveMenu(null)}
                 >
-                  About
+                  Instructions
                 </a>
                 <button type="button" role="menuitem" onClick={openSettings}>Settings</button>
               </div>
@@ -215,6 +225,43 @@ export function TopBar({
           }}
         />
       </header>
+
+      {aboutOpen ? (
+        <div
+          className="settings-overlay"
+          role="presentation"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) setAboutOpen(false);
+          }}
+        >
+          <section className="settings-dialog about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title">
+            <header className="settings-dialog__header">
+              <h2 id="about-title">S.T.E.V.E.</h2>
+              <button
+                type="button"
+                className="settings-dialog__close"
+                aria-label="Close about"
+                title="Close about"
+                autoFocus
+                onClick={() => setAboutOpen(false)}
+              >
+                ×
+              </button>
+            </header>
+            <div className="about-dialog__body">
+              <p className="about-dialog__subtitle">STudio for Equation Visualization and Exploration</p>
+              <p>
+                by <a href={DAVID_BACHMAN_URL} target="_blank" rel="noopener noreferrer">David Bachman</a>{' '}
+                with GPT 5.4, 5.5, 5.6 Sol, and Fable 5.
+              </p>
+              <p>
+                For more apps and AI info, subscribe to{' '}
+                <a href={ENTROPY_BONUS_URL} target="_blank" rel="noopener noreferrer">Entropy Bonus</a>.
+              </p>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {settingsOpen ? (
         <div

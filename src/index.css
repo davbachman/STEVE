@@ -304,6 +304,32 @@ input[type='color'] {
   width: 100%;
 }
 
+.about-dialog {
+  width: min(34rem, 100%);
+}
+
+.about-dialog__body {
+  display: grid;
+  gap: 0.9rem;
+  padding: 1.15rem 1.1rem 1.3rem;
+  color: #d5e1f2;
+  line-height: 1.55;
+}
+
+.about-dialog__body p {
+  margin: 0;
+}
+
+.about-dialog__subtitle {
+  color: #f0f5fc;
+  font-size: 1.05rem;
+  font-weight: 650;
+}
+
+.about-dialog__body a {
+  color: #8ec5ff;
+}
+
 .app-body {
   grid-row: 3;
   display: grid;
