@@ -236,7 +236,7 @@ export function TopBar({
         >
           <section className="settings-dialog about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title">
             <header className="settings-dialog__header">
-              <h2 id="about-title">S.T.E.V.E.</h2>
+              <h2 id="about-title">ST.E.V.E.</h2>
               <button
                 type="button"
                 className="settings-dialog__close"
