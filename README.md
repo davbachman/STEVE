@@ -19,7 +19,7 @@ ST.E.V.E. is a browser-only interactive 3D graphing app for exploring mathematic
 - Supports perspective and orthographic camera projections, with Top/Front/Side view presets, camera reset, and double-click to frame an object.
 - Draws numbered tick labels along the axes (toggle in Scene settings).
 - Exports viewport images at 1×, 2×, or 4× resolution for publication-quality figures.
-- Supports interactive materials, shadows, reflections (including a mirror-like ground plane), screen-space refraction for glass-like surfaces, and adjustable render quality.
+- Supports interactive materials with per-object emission, shadows, reflections (including a mirror-like ground plane), screen-space refraction for glass-like surfaces, and adjustable render quality.
 - Saves scenes as project files, exports viewport images as PNG, and exports selected plots as STL.
 
 ## Usage

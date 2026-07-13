@@ -1732,6 +1732,8 @@ export class SceneController {
     gl.uniform1f(program.uniforms.u_opacity, opacity);
     gl.uniform1f(program.uniforms.u_reflectiveness, scene.groundPlaneReflective ? 0.82 : 0.02);
     gl.uniform1f(program.uniforms.u_roughness, clamp(scene.groundPlaneRoughness, 0.04, 1));
+    gl.uniform3f(program.uniforms.u_emissionColor, 0, 0, 0);
+    gl.uniform1f(program.uniforms.u_emissionStrength, 0);
     gl.uniform1i(program.uniforms.u_usePlanarReflection, usePlanarReflection ? 1 : 0);
     this.bindContourUniforms(program, {
       xEnabled: false,
@@ -1782,6 +1784,8 @@ export class SceneController {
     gl.uniform1f(program.uniforms.u_opacity, clamp01(plot.material.opacity));
     gl.uniform1f(program.uniforms.u_reflectiveness, clamp01(plot.material.reflectiveness));
     gl.uniform1f(program.uniforms.u_roughness, clamp(plot.material.roughness, 0.04, 1));
+    gl.uniform3fv(program.uniforms.u_emissionColor, hexToRgb(plot.material.emissionColor ?? plot.material.baseColor));
+    gl.uniform1f(program.uniforms.u_emissionStrength, clamp(plot.material.emissionStrength ?? 0, 0, 10));
     this.bindContourUniforms(program, contourUniformState(plot));
     gl.uniform1i(program.uniforms.u_isTransparentPass, transparentPass ? 1 : 0);
     gl.uniform1i(program.uniforms.u_refractionEnabled, transparentPass && plotUsesRefraction(plot) ? 1 : 0);
@@ -2216,6 +2220,8 @@ export class SceneController {
     gl.uniform1f(program.uniforms.u_opacity, clamp01(plot.material.opacity));
     gl.uniform1f(program.uniforms.u_reflectiveness, clamp01(plot.material.reflectiveness));
     gl.uniform1f(program.uniforms.u_roughness, clamp(plot.material.roughness, 0.04, 1));
+    gl.uniform3fv(program.uniforms.u_emissionColor, hexToRgb(plot.material.emissionColor ?? plot.material.baseColor));
+    gl.uniform1f(program.uniforms.u_emissionStrength, clamp(plot.material.emissionStrength ?? 0, 0, 10));
     this.bindContourUniforms(program, contourUniformState(plot));
     gl.uniform1i(program.uniforms.u_isTransparentPass, transparentPass ? 1 : 0);
     gl.uniform1i(program.uniforms.u_refractionEnabled, 0);
@@ -2734,6 +2740,8 @@ function createPrograms(gl: WebGL2RenderingContext): RenderPrograms {
     'u_opacity',
     'u_reflectiveness',
     'u_roughness',
+    'u_emissionColor',
+    'u_emissionStrength',
     'u_xContoursVisible',
     'u_xContourSpacing',
     'u_xContourColor',
@@ -2926,6 +2934,8 @@ uniform vec3 u_baseColor;
 uniform float u_opacity;
 uniform float u_reflectiveness;
 uniform float u_roughness;
+uniform vec3 u_emissionColor;
+uniform float u_emissionStrength;
 uniform int u_xContoursVisible;
 uniform float u_xContourSpacing;
 uniform vec3 u_xContourColor;
@@ -3245,11 +3255,13 @@ void main() {
   vec3 N = normalize(gl_FrontFacing ? v_worldNormal : -v_worldNormal);
   vec3 V = normalize(u_cameraPos - v_worldPosition);
   vec3 litColor = applyLighting(N, V);
+  vec3 emission = u_emissionColor * max(u_emissionStrength, 0.0);
   if (u_isTransparentPass == 1 && u_refractionEnabled == 1) {
-    outColor = vec4(applyRefraction(N, V, litColor), 1.0);
+    outColor = vec4(applyRefraction(N, V, litColor) + emission, 1.0);
     return;
   }
-  vec3 color = u_isTransparentPass == 1 ? litColor : applyContours(litColor);
+  vec3 emittedColor = litColor + emission;
+  vec3 color = u_isTransparentPass == 1 ? emittedColor : applyContours(emittedColor);
   float alpha = u_isTransparentPass == 1 ? clamp(u_opacity, 0.0, 0.995) : 1.0;
   outColor = vec4(color, alpha);
 }

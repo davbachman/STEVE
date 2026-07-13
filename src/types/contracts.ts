@@ -88,6 +88,10 @@ export interface MaterialParams {
   opacity: number;
   reflectiveness: number;
   roughness: number;
+  /** Self-lit surface color; falls back to baseColor when omitted. */
+  emissionColor?: string;
+  /** Self-lit HDR contribution. Zero disables emission. */
+  emissionStrength?: number;
   /** Bend the background seen through transparent surfaces (screen-space refraction). */
   refractionEnabled?: boolean;
   /** Index of refraction used when refractionEnabled; 1 = no bending, glass ≈ 1.45. */

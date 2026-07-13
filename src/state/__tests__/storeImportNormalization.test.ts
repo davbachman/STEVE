@@ -35,6 +35,8 @@ describe('project import normalization', () => {
             legacyShaderModel: 'phong',
             reflectiveness: 0.35,
             roughness: 0.4,
+            emissionColor: '#fedcba',
+            emissionStrength: 14,
             wireframeColor: '#123',
             xContoursVisible: true,
             xContourSpacing: 8,
@@ -63,6 +65,8 @@ describe('project import normalization', () => {
     expect(state.objects[0].equation.source.rawText).toBe('z = cos(x) * sin(y)');
     expect(state.objects[0].material.ior).toBe(1.6);
     expect(state.objects[0].material.refractionEnabled).toBe(false);
+    expect(state.objects[0].material.emissionColor).toBe('#fedcba');
+    expect(state.objects[0].material.emissionStrength).toBe(10);
     expect('legacyShaderModel' in state.objects[0].material).toBe(false);
     expect(state.objects[0].material.wireframeColor).toBe('#112233');
     expect(state.objects[0].material.xContoursVisible).toBe(true);

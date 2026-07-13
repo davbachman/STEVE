@@ -228,6 +228,25 @@ function MaterialTab({ selected }: { selected: PlotObject | PointLightObject | n
           ) : null}
         </>
       ) : null}
+      <h3>Emission</h3>
+      <label>
+        Emission color
+        <input
+          type="color"
+          value={selected.material.emissionColor ?? selected.material.baseColor}
+          onChange={(e) => updatePlotMaterial(selected.id, { emissionColor: e.target.value })}
+        />
+      </label>
+      <RangeField
+        label="Emission strength"
+        min={0}
+        max={10}
+        step={0.05}
+        value={selected.material.emissionStrength ?? 0}
+        onChange={(value) => updatePlotMaterial(selected.id, {
+          emissionStrength: Math.min(10, Math.max(0, value)),
+        })}
+      />
       {(supportsWireframe || supportsContours) ? <h3>Surface Decorations</h3> : null}
       {supportsWireframe ? (
         <CollapsibleSection

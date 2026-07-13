@@ -211,6 +211,30 @@ describe('RangeField numeric entry', () => {
       (field) => field.firstElementChild?.textContent === 'Orbit speed (°/s)',
     )).toBe(true);
   });
+
+  it('exposes per-object emission color and strength in Appearance', () => {
+    act(() => {
+      const store = useAppStore.getState();
+      store.newProject();
+      store.addPlot('surface');
+      store.setInspectorTab('material');
+    });
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root?.render(<InspectorPanel />);
+    });
+
+    expect(container.querySelector('input[type="color"]')?.parentElement?.textContent).toContain('Color');
+    expect(Array.from(container.querySelectorAll('label')).some(
+      (label) => label.textContent?.includes('Emission color'),
+    )).toBe(true);
+    expect(Array.from(container.querySelectorAll('.range-field')).some(
+      (field) => field.firstElementChild?.textContent === 'Emission strength',
+    )).toBe(true);
+  });
 });
 
 function setNativeInputValue(input: HTMLInputElement, value: string): void {
