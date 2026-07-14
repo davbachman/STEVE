@@ -249,7 +249,7 @@ export function TopBar({
               </button>
             </header>
             <div className="about-dialog__body">
-              <p className="about-dialog__subtitle">STudio for Equation Visualization and Exploration</p>
+              <p className="about-dialog__subtitle">STudio for Equation Visualization and Experimentation</p>
               <p>
                 by <a href={DAVID_BACHMAN_URL} target="_blank" rel="noopener noreferrer">David Bachman</a>{' '}
                 with GPT 5.4, 5.5, 5.6 Sol, and Fable 5.

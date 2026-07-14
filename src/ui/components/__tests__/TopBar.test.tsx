@@ -56,7 +56,7 @@ describe('TopBar menus', () => {
     act(() => buttonWithText(host, 'About').click());
     const aboutDialog = host.querySelector('[role="dialog"][aria-labelledby="about-title"]');
     expect(aboutDialog?.textContent).toContain('ST.E.V.E.');
-    expect(aboutDialog?.textContent).toContain('STudio for Equation Visualization and Exploration');
+    expect(aboutDialog?.textContent).toContain('STudio for Equation Visualization and Experimentation');
     expect(aboutDialog?.textContent).toContain('with GPT 5.4, 5.5, 5.6 Sol, and Fable 5.');
     expect(aboutDialog?.textContent).toContain('For more apps and AI info, subscribe to Entropy Bonus.');
     expect(aboutDialog?.querySelector('a[href="https://davidbachmandesign.com"]')?.textContent).toBe('David Bachman');
