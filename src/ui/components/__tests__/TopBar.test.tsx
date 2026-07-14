@@ -48,7 +48,7 @@ describe('TopBar menus', () => {
     const steveButton = buttonWithText(host, 'STEVE');
     expect(steveButton.querySelector('strong')?.textContent).toBe('STEVE');
     act(() => steveButton.click());
-    expect(menuItemTexts(host, 'STEVE menu')).toEqual(['About', 'Instructions', 'Settings']);
+    expect(menuItemTexts(host, 'STEVE menu')).toEqual(['About', 'Instructions', 'Feedback', 'Settings']);
     const instructionsLink = host.querySelector('[role="menuitem"][href="https://github.com/davbachman/STEVE"]');
     expect(instructionsLink?.getAttribute('target')).toBe('_blank');
     expect(instructionsLink?.getAttribute('rel')).toBe('noopener noreferrer');
@@ -65,6 +65,35 @@ describe('TopBar menus', () => {
     act(() => buttonWithText(host, 'Close about').click());
     act(() => steveButton.click());
 
+    act(() => buttonWithText(host, 'Feedback').click());
+    const feedbackDialog = host.querySelector('[role="dialog"][aria-labelledby="feedback-title"]');
+    expect(feedbackDialog).toBeInstanceOf(HTMLElement);
+    expect(Array.from(feedbackDialog?.querySelectorAll('input[type="checkbox"]') ?? []).map(
+      (input) => input.parentElement?.textContent?.trim(),
+    )).toEqual(['Feature Request', 'Bug Report', 'Contact']);
+    const sendButton = buttonWithText(host, 'Send');
+    expect(sendButton.disabled).toBe(true);
+    const featureRequestCheckbox = feedbackDialog?.querySelector('input[type="checkbox"]');
+    const message = feedbackDialog?.querySelector('textarea');
+    if (!(featureRequestCheckbox instanceof HTMLInputElement) || !(message instanceof HTMLTextAreaElement)) {
+      throw new Error('Expected feedback fields');
+    }
+    act(() => featureRequestCheckbox.click());
+    act(() => {
+      setNativeTextAreaValue(message, 'Please add a fourth dimension.');
+      message.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(sendButton.disabled).toBe(false);
+    const openEmail = vi.spyOn(window, 'open').mockImplementation(() => null);
+    act(() => sendButton.click());
+    expect(openEmail).toHaveBeenCalledWith(
+      'mailto:bachman@pitzer.edu?subject=STEVE%3A%20Feature%20Request&body=Please%20add%20a%20fourth%20dimension.',
+      '_self',
+    );
+    expect(host.querySelector('[role="dialog"][aria-labelledby="feedback-title"]')).toBeNull();
+    openEmail.mockRestore();
+
+    act(() => steveButton.click());
     act(() => buttonWithText(host, 'Settings').click());
     expect(host.querySelector('[role="dialog"]')).toBeInstanceOf(HTMLElement);
     const pngQuality = host.querySelector('select[aria-label="PNG Export Quality"]');
@@ -119,4 +148,9 @@ function menuItemTexts(container: HTMLElement, label: string): string[] {
 function setNativeSelectValue(select: HTMLSelectElement, value: string): void {
   const descriptor = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value');
   descriptor?.set?.call(select, value);
+}
+
+function setNativeTextAreaValue(textarea: HTMLTextAreaElement, value: string): void {
+  const descriptor = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value');
+  descriptor?.set?.call(textarea, value);
 }

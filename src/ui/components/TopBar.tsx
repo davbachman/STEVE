@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { exportPlotAsStl } from '../../persistence/meshExport';
 import { readProjectFile, saveProjectFile } from '../../persistence/projectFile';
 import { useAppStore } from '../../state/store';
@@ -8,6 +8,10 @@ import type { PlotObject } from '../../types/contracts';
 const APP_GITHUB_URL = 'https://github.com/davbachman/STEVE';
 const DAVID_BACHMAN_URL = 'https://davidbachmandesign.com';
 const ENTROPY_BONUS_URL = 'https://profbachman.substack.com';
+const FEEDBACK_EMAIL = 'bachman@pitzer.edu';
+const FEEDBACK_CATEGORIES = ['Feature Request', 'Bug Report', 'Contact'] as const;
+
+type FeedbackCategory = typeof FEEDBACK_CATEGORIES[number];
 
 interface TopBarProps {
   viewportApi: ViewportApi | null;
@@ -29,6 +33,9 @@ export function TopBar({
   const [exportScale, setExportScale] = useState(1);
   const [activeMenu, setActiveMenu] = useState<'steve' | 'file' | null>(null);
   const [aboutOpen, setAboutOpen] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackCategories, setFeedbackCategories] = useState<FeedbackCategory[]>([]);
+  const [feedbackMessage, setFeedbackMessage] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const exportProjectFile = useAppStore((s) => s.exportProjectFile);
   const replaceProject = useAppStore((s) => s.replaceProject);
@@ -53,18 +60,19 @@ export function TopBar({
   }, [activeMenu]);
 
   useEffect(() => {
-    if (!activeMenu && !aboutOpen && !settingsOpen) return;
+    if (!activeMenu && !aboutOpen && !feedbackOpen && !settingsOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
       event.stopPropagation();
       setActiveMenu(null);
       setAboutOpen(false);
+      setFeedbackOpen(false);
       setSettingsOpen(false);
     };
     document.addEventListener('keydown', closeOnEscape, true);
     return () => document.removeEventListener('keydown', closeOnEscape, true);
-  }, [aboutOpen, activeMenu, settingsOpen]);
+  }, [aboutOpen, activeMenu, feedbackOpen, settingsOpen]);
 
   const handleSaveProject = () => {
     void (async () => {
@@ -116,9 +124,35 @@ export function TopBar({
     setAboutOpen(true);
   };
 
+  const openFeedback = () => {
+    setActiveMenu(null);
+    setFeedbackCategories([]);
+    setFeedbackMessage('');
+    setFeedbackOpen(true);
+  };
+
   const openSettings = () => {
     setActiveMenu(null);
     setSettingsOpen(true);
+  };
+
+  const toggleFeedbackCategory = (category: FeedbackCategory) => {
+    setFeedbackCategories((categories) => (
+      categories.includes(category)
+        ? categories.filter((candidate) => candidate !== category)
+        : [...categories, category]
+    ));
+  };
+
+  const handleFeedbackSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const message = feedbackMessage.trim();
+    if (feedbackCategories.length === 0 || !message) return;
+
+    const subject = `STEVE: ${feedbackCategories.join(', ')}`;
+    const mailtoUrl = `mailto:${FEEDBACK_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(message)}`;
+    window.open(mailtoUrl, '_self');
+    setFeedbackOpen(false);
   };
 
   const closeMenusThen = (action: () => void) => {
@@ -153,6 +187,7 @@ export function TopBar({
                 >
                   Instructions
                 </a>
+                <button type="button" role="menuitem" onClick={openFeedback}>Feedback</button>
                 <button type="button" role="menuitem" onClick={openSettings}>Settings</button>
               </div>
             ) : null}
@@ -259,6 +294,68 @@ export function TopBar({
                 <a href={ENTROPY_BONUS_URL} target="_blank" rel="noopener noreferrer">Entropy Bonus</a>.
               </p>
             </div>
+          </section>
+        </div>
+      ) : null}
+
+      {feedbackOpen ? (
+        <div
+          className="settings-overlay"
+          role="presentation"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) setFeedbackOpen(false);
+          }}
+        >
+          <section className="settings-dialog feedback-dialog" role="dialog" aria-modal="true" aria-labelledby="feedback-title">
+            <header className="settings-dialog__header">
+              <h2 id="feedback-title">Feedback</h2>
+              <button
+                type="button"
+                className="settings-dialog__close"
+                aria-label="Close feedback"
+                title="Close feedback"
+                onClick={() => setFeedbackOpen(false)}
+              >
+                ×
+              </button>
+            </header>
+            <form className="feedback-dialog__form" onSubmit={handleFeedbackSubmit}>
+              <fieldset>
+                <legend>What would you like to send?</legend>
+                <div className="feedback-dialog__categories">
+                  {FEEDBACK_CATEGORIES.map((category, index) => (
+                    <label key={category}>
+                      <input
+                        type="checkbox"
+                        checked={feedbackCategories.includes(category)}
+                        autoFocus={index === 0}
+                        onChange={() => toggleFeedbackCategory(category)}
+                      />
+                      <span>{category}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+              <label className="feedback-dialog__message">
+                <span>Message</span>
+                <textarea
+                  value={feedbackMessage}
+                  onChange={(event) => setFeedbackMessage(event.target.value)}
+                  placeholder="Tell us what you would like to see, what went wrong, or how we can help."
+                  rows={6}
+                />
+              </label>
+              <p className="feedback-dialog__hint">Send will open a draft in your default email client.</p>
+              <div className="feedback-dialog__actions">
+                <button type="button" onClick={() => setFeedbackOpen(false)}>Cancel</button>
+                <button
+                  type="submit"
+                  disabled={feedbackCategories.length === 0 || feedbackMessage.trim().length === 0}
+                >
+                  Send
+                </button>
+              </div>
+            </form>
           </section>
         </div>
       ) : null}
