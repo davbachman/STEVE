@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createDefaultGraph,
   createDefaultImplicit,
+  createDefaultIntersection,
   createDefaultSurface,
   defaultRenderSettings,
   defaultSceneSettings,
@@ -154,6 +155,55 @@ describe('renderSnapshot helpers', () => {
       isRenderable: false,
       castsInteractiveShadows: true,
       interactiveShadowMode: 'attenuated',
+    });
+  });
+
+  it('renders an intersection independently of its hidden source surfaces and honors its own visibility', () => {
+    const firstSurface = createDefaultSurface('Hidden Parametric Surface');
+    const secondSurface = createDefaultImplicit('Hidden Implicit Surface');
+    const intersection = createDefaultIntersection('Visible Intersection');
+    firstSurface.visible = false;
+    secondSurface.visible = false;
+    intersection.visible = true;
+    intersection.sourceSurfaceIds = [firstSurface.id, secondSurface.id];
+
+    const makeSnapshot = () => createRendererSceneSnapshot(
+      {
+        scene: defaultSceneSettings(),
+        render: defaultRenderSettings(),
+        objects: [firstSurface, secondSurface, intersection],
+        selectedId: intersection.id,
+        plotJobs: {
+          [firstSurface.id]: idlePlotJob(2),
+          [secondSurface.id]: idlePlotJob(3),
+          [intersection.id]: idlePlotJob(4),
+        },
+      },
+      null,
+    );
+    const effectivelyRenderableIds = (snapshot: ReturnType<typeof makeSnapshot>) => snapshot.plots
+      .filter(({ plot, isRenderable }) => plot.visible && isRenderable)
+      .map(({ plot }) => plot.id);
+
+    const visibleSnapshot = makeSnapshot();
+    expect(effectivelyRenderableIds(visibleSnapshot)).toEqual([intersection.id]);
+    expect(visibleSnapshot.plots.find(({ plot }) => plot.id === intersection.id)).toMatchObject({
+      meshVersion: 4,
+      isRenderable: true,
+      castsInteractiveShadows: true,
+      plot: {
+        visible: true,
+        sourceSurfaceIds: [firstSurface.id, secondSurface.id],
+      },
+    });
+
+    intersection.visible = false;
+    const hiddenSnapshot = makeSnapshot();
+    expect(effectivelyRenderableIds(hiddenSnapshot)).toEqual([]);
+    expect(hiddenSnapshot.plots.find(({ plot }) => plot.id === intersection.id)).toMatchObject({
+      castsInteractiveShadows: false,
+      interactiveShadowMode: 'none',
+      plot: { visible: false },
     });
   });
 

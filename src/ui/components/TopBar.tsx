@@ -3,7 +3,8 @@ import { exportPlotAsStl } from '../../persistence/meshExport';
 import { readProjectFile, saveProjectFile } from '../../persistence/projectFile';
 import { useAppStore } from '../../state/store';
 import type { ViewportApi } from '../../renderer/SceneController';
-import type { PlotObject } from '../../types/contracts';
+import type { RenderableObject } from '../../types/contracts';
+import { isRenderableObject } from '../../types/guards';
 
 const APP_GITHUB_URL = 'https://github.com/davbachman/STEVE';
 const DAVID_BACHMAN_URL = 'https://davidbachmandesign.com';
@@ -45,7 +46,7 @@ export function TopBar({
   const selectedId = useAppStore((s) => s.selectedId);
   const updateRender = useAppStore((s) => s.updateRender);
   const selectedPlot = selectedId
-    ? objects.find((obj): obj is PlotObject => obj.id === selectedId && obj.type === 'plot') ?? null
+    ? objects.find((obj): obj is RenderableObject => obj.id === selectedId && isRenderableObject(obj)) ?? null
     : null;
 
   useEffect(() => {

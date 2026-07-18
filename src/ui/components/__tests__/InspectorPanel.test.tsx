@@ -236,6 +236,96 @@ describe('RangeField numeric entry', () => {
     )).toBe(true);
   });
 
+  it('arms two canvas surface-pick buttons and replaces an assigned source', () => {
+    let graphId = '';
+    let parametricId = '';
+    let implicitId = '';
+    let intersectionId = '';
+    act(() => {
+      const store = useAppStore.getState();
+      store.newProject();
+      store.addPlot('graph');
+      graphId = useAppStore.getState().selectedId ?? '';
+      store.addPlot('surface');
+      parametricId = useAppStore.getState().selectedId ?? '';
+      store.addPlot('implicit');
+      implicitId = useAppStore.getState().selectedId ?? '';
+      store.addIntersection();
+      intersectionId = useAppStore.getState().selectedId ?? '';
+      store.setInspectorTab('object');
+    });
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root?.render(<InspectorPanel />);
+    });
+
+    const inspectorContent = container.querySelector('.inspector-content');
+    expect(inspectorContent?.querySelector('.intersection-source-picker__instructions')?.textContent).toBe(
+      'click the button below and then click the surface',
+    );
+    let buttons = Array.from(container.querySelectorAll<HTMLButtonElement>('.intersection-source-button'));
+    expect(buttons).toHaveLength(2);
+    expect(buttons.map((button) => button.querySelector('.intersection-source-button__label')?.textContent)).toEqual([
+      'Surface 1',
+      'Surface 2',
+    ]);
+    expect(container.querySelectorAll('.intersection-source-button__placeholder')).toHaveLength(2);
+    expect(inspectorContent?.querySelector('input, select')).toBeNull();
+
+    act(() => buttons[0]?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(useAppStore.getState().ui.intersectionSourcePick).toEqual({ intersectionId, slot: 0 });
+    expect(buttons[0]?.getAttribute('aria-pressed')).toBe('true');
+    act(() => useAppStore.getState().setIntersectionSource(intersectionId, 0, graphId));
+    expect(useAppStore.getState().ui.intersectionSourcePick).toBeNull();
+
+    buttons = Array.from(container.querySelectorAll<HTMLButtonElement>('.intersection-source-button'));
+    act(() => buttons[1]?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    act(() => useAppStore.getState().setIntersectionSource(intersectionId, 1, parametricId));
+
+    buttons = Array.from(container.querySelectorAll<HTMLButtonElement>('.intersection-source-button'));
+    expect(buttons[0]?.querySelector('.object-card__name')?.textContent).toBe('Graph 1');
+    expect(buttons[1]?.querySelector('.object-card__name')?.textContent).toBe('Parametric 1');
+    let intersection = useAppStore.getState().objects.find((object) => object.id === intersectionId);
+    expect(intersection?.type).toBe('intersection');
+    if (intersection?.type !== 'intersection') throw new Error('Expected intersection');
+    expect(intersection.sourceSurfaceIds).toEqual([graphId, parametricId]);
+
+    act(() => buttons[0]?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    act(() => useAppStore.getState().setIntersectionSource(intersectionId, 0, implicitId));
+    buttons = Array.from(container.querySelectorAll<HTMLButtonElement>('.intersection-source-button'));
+    expect(buttons[0]?.querySelector('.object-card__name')?.textContent).toBe('Implicit 1');
+    intersection = useAppStore.getState().objects.find((object) => object.id === intersectionId);
+    if (intersection?.type !== 'intersection') throw new Error('Expected intersection');
+    expect(intersection.sourceSurfaceIds).toEqual([implicitId, parametricId]);
+  });
+
+  it('gives intersections curve-equivalent Appearance controls without surface decorations', () => {
+    act(() => {
+      const store = useAppStore.getState();
+      store.newProject();
+      store.addIntersection();
+      store.setInspectorTab('material');
+    });
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root?.render(<InspectorPanel />);
+    });
+
+    const labelTexts = Array.from(container.querySelectorAll('label')).map((label) => label.textContent?.trim());
+    for (const label of ['Preset', 'Color', 'Opacity', 'Reflectiveness', 'Roughness', 'Refraction', 'Emission color', 'Emission strength']) {
+      expect(labelTexts.some((text) => text?.startsWith(label)), label).toBe(true);
+    }
+    expect(container.textContent).not.toContain('Surface Decorations');
+    expect(container.textContent).not.toContain('Wireframe');
+    expect(container.textContent).not.toContain('Contours');
+  });
+
   it('exposes bloom controls in Render and hides tuning controls when disabled', () => {
     act(() => {
       const store = useAppStore.getState();

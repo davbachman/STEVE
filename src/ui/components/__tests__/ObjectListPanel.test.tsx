@@ -18,16 +18,24 @@ describe('ObjectListPanel creation buttons', () => {
     container = null;
   });
 
-  it('lists Graph below Curve and creates an expression-only graph', () => {
+  it('groups creators under Curve, Surface, and Lights and creates an expression-only graph', () => {
     const host = document.createElement('div');
     container = host;
     document.body.appendChild(host);
     root = createRoot(host);
     act(() => root?.render(<ObjectListPanel />));
 
-    const buttons = Array.from(host.querySelectorAll('.panel__actions button'));
+    const groups = Array.from(host.querySelectorAll('.creator-group'));
+    expect(groups.map((group) => group.querySelector('h3')?.textContent)).toEqual([
+      'Curve',
+      'Surface',
+      'Lights',
+    ]);
+
+    const buttons = Array.from(host.querySelectorAll('.creator-group button'));
     expect(buttons.map((button) => button.textContent)).toEqual([
-      '+ Curve',
+      '+ Parametric',
+      '+ Intersection',
       '+ Graph',
       '+ Parametric',
       '+ Implicit',
@@ -35,7 +43,7 @@ describe('ObjectListPanel creation buttons', () => {
     ]);
 
     act(() => {
-      buttons[1]?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      buttons[2]?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     const graph = useAppStore.getState().objects.find((object) => object.type === 'plot');
     expect(graph?.name).toBe('Graph 1');
@@ -43,5 +51,40 @@ describe('ObjectListPanel creation buttons', () => {
     if (graph?.equation.kind !== 'explicit_surface') throw new Error('Expected graph');
     expect(graph.equation.graphExpression).toBe(true);
     expect(graph.equation.source.rawText).toBe('x^2 - y^2');
+  });
+
+  it('creates intersections without making sidebar cards draggable', () => {
+    act(() => {
+      const store = useAppStore.getState();
+      store.newProject();
+      store.addPlot('curve');
+      store.addPlot('graph');
+      store.addPlot('surface');
+      store.addPlot('implicit');
+      store.addPointLight();
+      store.addIntersection();
+    });
+
+    const host = document.createElement('div');
+    container = host;
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() => root?.render(<ObjectListPanel />));
+
+    const objects = useAppStore.getState().objects;
+    const cardFor = (name: string) => Array.from(host.querySelectorAll<HTMLDivElement>('.object-card')).find(
+      (card) => card.querySelector('.object-card__name')?.textContent === name,
+    );
+
+    for (const object of objects) {
+      const card = cardFor(object.name);
+      expect(card, `card for ${object.name}`).toBeInstanceOf(HTMLDivElement);
+      expect(card?.draggable).toBe(false);
+    }
+
+    const intersection = objects.find((object) => object.type === 'intersection');
+    expect(intersection).toBeDefined();
+    const intersectionCard = intersection ? cardFor(intersection.name) : undefined;
+    expect(intersectionCard?.querySelector('input[type="checkbox"]')).toBeInstanceOf(HTMLInputElement);
   });
 });

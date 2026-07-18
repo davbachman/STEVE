@@ -1,9 +1,9 @@
 import { buildPlotGeometry } from '../renderer/plotGeometry';
 import type { PlotGeometry } from '../renderer/plotGeometry';
-import type { PlotObject, Vec3 } from '../types/contracts';
+import type { RenderableObject, Vec3 } from '../types/contracts';
 import { saveBlobFileWithDialog } from './projectFile';
 
-export async function exportPlotAsStl(plot: PlotObject): Promise<void> {
+export async function exportPlotAsStl(plot: RenderableObject): Promise<void> {
   await saveBlobFileWithDialog(
     `${sanitizeFileStem(plot.name)}.stl`,
     () => {

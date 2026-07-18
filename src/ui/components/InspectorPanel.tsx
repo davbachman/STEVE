@@ -18,7 +18,9 @@ import {
   materialPresets,
 } from '../../state/defaults';
 import { useAppStore } from '../../state/store';
-import type { MaterialParams, PlotObject, PointLightObject } from '../../types/contracts';
+import type { MaterialParams, PlotObject, SceneObject } from '../../types/contracts';
+import { isSurfacePlot } from '../../types/guards';
+import { ObjectCardSummary } from './ObjectListPanel';
 
 const tabs = [
   { id: 'object', label: 'Object' },
@@ -55,7 +57,7 @@ export function InspectorPanel() {
   );
 }
 
-function ObjectTab({ selected }: { selected: PlotObject | PointLightObject | null }) {
+function ObjectTab({ selected }: { selected: SceneObject | null }) {
   const updatePlotSpec = useAppStore((s) => s.updatePlotSpec);
   const setObjectName = useAppStore((s) => s.setObjectName);
   const setObjectPosition = useAppStore((s) => s.setObjectPosition);
@@ -65,6 +67,7 @@ function ObjectTab({ selected }: { selected: PlotObject | PointLightObject | nul
   });
 
   if (!selected) return <EmptyState text="Select a plot or light" />;
+  if (selected.type === 'intersection') return <IntersectionObjectFields intersection={selected} />;
 
   const position = selected.type === 'plot' ? selected.transform.position : selected.position;
   const nameDraft = nameDraftState.objectId === selected.id ? nameDraftState.value : selected.name;
@@ -177,12 +180,55 @@ function ObjectTab({ selected }: { selected: PlotObject | PointLightObject | nul
   );
 }
 
-function MaterialTab({ selected }: { selected: PlotObject | PointLightObject | null }) {
+function IntersectionObjectFields({ intersection }: { intersection: Extract<SceneObject, { type: 'intersection' }> }) {
+  const objects = useAppStore((s) => s.objects);
+  const activePick = useAppStore((s) => s.ui.intersectionSourcePick);
+  const beginIntersectionSourcePick = useAppStore((s) => s.beginIntersectionSourcePick);
+
+  const sourceObjects = intersection.sourceSurfaceIds.map((sourceId) => {
+    const source = sourceId ? objects.find((object) => object.id === sourceId) : null;
+    return isSurfacePlot(source) ? source : null;
+  });
+
+  return (
+    <div className="inspector-section intersection-source-picker">
+      <p className="intersection-source-picker__instructions">click the button below and then click the surface</p>
+      {([0, 1] as const).map((slot) => {
+        const source = sourceObjects[slot];
+        const isActive = activePick?.intersectionId === intersection.id && activePick.slot === slot;
+        return (
+          <button
+            type="button"
+            key={slot}
+            className={`intersection-source-button${source ? ' intersection-source-button--filled' : ''}${isActive ? ' intersection-source-button--active' : ''}`}
+            aria-label={`Choose Surface ${slot + 1}`}
+            aria-pressed={isActive}
+            onClick={() => beginIntersectionSourcePick(intersection.id, slot)}
+          >
+            <span className="intersection-source-button__label">Surface {slot + 1}</span>
+            {source ? (
+              <div className="object-card object-card--source-summary">
+                <ObjectCardSummary object={source} />
+              </div>
+            ) : (
+              <span className="intersection-source-button__placeholder">
+                {isActive ? 'Click a surface in the viewport' : 'Click to choose'}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function MaterialTab({ selected }: { selected: SceneObject | null }) {
   const updatePlotMaterial = useAppStore((s) => s.updatePlotMaterial);
   const applyPreset = useAppStore((s) => s.applyMaterialPreset);
-  if (!selected || selected.type !== 'plot') return <EmptyState text="Select a plot to edit material" />;
-  const supportsWireframe = selected.equation.kind === 'parametric_surface' || selected.equation.kind === 'explicit_surface';
-  const supportsContours = selected.equation.kind !== 'parametric_curve';
+  if (!selected || selected.type === 'point_light') return <EmptyState text="Select a plot or intersection to edit appearance" />;
+  const supportsWireframe = selected.type === 'plot'
+    && (selected.equation.kind === 'parametric_surface' || selected.equation.kind === 'explicit_surface');
+  const supportsContours = selected.type === 'plot' && selected.equation.kind !== 'parametric_curve';
   const clampContourSpacing = (value: number) => Number.isFinite(value) ? Math.min(5, Math.max(0.1, value)) : 0.1;
 
   return (
@@ -431,7 +477,7 @@ function CollapsibleSection({
   );
 }
 
-function LightingTab({ selected }: { selected: PlotObject | PointLightObject | null }) {
+function LightingTab({ selected }: { selected: SceneObject | null }) {
   const scene = useAppStore((s) => s.scene);
   const updateScene = useAppStore((s) => s.updateScene);
 
@@ -960,7 +1006,7 @@ function EquationParameterEditor({ plot }: { plot: PlotObject }) {
   );
 }
 
-function PointLightTabFields({ light }: { light: PointLightObject }) {
+function PointLightTabFields({ light }: { light: Extract<SceneObject, { type: 'point_light' }> }) {
   const updatePointLight = useAppStore((s) => s.updatePointLight);
   return (
     <div className="inspector-section">

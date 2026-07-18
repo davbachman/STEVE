@@ -31,6 +31,8 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
   const objects = useAppStore((s) => s.objects);
   const selectedId = useAppStore((s) => s.selectedId);
   const plotJobs = useAppStore((s) => s.plotJobs);
+  const intersectionSourcePick = useAppStore((s) => s.ui.intersectionSourcePick);
+  const cancelIntersectionSourcePick = useAppStore((s) => s.cancelIntersectionSourcePick);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -41,6 +43,8 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
     try {
       controller = new SceneController(canvas);
     } catch (err) {
+      // The controller is created only after the canvas mounts, so initialization failures surface here.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setError(err instanceof Error ? err.message : 'Failed to initialize viewport');
       onApiReady?.(null);
       return;
@@ -104,6 +108,15 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
     };
   }, [controllerReady]);
 
+  useEffect(() => {
+    if (!intersectionSourcePick) return;
+    const cancelOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') cancelIntersectionSourcePick();
+    };
+    window.addEventListener('keydown', cancelOnEscape);
+    return () => window.removeEventListener('keydown', cancelOnEscape);
+  }, [cancelIntersectionSourcePick, intersectionSourcePick]);
+
   const applyViewPreset = (preset: ViewPreset) => {
     controllerRef.current?.setViewPreset(preset);
   };
@@ -118,8 +131,16 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
   };
 
   return (
-    <div ref={shellRef} className="viewport-shell">
+    <div
+      ref={shellRef}
+      className={`viewport-shell${intersectionSourcePick ? ' viewport-shell--surface-pick' : ''}`}
+    >
       <canvas ref={canvasRef} className="viewport-canvas" />
+      {!error && controllerReady && intersectionSourcePick ? (
+        <div className="viewport-pick-prompt" role="status" aria-live="polite">
+          Click a surface for Surface {intersectionSourcePick.slot + 1} · Esc to cancel
+        </div>
+      ) : null}
       {!error && controllerReady ? (
         <div className="viewport-toolbar" role="toolbar" aria-label="View controls">
           <button onClick={() => applyViewPreset('top')} title="Top view (looking down the z axis)">Top</button>

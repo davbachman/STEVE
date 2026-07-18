@@ -2,7 +2,7 @@ import { vec3 } from 'gl-matrix';
 import { computeMeshBounds, computeVertexNormals, extractMeshEdges, mergeSerializedMeshes } from '../math/mesh/geometry';
 import { buildSerializedPlotMesh } from '../math/mesh/plotMesh';
 import { getRuntimePlotMesh } from '../workers/runtimeMeshCache';
-import type { PlotObject, SerializedMesh, Vec3 } from '../types/contracts';
+import type { RenderableObject, SerializedMesh, Vec3 } from '../types/contracts';
 
 export interface PlotGeometry {
   positions: Float32Array;
@@ -21,20 +21,23 @@ export interface RayHit {
   pickedPoint: Vec3;
 }
 
-export function buildPlotGeometry(plot: PlotObject): PlotGeometry {
-  return toPlotGeometry(plot, getRuntimePlotMesh(plot.id) ?? buildSerializedPlotMesh(plot));
+export function buildPlotGeometry(plot: RenderableObject): PlotGeometry {
+  const mesh = getRuntimePlotMesh(plot.id)
+    ?? (plot.type === 'plot' ? buildSerializedPlotMesh(plot) : emptyCurveMesh());
+  return toPlotGeometry(plot, mesh);
 }
 
-export function toPlotGeometry(plot: PlotObject, meshData: SerializedMesh): PlotGeometry {
+export function toPlotGeometry(plot: RenderableObject, meshData: SerializedMesh): PlotGeometry {
   const curvePaths = collectCurvePaths(meshData);
   if (curvePaths.length > 0) {
+    const curveStyle = curveStyleFor(plot);
     const renderedCurveMesh = mergeSerializedMeshes(
       curvePaths
         .filter((curvePath) => curvePath.length >= 6)
         .map((curvePath) => (
-          plot.equation.kind === 'parametric_curve' && plot.equation.renderAsTube
-            ? buildTubeMeshFromCurvePath(curvePath, plot.equation.tubeRadius, 12)
-            : buildPolylineRibbonMesh(curvePath, Math.max(0.02, plot.equation.kind === 'parametric_curve' ? plot.equation.tubeRadius * 0.35 : 0.02))
+          curveStyle.renderAsTube
+            ? buildTubeMeshFromCurvePath(curvePath, curveStyle.tubeRadius, 12)
+            : buildPolylineRibbonMesh(curvePath, Math.max(0.02, curveStyle.tubeRadius * 0.35))
         )),
     );
     if (renderedCurveMesh.positions.length === 0) {
@@ -109,6 +112,37 @@ function collectCurvePaths(meshData: SerializedMesh): Float32Array[] {
   return meshData.curvePath ? [meshData.curvePath] : [];
 }
 
+function curveStyleFor(plot: RenderableObject): { tubeRadius: number; renderAsTube: boolean } {
+  if (plot.type === 'intersection') {
+    return plot.curveStyle;
+  }
+  if (plot.equation.kind === 'parametric_curve') {
+    return {
+      tubeRadius: plot.equation.tubeRadius,
+      renderAsTube: plot.equation.renderAsTube,
+    };
+  }
+  return { tubeRadius: 0.05, renderAsTube: false };
+}
+
+function emptyCurveMesh(): SerializedMesh {
+  return {
+    positions: new Float32Array(0),
+    indices: new Uint32Array(0),
+    curvePaths: [],
+    bounds: computeMeshBounds([]),
+    boundaryEdges: new Float32Array(0),
+    featureEdges: new Float32Array(0),
+    topology: {
+      isClosedManifold: false,
+      hasBoundaryEdges: false,
+      hasFeatureEdges: false,
+      boundaryEdgeCount: 0,
+      featureEdgeCount: 0,
+    },
+  };
+}
+
 export function intersectRayWithPlotGeometry(
   origin: vec3,
   direction: vec3,
@@ -151,7 +185,9 @@ export function intersectRayWithPlotGeometry(
 }
 
 function buildTubeMeshFromCurvePath(path: Float32Array, radius: number, radialSegments: number): SerializedMesh {
-  const pointCount = Math.max(2, Math.floor(path.length / 3));
+  const sourcePointCount = Math.max(2, Math.floor(path.length / 3));
+  const closed = curvePathIsClosed(path, sourcePointCount);
+  const pointCount = Math.max(2, closed ? sourcePointCount - 1 : sourcePointCount);
   const ringSize = Math.max(6, radialSegments);
   const positions: number[] = [];
   const indices: number[] = [];
@@ -163,8 +199,8 @@ function buildTubeMeshFromCurvePath(path: Float32Array, radius: number, radialSe
 
   for (let pointIndex = 0; pointIndex < pointCount; pointIndex += 1) {
     const point = readPathPoint(path, pointIndex);
-    const prev = readPathPoint(path, Math.max(0, pointIndex - 1));
-    const next = readPathPoint(path, Math.min(pointCount - 1, pointIndex + 1));
+    const prev = readPathPoint(path, closed ? (pointIndex - 1 + pointCount) % pointCount : Math.max(0, pointIndex - 1));
+    const next = readPathPoint(path, closed ? (pointIndex + 1) % pointCount : Math.min(pointCount - 1, pointIndex + 1));
     vec3.sub(tangent, next, prev);
     if (vec3.length(tangent) < 1e-6) {
       vec3.set(tangent, 0, 0, 1);
@@ -199,9 +235,10 @@ function buildTubeMeshFromCurvePath(path: Float32Array, radius: number, radialSe
     }
   }
 
-  for (let pointIndex = 0; pointIndex < pointCount - 1; pointIndex += 1) {
+  const segmentCount = closed ? pointCount : pointCount - 1;
+  for (let pointIndex = 0; pointIndex < segmentCount; pointIndex += 1) {
     const ringOffset = pointIndex * ringSize;
-    const nextRingOffset = (pointIndex + 1) * ringSize;
+    const nextRingOffset = ((pointIndex + 1) % pointCount) * ringSize;
     for (let ringIndex = 0; ringIndex < ringSize; ringIndex += 1) {
       const nextRingIndex = (ringIndex + 1) % ringSize;
       const a = ringOffset + ringIndex;
@@ -212,8 +249,10 @@ function buildTubeMeshFromCurvePath(path: Float32Array, radius: number, radialSe
     }
   }
 
-  appendTubeCap(positions, normals, indices, path, 0, radius, ringSize, -1);
-  appendTubeCap(positions, normals, indices, path, pointCount - 1, radius, ringSize, 1);
+  if (!closed) {
+    appendTubeCap(positions, normals, indices, path, 0, radius, ringSize, -1);
+    appendTubeCap(positions, normals, indices, path, pointCount - 1, radius, ringSize, 1);
+  }
   const edgeData = extractMeshEdges(positions, indices);
   return {
     positions: new Float32Array(positions),
@@ -227,14 +266,16 @@ function buildTubeMeshFromCurvePath(path: Float32Array, radius: number, radialSe
 }
 
 function buildPolylineRibbonMesh(path: Float32Array, width: number): SerializedMesh {
-  const pointCount = Math.max(2, Math.floor(path.length / 3));
+  const sourcePointCount = Math.max(2, Math.floor(path.length / 3));
+  const closed = curvePathIsClosed(path, sourcePointCount);
+  const pointCount = Math.max(2, closed ? sourcePointCount - 1 : sourcePointCount);
   const positions: number[] = [];
   const indices: number[] = [];
   const up = vec3.fromValues(0, 0, 1);
   for (let i = 0; i < pointCount; i += 1) {
     const point = readPathPoint(path, i);
-    const prev = readPathPoint(path, Math.max(0, i - 1));
-    const next = readPathPoint(path, Math.min(pointCount - 1, i + 1));
+    const prev = readPathPoint(path, closed ? (i - 1 + pointCount) % pointCount : Math.max(0, i - 1));
+    const next = readPathPoint(path, closed ? (i + 1) % pointCount : Math.min(pointCount - 1, i + 1));
     const tangent = vec3.normalize(vec3.create(), vec3.sub(vec3.create(), next, prev));
     const side = vec3.cross(vec3.create(), tangent, up);
     if (vec3.length(side) < 1e-6) {
@@ -250,11 +291,12 @@ function buildPolylineRibbonMesh(path: Float32Array, width: number): SerializedM
       point[2] - side[2] * width,
     );
   }
-  for (let i = 0; i < pointCount - 1; i += 1) {
+  const segmentCount = closed ? pointCount : pointCount - 1;
+  for (let i = 0; i < segmentCount; i += 1) {
     const a = i * 2;
     const b = a + 1;
-    const c = a + 2;
-    const d = a + 3;
+    const c = ((i + 1) % pointCount) * 2;
+    const d = c + 1;
     indices.push(a, c, b, b, c, d);
   }
   const normals = computeVertexNormals(positions, indices);
@@ -268,6 +310,15 @@ function buildPolylineRibbonMesh(path: Float32Array, width: number): SerializedM
     featureEdges: edgeData.featureEdges,
     topology: edgeData.topology,
   };
+}
+
+function curvePathIsClosed(path: Float32Array, pointCount: number): boolean {
+  if (pointCount < 4) return false;
+  const last = (pointCount - 1) * 3;
+  const dx = path[0] - path[last];
+  const dy = path[1] - path[last + 1];
+  const dz = path[2] - path[last + 2];
+  return Math.hypot(dx, dy, dz) <= 1e-5;
 }
 
 function appendTubeCap(

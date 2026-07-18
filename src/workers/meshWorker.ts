@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 
 import { buildSerializedEquationMesh } from '../math/mesh/plotMesh';
+import { intersectSurfaceMeshes } from '../math/mesh/surfaceIntersection';
 import type {
   ExplicitSurfaceSpec,
   ImplicitSurfaceSpec,
@@ -59,6 +60,15 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
         emitMeshProgress(req.jobId, req.objectId, 'mesh_implicit', 0.6);
         const mesh = buildSerializedEquationMesh(spec);
         if (isCanceled(req.objectId)) return;
+        postMesh(meshResponseTypeForPriority(req.priority), req.jobId, req.objectId, mesh);
+        return;
+      }
+      case 'build_surface_intersection_mesh': {
+        emitMeshProgress(req.jobId, req.objectId, 'intersect_surface_bounds', 0.12);
+        if (isCanceled(req.objectId)) return;
+        const mesh = intersectSurfaceMeshes(req.sourceA, req.sourceB);
+        if (isCanceled(req.objectId)) return;
+        emitMeshProgress(req.jobId, req.objectId, 'stitch_intersection_paths', 0.86);
         postMesh(meshResponseTypeForPriority(req.priority), req.jobId, req.objectId, mesh);
         return;
       }

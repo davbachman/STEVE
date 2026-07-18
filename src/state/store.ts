@@ -4,17 +4,20 @@ import { v4 as uuidv4 } from 'uuid';
 import type {
   EquationSpec,
   HistorySnapshot,
+  IntersectionObject,
   PlotObject,
   PointLightObject,
   PlotJobStatus,
   ProjectFileV1,
   RenderDiagnostics,
+  RenderableObject,
   SceneObject,
   SceneSettings,
   RenderSettings,
   UUID,
 } from '../types/contracts';
 import { analyzeEquationText, analyzeGraphExpression } from '../math/classifier';
+import { isRenderableObject, isSurfacePlot } from '../types/guards';
 import {
   DEFAULT_DISCRETE_PARAMETER_COUNT,
   clampAnimationSpeed,
@@ -28,6 +31,7 @@ import {
   createDefaultCurve,
   createDefaultGraph,
   createDefaultImplicit,
+  createDefaultIntersection,
   createDefaultObjects,
   createDefaultSurface,
   createPointLight,
@@ -47,6 +51,7 @@ interface AppStateShape {
   clipboardObject: SceneObject | null;
   ui: {
     inspectorTab: 'object' | 'material' | 'lighting' | 'scene' | 'render';
+    intersectionSourcePick: { intersectionId: UUID; slot: 0 | 1 } | null;
   };
   renderDiagnostics: RenderDiagnostics;
   plotJobs: Record<UUID, PlotJobStatus>;
@@ -69,10 +74,14 @@ interface AppActions {
   setInspectorTab: (tab: AppState['ui']['inspectorTab']) => void;
   selectObject: (id: UUID | null) => void;
   addPlot: (template?: 'curve' | 'graph' | 'surface' | 'implicit') => void;
+  addIntersection: () => void;
   addPointLight: () => void;
+  beginIntersectionSourcePick: (intersectionId: UUID, slot: 0 | 1) => void;
+  cancelIntersectionSourcePick: () => void;
+  setIntersectionSource: (intersectionId: UUID, slot: 0 | 1, surfaceId: UUID | null) => void;
   updatePlotEquationText: (id: UUID, rawText: string) => void;
   updatePlotSpec: (id: UUID, updater: (spec: EquationSpec) => EquationSpec) => void;
-  updatePlotMaterial: (id: UUID, patch: Partial<PlotObject['material']>) => void;
+  updatePlotMaterial: (id: UUID, patch: Partial<RenderableObject['material']>) => void;
   applyMaterialPreset: (id: UUID, presetName: string) => void;
   updatePointLight: (id: UUID, patch: Partial<PointLightObject>) => void;
   updateScene: (patch: Partial<SceneSettings>) => void;
@@ -149,6 +158,7 @@ function initialState(): AppStateShape {
     clipboardObject: null,
     ui: {
       inspectorTab: 'object',
+      intersectionSourcePick: null,
     },
     renderDiagnostics: defaultRenderDiagnostics(),
     plotJobs: {},
@@ -292,6 +302,66 @@ function coerceEquationSpec(existing: EquationSpec, rawText: string, forcedKind?
   return { ...existing, source, parameters: nextParameters };
 }
 
+function clearInvalidIntersectionSources(objects: SceneObject[]): SceneObject[] {
+  const surfacesById = new Set(objects.filter(isSurfacePlot).map((surface) => surface.id));
+  return objects.map((object) => {
+    if (object.type !== 'intersection') {
+      return object;
+    }
+    const first = object.sourceSurfaceIds[0];
+    const second = object.sourceSurfaceIds[1];
+    const nextFirst = first && surfacesById.has(first) ? first : null;
+    const nextSecond = second && surfacesById.has(second) && second !== nextFirst ? second : null;
+    if (nextFirst === first && nextSecond === second) {
+      return object;
+    }
+    return {
+      ...object,
+      sourceSurfaceIds: [nextFirst, nextSecond],
+    };
+  });
+}
+
+function ensureUniqueObjectIds(objects: SceneObject[]): SceneObject[] {
+  const idCounts = new Map<UUID, number>();
+  for (const object of objects) {
+    idCounts.set(object.id, (idCounts.get(object.id) ?? 0) + 1);
+  }
+  const ambiguousIds = new Set(
+    [...idCounts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([id]) => id),
+  );
+  if (ambiguousIds.size === 0) return objects;
+
+  const reservedIds = new Set(objects.map((object) => object.id));
+  const usedIds = new Set<UUID>();
+  const uniqueObjects = objects.map((object) => {
+    if (!usedIds.has(object.id)) {
+      usedIds.add(object.id);
+      return object;
+    }
+    let nextId = uuidv4();
+    while (reservedIds.has(nextId) || usedIds.has(nextId)) {
+      nextId = uuidv4();
+    }
+    usedIds.add(nextId);
+    return { ...object, id: nextId } as SceneObject;
+  });
+
+  return uniqueObjects.map((object) => {
+    if (object.type !== 'intersection') return object;
+    const [first, second] = object.sourceSurfaceIds;
+    return {
+      ...object,
+      sourceSurfaceIds: [
+        first && !ambiguousIds.has(first) ? first : null,
+        second && !ambiguousIds.has(second) ? second : null,
+      ],
+    };
+  });
+}
+
 function cloneWithNewId(object: SceneObject, offsetPosition = true): SceneObject {
   const cloned = structuredClone(object) as SceneObject;
   cloned.id = uuidv4();
@@ -300,7 +370,7 @@ function cloneWithNewId(object: SceneObject, offsetPosition = true): SceneObject
     if (cloned.type === 'plot') {
       cloned.transform.position.x += 0.4;
       cloned.transform.position.y += 0.4;
-    } else {
+    } else if (cloned.type === 'point_light') {
       cloned.position.x += 0.4;
       cloned.position.y += 0.4;
     }
@@ -312,7 +382,7 @@ function clipboardPlainText(object: SceneObject): string {
   return object.type === 'plot' ? object.equation.source.rawText : object.name;
 }
 
-function surfaceDecorationSettings(material: PlotObject['material']): Partial<PlotObject['material']> {
+function surfaceDecorationSettings(material: RenderableObject['material']): Partial<RenderableObject['material']> {
   return {
     wireframeVisible: material.wireframeVisible,
     wireframeCellSize: material.wireframeCellSize,
@@ -415,10 +485,10 @@ function normalizeImportedProject(project: ProjectFileV1): ProjectFileV1 {
   const normalizedScene = normalizeSceneSettingsImport(sceneInput, ambientInput, directionalInput, shadowInput, sceneDefaults);
   const normalizedRender = normalizeRenderSettingsImport(mergedRender, renderInput, renderDefaults);
   const objectInputs = Array.isArray(projectRecord.objects) ? projectRecord.objects : [];
-  const normalizedObjects = objectInputs
+  const normalizedObjects = clearInvalidIntersectionSources(ensureUniqueObjectIds(objectInputs
     .map((obj, index) => normalizeSceneObjectImport(obj, index))
     .filter((result): result is { object: SceneObject } => !!result)
-    .map((result) => result.object);
+    .map((result) => result.object)));
   return {
     schemaVersion: 1,
     appVersion: typeof projectRecord.appVersion === 'string' ? projectRecord.appVersion : APP_VERSION,
@@ -431,9 +501,25 @@ function normalizeImportedProject(project: ProjectFileV1): ProjectFileV1 {
 export const useAppStore = create<AppState>((set, get) => ({
   ...initialState(),
 
-  setInspectorTab: (tab) => set((state) => ({ ...state, ui: { ...state.ui, inspectorTab: tab } })),
+  setInspectorTab: (tab) => set((state) => ({
+    ...state,
+    ui: {
+      ...state.ui,
+      inspectorTab: tab,
+      intersectionSourcePick: tab === 'object' ? state.ui.intersectionSourcePick : null,
+    },
+  })),
 
-  selectObject: (id) => set((state) => ({ ...state, selectedId: id })),
+  selectObject: (id) => set((state) => ({
+    ...state,
+    selectedId: id,
+    ui: {
+      ...state.ui,
+      intersectionSourcePick: state.ui.intersectionSourcePick?.intersectionId === id
+        ? state.ui.intersectionSourcePick
+        : null,
+    },
+  })),
 
   addPlot: (template) =>
     set((state) => {
@@ -452,7 +538,21 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...state,
         objects: [...state.objects, actualPlot],
         selectedId: actualPlot.id,
+        ui: { ...state.ui, intersectionSourcePick: null },
         historyPast: past,
+        historyFuture: [],
+      };
+    }),
+
+  addIntersection: () =>
+    set((state) => {
+      const intersection = createDefaultIntersection(nextIntersectionName(state.objects));
+      return {
+        ...state,
+        objects: [...state.objects, intersection],
+        selectedId: intersection.id,
+        ui: { ...state.ui, inspectorTab: 'object', intersectionSourcePick: null },
+        historyPast: [...state.historyPast, snapshotOf(state)],
         historyFuture: [],
       };
     }),
@@ -464,6 +564,63 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...state,
         objects: [...state.objects, light],
         selectedId: light.id,
+        ui: { ...state.ui, intersectionSourcePick: null },
+        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyFuture: [],
+      };
+    }),
+
+  beginIntersectionSourcePick: (intersectionId, slot) =>
+    set((state) => {
+      if (slot !== 0 && slot !== 1) return state;
+      const intersection = state.objects.find(
+        (object): object is IntersectionObject => object.id === intersectionId && object.type === 'intersection',
+      );
+      if (!intersection) return state;
+      const current = state.ui.intersectionSourcePick;
+      const nextPick = current?.intersectionId === intersectionId && current.slot === slot
+        ? null
+        : { intersectionId, slot };
+      return {
+        ...state,
+        selectedId: intersectionId,
+        ui: { ...state.ui, inspectorTab: 'object', intersectionSourcePick: nextPick },
+      };
+    }),
+
+  cancelIntersectionSourcePick: () =>
+    set((state) => state.ui.intersectionSourcePick
+      ? { ...state, ui: { ...state.ui, intersectionSourcePick: null } }
+      : state),
+
+  setIntersectionSource: (intersectionId, slot, surfaceId) =>
+    set((state) => {
+      if (slot !== 0 && slot !== 1) return state;
+      const idx = state.objects.findIndex(
+        (object): object is IntersectionObject => object.id === intersectionId && object.type === 'intersection',
+      );
+      if (idx === -1) return state;
+      const intersection = state.objects[idx] as IntersectionObject;
+      const clearsActivePick = state.ui.intersectionSourcePick?.intersectionId === intersectionId
+        && state.ui.intersectionSourcePick.slot === slot;
+      if (intersection.sourceSurfaceIds[slot] === surfaceId) {
+        return clearsActivePick
+          ? { ...state, ui: { ...state.ui, intersectionSourcePick: null } }
+          : state;
+      }
+      if (surfaceId !== null) {
+        const source = state.objects.find((object) => object.id === surfaceId);
+        if (!isSurfacePlot(source) || intersection.sourceSurfaceIds[slot === 0 ? 1 : 0] === surfaceId) {
+          return state;
+        }
+      }
+      const next = produce(state, (draft) => {
+        const draftIntersection = draft.objects[idx] as IntersectionObject;
+        draftIntersection.sourceSurfaceIds[slot] = surfaceId;
+      });
+      return {
+        ...next,
+        ui: clearsActivePick ? { ...next.ui, intersectionSourcePick: null } : next.ui,
         historyPast: [...state.historyPast, snapshotOf(state)],
         historyFuture: [],
       };
@@ -479,6 +636,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       return {
         ...next,
+        objects: clearInvalidIntersectionSources(next.objects),
         historyPast: [...state.historyPast, snapshotOf(state)],
         historyFuture: [],
       };
@@ -492,11 +650,15 @@ export const useAppStore = create<AppState>((set, get) => ({
         const plot = draft.objects[idx] as PlotObject;
         plot.equation = updater(plot.equation);
       });
+      const nextWithValidReferences = {
+        ...next,
+        objects: clearInvalidIntersectionSources(next.objects),
+      };
       if (state.activeEquationParameterDrag?.plotId === id) {
-        return next;
+        return nextWithValidReferences;
       }
       return {
-        ...next,
+        ...nextWithValidReferences,
         historyPast: [...state.historyPast, snapshotOf(state)],
         historyFuture: [],
       };
@@ -504,11 +666,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   updatePlotMaterial: (id, patch) =>
     set((state) => {
-      const idx = state.objects.findIndex((obj) => obj.id === id && obj.type === 'plot');
+      const idx = state.objects.findIndex((obj) => obj.id === id && isRenderableObject(obj));
       if (idx === -1) return state;
       const next = produce(state, (draft) => {
-        const plot = draft.objects[idx] as PlotObject;
-        plot.material = { ...plot.material, ...patch };
+        const object = draft.objects[idx] as RenderableObject;
+        object.material = { ...object.material, ...patch };
       });
       return {
         ...next,
@@ -521,13 +683,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => {
       const preset = materialPresets[presetName];
       if (!preset) return state;
-      const idx = state.objects.findIndex((obj) => obj.id === id && obj.type === 'plot');
+      const idx = state.objects.findIndex((obj) => obj.id === id && isRenderableObject(obj));
       if (idx === -1) return state;
       const next = produce(state, (draft) => {
-        const plot = draft.objects[idx] as PlotObject;
-        plot.material = {
+        const object = draft.objects[idx] as RenderableObject;
+        object.material = {
           ...preset,
-          ...surfaceDecorationSettings(plot.material),
+          ...surfaceDecorationSettings(object.material),
         };
       });
       return {
@@ -605,13 +767,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => {
       const idx = state.objects.findIndex((obj) => obj.id === id);
       if (idx === -1) return state;
+      if (state.objects[idx].type === 'intersection') return state;
       const currentPos = getObjectPosition(state.objects[idx]);
       if (positionsEqual(currentPos, pos)) return state;
       const next = produce(state, (draft) => {
         const obj = draft.objects[idx];
         if (obj.type === 'plot') {
           obj.transform.position = { ...pos };
-        } else {
+        } else if (obj.type === 'point_light') {
           obj.position = { ...pos };
         }
       });
@@ -621,7 +784,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   beginObjectDragHistory: (id) =>
     set((state) => {
       const obj = state.objects.find((candidate) => candidate.id === id);
-      if (!obj) return state;
+      if (!obj || obj.type === 'intersection') return state;
       const startPosition = getObjectPosition(obj);
       if (
         state.activeObjectDragHistory &&
@@ -746,10 +909,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   deleteSelected: () =>
     set((state) => {
       if (!state.selectedId) return state;
+      const objects = clearInvalidIntersectionSources(
+        state.objects.filter((obj) => obj.id !== state.selectedId),
+      );
       return {
         ...state,
-        objects: state.objects.filter((obj) => obj.id !== state.selectedId),
+        objects,
         selectedId: null,
+        ui: { ...state.ui, intersectionSourcePick: null },
         historyPast: [...state.historyPast, snapshotOf(state)],
         historyFuture: [],
       };
@@ -758,10 +925,17 @@ export const useAppStore = create<AppState>((set, get) => ({
   deleteObject: (id) =>
     set((state) => {
       if (!state.objects.some((obj) => obj.id === id)) return state;
+      const objects = clearInvalidIntersectionSources(state.objects.filter((obj) => obj.id !== id));
       return {
         ...state,
-        objects: state.objects.filter((obj) => obj.id !== id),
+        objects,
         selectedId: state.selectedId === id ? null : state.selectedId,
+        ui: {
+          ...state.ui,
+          intersectionSourcePick: state.ui.intersectionSourcePick?.intersectionId === id
+            ? null
+            : state.ui.intersectionSourcePick,
+        },
         historyPast: [...state.historyPast, snapshotOf(state)],
         historyFuture: [],
       };
@@ -805,18 +979,23 @@ export const useAppStore = create<AppState>((set, get) => ({
       const cloned = cloneWithNewId(obj, false);
       set((s) => ({
         ...s,
-        objects: [...s.objects, cloned],
+        objects: clearInvalidIntersectionSources([...s.objects, cloned]),
         selectedId: cloned.id,
         historyPast: [...s.historyPast, snapshotOf(s)],
         historyFuture: [],
       }));
     };
+    const pasteFromUnknown = (input: unknown): boolean => {
+      const normalized = normalizeSceneObjectImport(input, get().objects.length);
+      if (!normalized) return false;
+      pasteFromObject(normalized.object);
+      return true;
+    };
 
     try {
       const clip = await maybeReadClipboard();
       if (clip.json) {
-        pasteFromObject(JSON.parse(clip.json) as SceneObject);
-        return;
+        if (pasteFromUnknown(JSON.parse(clip.json))) return;
       }
       if (clip.text) {
         const trimmed = clip.text.trim();
@@ -825,11 +1004,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           return;
         }
         try {
-          const parsed = JSON.parse(trimmed) as SceneObject;
-          if (parsed && typeof parsed === 'object' && 'id' in parsed && 'type' in parsed) {
-            pasteFromObject(parsed);
-            return;
-          }
+          if (pasteFromUnknown(JSON.parse(trimmed))) return;
         } catch {
           // use text as equation
         }
@@ -864,6 +1039,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       historyFuture: [],
       activeObjectDragHistory: null,
       activeEquationParameterDrag: null,
+      ui: { ...state.ui, intersectionSourcePick: null },
     }));
   },
 
@@ -877,7 +1053,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         ...base,
         clipboardObject: state.clipboardObject,
-        ui: state.ui,
+        ui: { ...state.ui, intersectionSourcePick: null },
         historyPast: state.historyPast.slice(0, -1),
         historyFuture: [snapshotOf(state), ...state.historyFuture],
         activeObjectDragHistory: null,
@@ -893,7 +1069,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         ...base,
         clipboardObject: state.clipboardObject,
-        ui: state.ui,
+        ui: { ...state.ui, intersectionSourcePick: null },
         historyPast: [...state.historyPast, snapshotOf(state)],
         historyFuture: state.historyFuture.slice(1),
         activeObjectDragHistory: null,
@@ -1000,7 +1176,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 }));
 
 function getObjectPosition(obj: SceneObject): { x: number; y: number; z: number } {
-  return obj.type === 'plot' ? { ...obj.transform.position } : { ...obj.position };
+  return obj.type === 'point_light' ? { ...obj.position } : { ...obj.transform.position };
 }
 
 function positionsEqual(
@@ -1098,14 +1274,40 @@ function normalizeRenderSettingsImport(
 function normalizeSceneObjectImport(input: unknown, index: number): { object: SceneObject } | null {
   const record = asRecord(input);
   if (!record) return null;
-  const type = asEnum(record.type, ['plot', 'point_light']);
+  const type = asEnum(record.type, ['plot', 'intersection', 'point_light']);
   if (type === 'plot') {
     return { object: normalizePlotObjectImport(record, index) };
+  }
+  if (type === 'intersection') {
+    return { object: normalizeIntersectionObjectImport(record, index) };
   }
   if (type === 'point_light') {
     return { object: normalizePointLightObjectImport(record, index) };
   }
   return null;
+}
+
+function normalizeIntersectionObjectImport(record: Record<string, unknown>, index: number): IntersectionObject {
+  const fallback = createDefaultIntersection(`Imported Intersection ${index + 1}`);
+  const materialInput = asRecord(record.material);
+  const curveStyleInput = asRecord(record.curveStyle);
+  const sourceSurfaceIdsInput = Array.isArray(record.sourceSurfaceIds) ? record.sourceSurfaceIds : [];
+  return {
+    ...fallback,
+    id: asNonEmptyString(record.id) ?? fallback.id,
+    name: asNonEmptyString(record.name) ?? fallback.name,
+    visible: asBoolean(record.visible) ?? fallback.visible,
+    transform: structuredClone(fallback.transform),
+    material: normalizeMaterialImport(materialInput, fallback.material),
+    sourceSurfaceIds: [
+      asNonEmptyString(sourceSurfaceIdsInput[0]),
+      asNonEmptyString(sourceSurfaceIdsInput[1]),
+    ],
+    curveStyle: {
+      tubeRadius: Math.max(0, asFiniteNumber(curveStyleInput?.tubeRadius) ?? fallback.curveStyle.tubeRadius),
+      renderAsTube: asBoolean(curveStyleInput?.renderAsTube) ?? fallback.curveStyle.renderAsTube,
+    },
+  };
 }
 
 function normalizePlotObjectImport(record: Record<string, unknown>, index: number): PlotObject {
@@ -1366,6 +1568,17 @@ function countPlotsByKind(objects: SceneObject[], kind: 'curve' | 'graph' | 'par
 
 function countPointLights(objects: SceneObject[]): number {
   return objects.filter((obj) => obj.type === 'point_light').length;
+}
+
+function nextIntersectionName(objects: SceneObject[]): string {
+  const usedNames = new Set(
+    objects
+      .filter((object) => object.type === 'intersection')
+      .map((object) => object.name),
+  );
+  let suffix = 1;
+  while (usedNames.has(`Intersection ${suffix}`)) suffix += 1;
+  return `Intersection ${suffix}`;
 }
 
 function shallowDiagnosticsEqual(a: RenderDiagnostics, b: RenderDiagnostics): boolean {

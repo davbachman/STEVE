@@ -9,15 +9,18 @@ test.describe('Import + Drag Undo Smoke', () => {
       test.skip(true, 'WebGL2 not available in this Playwright browser session');
     }
 
-    await page.getByRole('button', { name: '+ Surface' }).click();
-    await page.getByRole('button', { name: /Surface 1/ }).click();
+    const surfaceCreators = page.locator('.creator-group').filter({
+      has: page.getByRole('heading', { name: 'Surface', exact: true }),
+    });
+    await surfaceCreators.getByRole('button', { name: '+ Parametric', exact: true }).click();
+    await page.getByRole('button', { name: /Parametric 1/ }).click();
     const viewportCanvas = page.locator('canvas').first();
     await expect(viewportCanvas).toBeVisible();
     const box = await viewportCanvas.boundingBox();
     expect(box).toBeTruthy();
     if (!box) return;
 
-    const xInput = page.locator('.control-grid--triplet').filter({ hasText: 'Position' }).locator('input[type="number"]').nth(0);
+    const xInput = page.getByRole('textbox', { name: 'Position x', exact: true });
     await expect(xInput).toHaveValue('0');
 
     const start = { x: box.x + box.width * 0.52, y: box.y + box.height * 0.55 };

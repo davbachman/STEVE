@@ -93,7 +93,7 @@ export default function App() {
   }, [copySelected, deleteSelected, pasteClipboard, redo, selectObject, undo]);
 
   const selectedObject = selectedId ? objects.find((obj) => obj.id === selectedId) ?? null : null;
-  const selectedPlot = selectedObject?.type === 'plot' ? selectedObject : null;
+  const selectedEquationPlot = selectedObject?.type === 'plot' ? selectedObject : null;
 
   return (
     <div className="app-shell">
@@ -106,10 +106,10 @@ export default function App() {
       />
       <section className="equation-dock" aria-label="Selected equation editor">
         <div className="equation-dock__inner">
-          {selectedPlot ? (
+          {selectedEquationPlot ? (
             <EquationEditor
-              equation={selectedPlot.equation}
-              onChange={(rawText) => updatePlotEquationText(selectedPlot.id, rawText)}
+              equation={selectedEquationPlot.equation}
+              onChange={(rawText) => updatePlotEquationText(selectedEquationPlot.id, rawText)}
             />
           ) : (
             <div className="equation-dock__blank" aria-hidden="true" />

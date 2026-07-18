@@ -2,10 +2,11 @@ import { mat3, mat4, vec3, vec4 } from 'gl-matrix';
 import type { AppState } from '../state/store';
 import { useAppStore } from '../state/store';
 import type {
-  PlotObject,
   PointLightObject,
+  RenderableObject,
   SceneObject,
 } from '../types/contracts';
+import { isRenderableObject, isSurfacePlot } from '../types/guards';
 import {
   classifyInteractiveShadowMode,
   createRendererSceneSnapshot,
@@ -1071,7 +1072,7 @@ export class SceneController {
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
   }
 
-  private drawShadowMeshWithMatrix(plot: PlotObject, program: ProgramBundle, lightMatrix: mat4): void {
+  private drawShadowMeshWithMatrix(plot: RenderableObject, program: ProgramBundle, lightMatrix: mat4): void {
     const gl = this.gl!;
     const visual = this.plotVisuals.get(plot.id);
     if (!visual || !visual.buffers.vao || visual.buffers.indexCount <= 0) {
@@ -1089,7 +1090,7 @@ export class SceneController {
     gl.bindVertexArray(null);
   }
 
-  private drawTransparentShadowMeshWithMatrix(plot: PlotObject, program: ProgramBundle, lightMatrix: mat4): void {
+  private drawTransparentShadowMeshWithMatrix(plot: RenderableObject, program: ProgramBundle, lightMatrix: mat4): void {
     const gl = this.gl!;
     const visual = this.plotVisuals.get(plot.id);
     if (!visual || !visual.buffers.vao || visual.buffers.indexCount <= 0) {
@@ -1110,7 +1111,7 @@ export class SceneController {
   }
 
   private drawPointShadowMesh(
-    plot: PlotObject,
+    plot: RenderableObject,
     program: ProgramBundle,
     lightMatrix: mat4,
     light: PointLightObject,
@@ -1136,7 +1137,7 @@ export class SceneController {
   }
 
   private drawPointTransparentShadowMesh(
-    plot: PlotObject,
+    plot: RenderableObject,
     program: ProgramBundle,
     lightMatrix: mat4,
     light: PointLightObject,
@@ -1538,7 +1539,7 @@ export class SceneController {
     gl.clearColor(0, 0, 0, 0);
     gl.clearDepth(1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    if (!selected || selected.type !== 'plot') {
+    if (!selected || !isRenderableObject(selected)) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       return;
     }
@@ -1589,7 +1590,7 @@ export class SceneController {
 
   private renderSelectedFeatureEdges(snapshot: RendererSceneSnapshot): void {
     const selected = snapshot.selectedId ? snapshot.objects.find((object) => object.id === snapshot.selectedId) : null;
-    if (!selected || selected.type !== 'plot') {
+    if (!selected || !isRenderableObject(selected)) {
       return;
     }
     const visual = this.plotVisuals.get(selected.id);
@@ -1693,7 +1694,7 @@ export class SceneController {
     this.gl!.uniform2f(this.renderPrograms!.line.uniforms.u_screenOffset, x, y);
   }
 
-  private drawPlotWireframe(plot: PlotObject, depthFunc: number): void {
+  private drawPlotWireframe(plot: RenderableObject, depthFunc: number): void {
     const gl = this.gl!;
     const visual = this.plotVisuals.get(plot.id);
     if (!visual || visual.buffers.wireLines.length === 0) {
@@ -1854,7 +1855,7 @@ export class SceneController {
   }
 
   private drawShadedMesh(
-    plot: PlotObject,
+    plot: RenderableObject,
     program: ProgramBundle,
     transparentPass: boolean,
     probe: ProbeUsage,
@@ -2057,7 +2058,7 @@ export class SceneController {
     gl.uniform1i(program.uniforms.u_pointShadowTransColor2, pointShadowUnit(2, 2));
   }
 
-  private prepareProbeForPlot(snapshot: RendererSceneSnapshot, plot: PlotObject): ProbeUsage {
+  private prepareProbeForPlot(snapshot: RendererSceneSnapshot, plot: RenderableObject): ProbeUsage {
     if (!this.shouldUseProbeReflections(plot.material.reflectiveness)) {
       return noProbeUsage();
     }
@@ -2290,7 +2291,7 @@ export class SceneController {
   }
 
   private drawShadedMeshWithMatrices(
-    plot: PlotObject,
+    plot: RenderableObject,
     program: ProgramBundle,
     view: mat4,
     projection: mat4,
@@ -2328,7 +2329,7 @@ export class SceneController {
     gl.bindVertexArray(null);
   }
 
-  private drawContourMesh(plot: PlotObject, program: ProgramBundle): void {
+  private drawContourMesh(plot: RenderableObject, program: ProgramBundle): void {
     const gl = this.gl!;
     const visual = this.plotVisuals.get(plot.id);
     if (!visual?.buffers.vao || visual.buffers.indexCount <= 0 || !plotHasContours(plot)) {
@@ -2525,6 +2526,15 @@ export class SceneController {
     if (event.button !== 0) {
       return;
     }
+    const appState = useAppStore.getState();
+    const sourcePick = appState.ui.intersectionSourcePick;
+    if (sourcePick) {
+      const hit = this.pickSurfacePlot(event.clientX, event.clientY);
+      if (hit) {
+        appState.setIntersectionSource(sourcePick.intersectionId, sourcePick.slot, hit.id);
+      }
+      return;
+    }
     const hit = this.pickSceneObject(event.clientX, event.clientY);
     useAppStore.getState().selectObject(hit?.id ?? null);
     if (!hit) {
@@ -2532,6 +2542,9 @@ export class SceneController {
     }
     const selected = useAppStore.getState().objects.find((obj) => obj.id === hit.id);
     if (!selected) {
+      return;
+    }
+    if (selected.type === 'intersection') {
       return;
     }
     const startPosition = selected.type === 'plot'
@@ -2647,10 +2660,35 @@ export class SceneController {
       }
     }
     for (const [plotId, visual] of this.plotVisuals.entries()) {
-      const plot = this.latestSnapshot?.objects.find((object): object is PlotObject => object.type === 'plot' && object.id === plotId);
+      const plot = this.latestSnapshot?.objects.find(
+        (object): object is RenderableObject => isRenderableObject(object) && object.id === plotId,
+      );
       if (!plot || !plot.visible) {
         continue;
       }
+      const hit = intersectRayWithPlotGeometry(
+        ray.origin,
+        ray.direction,
+        visual.geometry,
+        plot.transform.position,
+      );
+      if (hit && hit.distance < bestDistance) {
+        bestId = plotId;
+        bestDistance = hit.distance;
+      }
+    }
+    return bestId ? { id: bestId, distance: bestDistance } : null;
+  }
+
+  private pickSurfacePlot(clientX: number, clientY: number): { id: string; distance: number } | null {
+    const ray = this.computePickingRay(clientX, clientY);
+    let bestId: string | null = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const [plotId, visual] of this.plotVisuals.entries()) {
+      const plot = this.latestSnapshot?.objects.find(
+        (object): object is Extract<SceneObject, { type: 'plot' }> => object.id === plotId && isSurfacePlot(object),
+      );
+      if (!plot?.visible) continue;
       const hit = intersectRayWithPlotGeometry(
         ray.origin,
         ray.direction,
@@ -4204,8 +4242,8 @@ function buildGridLines(extent: number, spacing: number): { positions: Float32Ar
   return { positions: new Float32Array(positions) };
 }
 
-function contourUniformState(plot: PlotObject): ContourUniformState {
-  if (plot.equation.kind === 'parametric_curve') {
+function contourUniformState(plot: RenderableObject): ContourUniformState {
+  if (plot.type === 'intersection' || plot.equation.kind === 'parametric_curve') {
     return {
       xEnabled: false,
       xSpacing: 1,
@@ -4231,12 +4269,12 @@ function contourUniformState(plot: PlotObject): ContourUniformState {
   };
 }
 
-function plotHasContours(plot: PlotObject): boolean {
+function plotHasContours(plot: RenderableObject): boolean {
   const state = contourUniformState(plot);
   return state.xEnabled || state.yEnabled || state.zEnabled;
 }
 
-function plotUsesRefraction(plot: PlotObject): boolean {
+function plotUsesRefraction(plot: RenderableObject): boolean {
   return Boolean(plot.material.refractionEnabled)
     && (plot.material.ior ?? 1.45) > 1.001
     && clamp01(plot.material.opacity) < 0.999;
@@ -4697,7 +4735,7 @@ function closestZOnVerticalAxisToRay(ray: { origin: vec3; direction: vec3 }, x: 
   return Number.isFinite(t) ? t : null;
 }
 
-function transparentSortDistance(plot: PlotObject, cameraPosition: vec3): number {
+function transparentSortDistance(plot: RenderableObject, cameraPosition: vec3): number {
   const dx = plot.transform.position.x - cameraPosition[0];
   const dy = plot.transform.position.y - cameraPosition[1];
   const dz = plot.transform.position.z - cameraPosition[2];

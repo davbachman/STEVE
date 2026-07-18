@@ -477,6 +477,25 @@ input[type='color'] {
   text-align: left;
 }
 
+.creator-groups {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.creator-group {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.creator-group h3 {
+  margin: 0;
+  color: #9cacc2;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .panel--creator {
   overflow: auto;
 }
@@ -523,6 +542,14 @@ input[type='color'] {
   align-items: center;
   gap: 0.35rem;
   text-align: left;
+}
+
+.object-card__summary {
+  min-width: 0;
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 
 .object-card__icon {
@@ -1047,6 +1074,82 @@ input[type='color'] {
   gap: 0.3rem;
   font-size: 0.85rem;
   color: #c6d4e9;
+}
+
+.intersection-source-picker__instructions {
+  margin: 0 0 0.1rem;
+  color: #c6d4e9;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.intersection-source-button {
+  min-height: 4.5rem;
+  display: grid;
+  align-content: center;
+  width: 100%;
+  text-align: left;
+  gap: 0.35rem;
+  padding: 0.55rem;
+  border: 1px solid rgba(126, 174, 228, 0.42);
+  border-radius: 10px;
+  background: rgba(30, 49, 74, 0.22);
+  color: inherit;
+  transition: border-color 0.12s ease, background 0.12s ease, box-shadow 0.12s ease;
+}
+
+.intersection-source-button:hover {
+  border-color: rgba(126, 190, 255, 0.7);
+  background: rgba(42, 69, 102, 0.3);
+}
+
+.intersection-source-button--filled {
+  align-content: start;
+}
+
+.intersection-source-button--active {
+  border-color: #61b9ff;
+  background: rgba(51, 111, 166, 0.32);
+  box-shadow: 0 0 0 2px rgba(97, 185, 255, 0.16);
+}
+
+.intersection-source-button__label {
+  color: #9fb0c8;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.intersection-source-button__placeholder {
+  color: #8191a7;
+  font-size: 0.82rem;
+}
+
+.viewport-shell--surface-pick .viewport-canvas {
+  cursor: crosshair;
+}
+
+.viewport-pick-prompt {
+  position: absolute;
+  z-index: 7;
+  top: 3.25rem;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
+  padding: 0.48rem 0.72rem;
+  border: 1px solid rgba(97, 185, 255, 0.58);
+  border-radius: 9px;
+  background: rgba(8, 17, 31, 0.9);
+  color: #d9edff;
+  font-size: 0.8rem;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+}
+
+.object-card--source-summary {
+  display: block;
+  width: 100%;
+  padding: 0.42rem 0.5rem;
 }
 
 .checkbox-row {

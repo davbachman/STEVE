@@ -1,10 +1,11 @@
 import type { AppState } from '../state/store';
 import type {
   PlotJobStatus,
-  PlotObject,
   PointLightObject,
+  RenderableObject,
   SceneObject,
 } from '../types/contracts';
+import { isRenderableObject } from '../types/guards';
 
 export const INTERACTIVE_RENDERABLE_OPACITY_EPSILON = 0.02;
 export const INTERACTIVE_OPAQUE_OPACITY_EPSILON = 0.999;
@@ -30,7 +31,7 @@ export interface RendererCameraSnapshot {
 }
 
 export interface RendererPlotSnapshot {
-  plot: PlotObject;
+  plot: RenderableObject;
   meshVersion: number;
   opacity: number;
   opacityClass: PlotOpacityClass;
@@ -87,15 +88,16 @@ export function classifyPlotOpacity(opacity: number): PlotOpacityClass {
   return 'transparent';
 }
 
-export function plotSupportsWireframe(plot: PlotObject): boolean {
-  return plot.equation.kind === 'parametric_surface' || plot.equation.kind === 'explicit_surface';
+export function plotSupportsWireframe(plot: RenderableObject): boolean {
+  return plot.type === 'plot'
+    && (plot.equation.kind === 'parametric_surface' || plot.equation.kind === 'explicit_surface');
 }
 
-export function shouldShowPlotWireframe(plot: PlotObject): boolean {
+export function shouldShowPlotWireframe(plot: RenderableObject): boolean {
   return plot.visible && plotSupportsWireframe(plot) && Boolean(plot.material.wireframeVisible);
 }
 
-export function classifyInteractiveShadowMode(plot: PlotObject): InteractiveShadowMode {
+export function classifyInteractiveShadowMode(plot: RenderableObject): InteractiveShadowMode {
   if (!plot.visible) {
     return 'none';
   }
@@ -106,7 +108,7 @@ export function classifyInteractiveShadowMode(plot: PlotObject): InteractiveShad
   return 'attenuated';
 }
 
-export function shouldPlotCastInteractiveShadows(plot: PlotObject): boolean {
+export function shouldPlotCastInteractiveShadows(plot: RenderableObject): boolean {
   return classifyInteractiveShadowMode(plot) !== 'none';
 }
 
@@ -133,7 +135,7 @@ export function createRendererSceneSnapshot(
     selectedId: state.selectedId,
     plotJobs: state.plotJobs,
     plots: state.objects
-      .filter((object): object is PlotObject => object.type === 'plot')
+      .filter(isRenderableObject)
       .map((plot) => {
         const opacity = clamp01(plot.material.opacity);
         const opacityClass = classifyPlotOpacity(opacity);

@@ -1,12 +1,21 @@
 import { useEffect, useRef } from 'react';
 import { useAppStore } from '../state/store';
 import type {
+  IntersectionObject,
+  PlotJobStatus,
   PlotObject,
+  SerializedMesh,
   WorkerRequest,
   WorkerResponse,
   UUID,
 } from '../types/contracts';
-import { clearRuntimePlotMesh, clearAllRuntimePlotMeshes, setRuntimePlotMesh } from '../workers/runtimeMeshCache';
+import { isSurfacePlot } from '../types/guards';
+import {
+  clearRuntimePlotMesh,
+  clearAllRuntimePlotMeshes,
+  getRuntimePlotMesh,
+  setRuntimePlotMesh,
+} from '../workers/runtimeMeshCache';
 
 type PlotSignatures = {
   parse: string;
@@ -20,11 +29,13 @@ type JobMeta = {
   kind: JobKind;
   startedAt: number;
   rawText?: string;
+  derivedIntersection?: boolean;
 };
 
 type WorkersRef = {
   math: Worker | null;
   mesh: Worker | null;
+  intersection: Worker | null;
 };
 
 type MeshScheduleMode = 'interactive' | 'settled';
@@ -35,15 +46,26 @@ type MeshTimerEntry = {
   plot: PlotObject;
 };
 
+type IntersectionScheduleEntry = {
+  timer: number | null;
+  running: boolean;
+  dirty: boolean;
+  interactive: boolean;
+};
+
 const INTERACTIVE_MESH_THROTTLE_MS = 32;
+const INTERACTIVE_INTERSECTION_THROTTLE_MS = 140;
+const SETTLED_INTERSECTION_THROTTLE_MS = 48;
 
 export function useWorkerPipeline(): void {
   const objects = useAppStore((s) => s.objects);
+  const plotJobs = useAppStore((s) => s.plotJobs);
   const activeEquationParameterDrag = useAppStore((s) => s.activeEquationParameterDrag);
-  const workersRef = useRef<WorkersRef>({ math: null, mesh: null });
+  const workersRef = useRef<WorkersRef>({ math: null, mesh: null, intersection: null });
   const sigsRef = useRef<Map<UUID, PlotSignatures>>(new Map());
   const parseTimerRef = useRef<Map<UUID, number>>(new Map());
   const meshTimerRef = useRef<Map<UUID, MeshTimerEntry>>(new Map());
+  const intersectionScheduleRef = useRef<Map<UUID, IntersectionScheduleEntry>>(new Map());
   const latestParseJobRef = useRef<Map<UUID, string>>(new Map());
   const latestMeshPreviewJobRef = useRef<Map<UUID, string>>(new Map());
   const latestMeshFinalJobRef = useRef<Map<UUID, string>>(new Map());
@@ -52,9 +74,11 @@ export function useWorkerPipeline(): void {
   useEffect(() => {
     const mathWorker = new Worker(new URL('../workers/mathWorker.ts', import.meta.url), { type: 'module' });
     const meshWorker = new Worker(new URL('../workers/meshWorker.ts', import.meta.url), { type: 'module' });
-    workersRef.current = { math: mathWorker, mesh: meshWorker };
+    const intersectionWorker = new Worker(new URL('../workers/meshWorker.ts', import.meta.url), { type: 'module' });
+    workersRef.current = { math: mathWorker, mesh: meshWorker, intersection: intersectionWorker };
     const parseTimers = parseTimerRef.current;
     const meshTimers = meshTimerRef.current;
+    const intersectionSchedules = intersectionScheduleRef.current;
     const plotSignatures = sigsRef.current;
     const latestParseJobs = latestParseJobRef.current;
     const latestPreviewJobs = latestMeshPreviewJobRef.current;
@@ -74,8 +98,10 @@ export function useWorkerPipeline(): void {
         latestMeshPreviewJobRef.current,
         latestMeshFinalJobRef.current,
         jobMetaRef.current,
+        intersectionScheduleRef.current,
       );
     };
+    intersectionWorker.onmessage = meshWorker.onmessage;
 
     return () => {
       for (const timer of parseTimers.values()) {
@@ -84,8 +110,12 @@ export function useWorkerPipeline(): void {
       for (const timer of meshTimers.values()) {
         window.clearTimeout(timer.timer);
       }
+      for (const entry of intersectionSchedules.values()) {
+        if (entry.timer !== null) window.clearTimeout(entry.timer);
+      }
       parseTimers.clear();
       meshTimers.clear();
+      intersectionSchedules.clear();
       plotSignatures.clear();
       latestParseJobs.clear();
       latestPreviewJobs.clear();
@@ -94,23 +124,35 @@ export function useWorkerPipeline(): void {
       clearAllRuntimePlotMeshes();
       mathWorker.terminate();
       meshWorker.terminate();
-      workersRef.current = { math: null, mesh: null };
+      intersectionWorker.terminate();
+      workersRef.current = { math: null, mesh: null, intersection: null };
     };
   }, []);
 
   useEffect(() => {
-    const plotIds = new Set(objects.filter((o): o is PlotObject => o.type === 'plot').map((o) => o.id));
+    const renderableIds = new Set(
+      objects.filter((object) => object.type === 'plot' || object.type === 'intersection').map((object) => object.id),
+    );
 
     // Cleanup removed plots.
     for (const objectId of [...sigsRef.current.keys()]) {
-      if (plotIds.has(objectId)) continue;
+      if (renderableIds.has(objectId)) continue;
       sigsRef.current.delete(objectId);
       clearTimer(parseTimerRef.current, objectId);
       clearTimer(meshTimerRef.current, objectId);
+      clearIntersectionSchedule(intersectionScheduleRef.current, objectId);
       clearRuntimePlotMesh(objectId);
       useAppStore.getState().clearPlotJobStatus(objectId);
+      invalidateObjectJobs(
+        objectId,
+        latestParseJobRef.current,
+        latestMeshPreviewJobRef.current,
+        latestMeshFinalJobRef.current,
+        jobMetaRef.current,
+      );
       postCancel(workersRef.current.math, objectId);
       postCancel(workersRef.current.mesh, objectId);
+      postCancel(workersRef.current.intersection, objectId);
     }
 
     for (const object of objects) {
@@ -143,7 +185,297 @@ export function useWorkerPipeline(): void {
       }
       sigsRef.current.set(object.id, nextSigs);
     }
-  }, [activeEquationParameterDrag, objects]);
+
+    for (const object of objects) {
+      if (object.type !== 'intersection') continue;
+      ensureJobStateExists(object.id);
+      const sourceA = objects.find((candidate) => candidate.id === object.sourceSurfaceIds[0]);
+      const sourceB = objects.find((candidate) => candidate.id === object.sourceSurfaceIds[1]);
+      const sourcesValid = isSurfacePlot(sourceA)
+        && isSurfacePlot(sourceB)
+        && sourceA.id !== sourceB.id;
+      const sourcesHaveValidEquations = sourcesValid
+        && sourceA.equation.source.parseStatus === 'ok'
+        && sourceB.equation.source.parseStatus === 'ok';
+      const sourcesInteractive = sourcesValid && (
+        sourceIsInteractive(sourceA, activeEquationParameterDrag?.plotId)
+        || sourceIsInteractive(sourceB, activeEquationParameterDrag?.plotId)
+      );
+      const nextSigs: PlotSignatures = {
+        parse: object.sourceSurfaceIds.join('|'),
+        mesh: JSON.stringify({
+          interactive: sourcesInteractive,
+          sourceA: isSurfacePlot(sourceA) ? {
+            equation: sourceA.equation,
+            transform: sourceA.transform,
+            meshVersion: plotJobs[sourceA.id]?.meshVersion ?? 0,
+          } : null,
+          sourceB: isSurfacePlot(sourceB) ? {
+            equation: sourceB.equation,
+            transform: sourceB.transform,
+            meshVersion: plotJobs[sourceB.id]?.meshVersion ?? 0,
+          } : null,
+        }),
+      };
+      const prev = sigsRef.current.get(object.id);
+      const sourcesChanged = !prev || prev.parse !== nextSigs.parse;
+      const dependenciesChanged = !prev || prev.mesh !== nextSigs.mesh;
+      if (sourcesChanged || !sourcesValid || !sourcesHaveValidEquations) {
+        clearIntersectionSchedule(intersectionScheduleRef.current, object.id);
+        markIntersectionWaiting(
+          object.id,
+          sourcesValid ? 'Waiting for valid source meshes' : 'Choose two surface objects',
+          workersRef.current,
+          latestMeshPreviewJobRef.current,
+          latestMeshFinalJobRef.current,
+          jobMetaRef.current,
+        );
+        if (sourcesHaveValidEquations) {
+          requestIntersectionBuild(
+            workersRef.current,
+            intersectionScheduleRef.current,
+            latestMeshPreviewJobRef.current,
+            latestMeshFinalJobRef.current,
+            jobMetaRef.current,
+            object,
+            sourceA,
+            sourceB,
+            plotJobs,
+            sourcesInteractive,
+          );
+        }
+      } else if (dependenciesChanged) {
+        requestIntersectionBuild(
+          workersRef.current,
+          intersectionScheduleRef.current,
+          latestMeshPreviewJobRef.current,
+          latestMeshFinalJobRef.current,
+          jobMetaRef.current,
+          object,
+          sourceA,
+          sourceB,
+          plotJobs,
+          sourcesInteractive,
+        );
+      } else {
+        const pending = intersectionScheduleRef.current.get(object.id);
+        if (pending?.dirty && !pending.running && pending.timer === null) {
+          requestIntersectionBuild(
+            workersRef.current,
+            intersectionScheduleRef.current,
+            latestMeshPreviewJobRef.current,
+            latestMeshFinalJobRef.current,
+            jobMetaRef.current,
+            object,
+            sourceA,
+            sourceB,
+            plotJobs,
+            sourcesInteractive,
+          );
+        }
+      }
+      sigsRef.current.set(object.id, nextSigs);
+    }
+  }, [activeEquationParameterDrag, objects, plotJobs]);
+}
+
+function requestIntersectionBuild(
+  workers: WorkersRef,
+  scheduleMap: Map<UUID, IntersectionScheduleEntry>,
+  latestPreviewRef: Map<UUID, string>,
+  latestFinalRef: Map<UUID, string>,
+  jobMetaRef: Map<string, JobMeta>,
+  intersection: IntersectionObject,
+  sourceA: PlotObject,
+  sourceB: PlotObject,
+  plotJobs: Record<UUID, PlotJobStatus>,
+  interactive: boolean,
+): void {
+  const existing = scheduleMap.get(intersection.id);
+  if (existing) {
+    existing.dirty = true;
+    existing.interactive = interactive;
+    scheduleMap.set(intersection.id, existing);
+    if (existing.running || existing.timer !== null) return;
+  }
+  const entry = existing ?? { timer: null, running: false, dirty: true, interactive };
+  scheduleMap.set(intersection.id, entry);
+  const sourcesReady = sourceMeshIsCurrent(sourceA, plotJobs[sourceA.id], interactive)
+    && sourceMeshIsCurrent(sourceB, plotJobs[sourceB.id], interactive);
+  useAppStore.getState().upsertPlotJobStatus(intersection.id, {
+    parsePhase: 'skipped',
+    meshPhase: 'queued',
+    progress: 0.03,
+    message: sourcesReady ? 'Intersection queued' : 'Waiting for source meshes',
+    lastError: undefined,
+  });
+
+  entry.timer = window.setTimeout(() => {
+    const currentEntry = scheduleMap.get(intersection.id);
+    if (!currentEntry) return;
+    currentEntry.timer = null;
+    const state = useAppStore.getState();
+    const current = state.objects.find((object) => object.id === intersection.id);
+    if (!current || current.type !== 'intersection') return;
+    const currentA = state.objects.find((object) => object.id === current.sourceSurfaceIds[0]);
+    const currentB = state.objects.find((object) => object.id === current.sourceSurfaceIds[1]);
+    if (!isSurfacePlot(currentA) || !isSurfacePlot(currentB) || currentA.id === currentB.id) {
+      markIntersectionWaiting(
+        current.id,
+        'Choose two surface objects',
+        workers,
+        latestPreviewRef,
+        latestFinalRef,
+        jobMetaRef,
+      );
+      clearIntersectionSchedule(scheduleMap, current.id);
+      return;
+    }
+    const currentAJob = state.plotJobs[currentA.id];
+    const currentBJob = state.plotJobs[currentB.id];
+    const currentInteractive = sourceIsInteractive(currentA, state.activeEquationParameterDrag?.plotId)
+      || sourceIsInteractive(currentB, state.activeEquationParameterDrag?.plotId);
+    const meshA = getRuntimePlotMesh(currentA.id);
+    const meshB = getRuntimePlotMesh(currentB.id);
+    if (
+      !sourceMeshIsCurrent(currentA, currentAJob, currentInteractive)
+      || !sourceMeshIsCurrent(currentB, currentBJob, currentInteractive)
+      || !meshA
+      || !meshB
+    ) {
+      useAppStore.getState().upsertPlotJobStatus(current.id, {
+        parsePhase: 'skipped',
+        meshPhase: 'queued',
+        progress: 0.03,
+        message: 'Waiting for source meshes',
+      });
+      return;
+    }
+
+    currentEntry.running = true;
+    currentEntry.dirty = false;
+    scheduleMap.set(current.id, currentEntry);
+    postCancel(workers.intersection, current.id);
+    const finalBuild = currentAJob?.meshPhase === 'ready'
+      && currentBJob?.meshPhase === 'ready';
+    const jobId = newJobId();
+    if (finalBuild) {
+      latestFinalRef.set(current.id, jobId);
+      latestPreviewRef.delete(current.id);
+    } else {
+      latestPreviewRef.set(current.id, jobId);
+      latestFinalRef.delete(current.id);
+    }
+    jobMetaRef.set(jobId, {
+      objectId: current.id,
+      kind: finalBuild ? 'mesh_final' : 'mesh_preview',
+      startedAt: performance.now(),
+      derivedIntersection: true,
+    });
+    useAppStore.getState().upsertPlotJobStatus(current.id, {
+      parsePhase: 'skipped',
+      meshPhase: finalBuild ? 'mesh_final' : 'mesh_preview',
+      progress: 0.08,
+      message: finalBuild ? 'Building intersection' : 'Building intersection preview',
+    });
+
+    const positionsA = new Float32Array(meshA.positions);
+    const indicesA = new Uint32Array(meshA.indices);
+    const positionsB = new Float32Array(meshB.positions);
+    const indicesB = new Uint32Array(meshB.indices);
+    const req: WorkerRequest = {
+      type: 'build_surface_intersection_mesh',
+      jobId,
+      objectId: current.id,
+      sourceA: { positions: positionsA, indices: indicesA, translation: currentA.transform.position },
+      sourceB: { positions: positionsB, indices: indicesB, translation: currentB.transform.position },
+      priority: finalBuild ? 'refine' : 'preview',
+    };
+    workers.intersection?.postMessage(req, [positionsA.buffer, indicesA.buffer, positionsB.buffer, indicesB.buffer]);
+  }, interactive
+    ? INTERACTIVE_INTERSECTION_THROTTLE_MS
+    : sourcesReady ? SETTLED_INTERSECTION_THROTTLE_MS : INTERACTIVE_MESH_THROTTLE_MS);
+
+  scheduleMap.set(intersection.id, entry);
+}
+
+function markIntersectionWaiting(
+  objectId: UUID,
+  message: string,
+  workers: WorkersRef,
+  latestPreviewRef: Map<UUID, string>,
+  latestFinalRef: Map<UUID, string>,
+  jobMetaRef: Map<string, JobMeta>,
+): void {
+  postCancel(workers.intersection, objectId);
+  invalidateMeshJobs(objectId, latestPreviewRef, latestFinalRef, jobMetaRef);
+  const previous = getRuntimePlotMesh(objectId);
+  setRuntimePlotMesh(objectId, emptyCurveMesh());
+  const state = useAppStore.getState();
+  if (previous && hasCurveData(previous)) {
+    state.bumpPlotMeshVersion(objectId, {
+      phase: 'skipped',
+      progress: 0,
+      hasPreview: false,
+      message,
+    });
+  } else {
+    state.upsertPlotJobStatus(objectId, {
+      parsePhase: 'skipped',
+      meshPhase: 'skipped',
+      progress: 0,
+      hasPreview: false,
+      message,
+      lastError: undefined,
+    });
+  }
+}
+
+function sourceMeshIsCurrent(
+  source: PlotObject,
+  job: PlotJobStatus | undefined,
+  allowQueuedPreview = false,
+): boolean {
+  return source.equation.source.parseStatus === 'ok'
+    && Boolean(job && job.meshVersion > 0)
+    && (allowQueuedPreview
+      || Boolean(job?.hasPreview)
+        && (job?.meshPhase === 'mesh_preview' || job?.meshPhase === 'mesh_final' || job?.meshPhase === 'ready'));
+}
+
+function sourceIsInteractive(source: PlotObject, activeDragPlotId: UUID | undefined): boolean {
+  return source.id === activeDragPlotId
+    || source.equation.parameters.some(
+      (parameter) => parameter.samplingMode === 'continuous' && parameter.animating,
+    );
+}
+
+function hasCurveData(mesh: SerializedMesh): boolean {
+  return Boolean(mesh.curvePath?.length)
+    || Boolean(mesh.curvePaths?.some((path) => path.length >= 6));
+}
+
+function emptyCurveMesh(): SerializedMesh {
+  return {
+    positions: new Float32Array(0),
+    indices: new Uint32Array(0),
+    curvePaths: [],
+    bounds: {
+      min: { x: 0, y: 0, z: 0 },
+      max: { x: 0, y: 0, z: 0 },
+      center: { x: 0, y: 0, z: 0 },
+      radius: 0,
+    },
+    boundaryEdges: new Float32Array(0),
+    featureEdges: new Float32Array(0),
+    topology: {
+      isClosedManifold: false,
+      hasBoundaryEdges: false,
+      hasFeatureEdges: false,
+      boundaryEdgeCount: 0,
+      featureEdgeCount: 0,
+    },
+  };
 }
 
 function scheduleParse(
@@ -193,11 +525,14 @@ function scheduleMesh(
   options: { interactive: boolean },
 ): void {
   if (plot.equation.source.parseStatus !== 'ok') {
+    invalidateMeshJobs(plot.id, latestPreviewRef, latestFinalRef, jobMetaRef);
+    postCancel(workers.mesh, plot.id);
     clearTimer(timerMap, plot.id);
     useAppStore.getState().upsertPlotJobStatus(plot.id, {
       meshPhase: 'skipped',
       progress: 0,
       message: 'Waiting for valid equation',
+      hasPreview: false,
     });
     return;
   }
@@ -207,6 +542,8 @@ function scheduleMesh(
     return;
   }
 
+  invalidateMeshJobs(plot.id, latestPreviewRef, latestFinalRef, jobMetaRef);
+  postCancel(workers.mesh, plot.id);
   clearTimer(timerMap, plot.id);
   useAppStore.getState().upsertPlotJobStatus(plot.id, {
     meshPhase: 'queued',
@@ -395,6 +732,7 @@ function handleMeshWorkerMessage(
   latestPreviewJobs: Map<UUID, string>,
   latestFinalJobs: Map<UUID, string>,
   jobMeta: Map<string, JobMeta>,
+  intersectionSchedules: Map<UUID, IntersectionScheduleEntry>,
 ): void {
   const actions = useAppStore.getState();
   switch (msg.type) {
@@ -402,6 +740,7 @@ function handleMeshWorkerMessage(
       const isPreview = latestPreviewJobs.get(msg.objectId) === msg.jobId;
       const isFinal = latestFinalJobs.get(msg.objectId) === msg.jobId;
       if (!isPreview && !isFinal) return;
+      if (!actions.objects.some((object) => object.id === msg.objectId)) return;
       actions.upsertPlotJobStatus(msg.objectId, {
         meshPhase: isPreview ? 'mesh_preview' : 'mesh_final',
         progress: isPreview ? 0.1 + msg.progress * 0.35 : 0.55 + msg.progress * 0.35,
@@ -411,8 +750,10 @@ function handleMeshWorkerMessage(
     }
     case 'mesh_preview': {
       if (latestPreviewJobs.get(msg.objectId) !== msg.jobId) return;
+      if (!actions.objects.some((object) => object.id === msg.objectId)) return;
       setRuntimePlotMesh(msg.objectId, msg.mesh);
       const meta = jobMeta.get(msg.jobId);
+      if (meta?.derivedIntersection) settleIntersectionSchedule(msg.objectId, intersectionSchedules);
       const buildMs = meta ? Math.round(performance.now() - meta.startedAt) : undefined;
       actions.bumpPlotMeshVersion(msg.objectId, {
         hasPreview: true,
@@ -426,8 +767,10 @@ function handleMeshWorkerMessage(
     }
     case 'mesh_final': {
       if (latestFinalJobs.get(msg.objectId) !== msg.jobId) return;
+      if (!actions.objects.some((object) => object.id === msg.objectId)) return;
       setRuntimePlotMesh(msg.objectId, msg.mesh);
       const meta = jobMeta.get(msg.jobId);
+      if (meta?.derivedIntersection) settleIntersectionSchedule(msg.objectId, intersectionSchedules);
       const buildMs = meta ? Math.round(performance.now() - meta.startedAt) : undefined;
       actions.bumpPlotMeshVersion(msg.objectId, {
         hasPreview: true,
@@ -443,6 +786,9 @@ function handleMeshWorkerMessage(
       const isPreview = latestPreviewJobs.get(msg.objectId) === msg.jobId;
       const isFinal = latestFinalJobs.get(msg.objectId) === msg.jobId;
       if (!isPreview && !isFinal) return;
+      if (!actions.objects.some((object) => object.id === msg.objectId)) return;
+      const meta = jobMeta.get(msg.jobId);
+      if (meta?.derivedIntersection) settleIntersectionSchedule(msg.objectId, intersectionSchedules);
       actions.setPlotJobError(msg.objectId, msg.message);
       jobMeta.delete(msg.jobId);
       return;
@@ -451,6 +797,46 @@ function handleMeshWorkerMessage(
     case 'parse_progress':
     case 'parse_result':
       return;
+  }
+}
+
+function settleIntersectionSchedule(
+  objectId: UUID,
+  scheduleMap: Map<UUID, IntersectionScheduleEntry>,
+): void {
+  const entry = scheduleMap.get(objectId);
+  if (!entry) return;
+  entry.running = false;
+  scheduleMap.set(objectId, entry);
+}
+
+function invalidateMeshJobs(
+  objectId: UUID,
+  latestPreviewJobs: Map<UUID, string>,
+  latestFinalJobs: Map<UUID, string>,
+  jobMeta: Map<string, JobMeta>,
+): void {
+  const previewJobId = latestPreviewJobs.get(objectId);
+  const finalJobId = latestFinalJobs.get(objectId);
+  latestPreviewJobs.delete(objectId);
+  latestFinalJobs.delete(objectId);
+  if (previewJobId) jobMeta.delete(previewJobId);
+  if (finalJobId) jobMeta.delete(finalJobId);
+}
+
+function invalidateObjectJobs(
+  objectId: UUID,
+  latestParseJobs: Map<UUID, string>,
+  latestPreviewJobs: Map<UUID, string>,
+  latestFinalJobs: Map<UUID, string>,
+  jobMeta: Map<string, JobMeta>,
+): void {
+  const parseJobId = latestParseJobs.get(objectId);
+  latestParseJobs.delete(objectId);
+  if (parseJobId) jobMeta.delete(parseJobId);
+  invalidateMeshJobs(objectId, latestPreviewJobs, latestFinalJobs, jobMeta);
+  for (const [jobId, meta] of jobMeta) {
+    if (meta.objectId === objectId) jobMeta.delete(jobId);
   }
 }
 
@@ -472,6 +858,17 @@ function clearTimer<T extends number | MeshTimerEntry>(map: Map<UUID, T>, object
     window.clearTimeout(typeof timer === 'number' ? timer : timer.timer);
     map.delete(objectId);
   }
+}
+
+function clearIntersectionSchedule(
+  map: Map<UUID, IntersectionScheduleEntry>,
+  objectId: UUID,
+): void {
+  const entry = map.get(objectId);
+  if (entry?.timer !== null && entry?.timer !== undefined) {
+    window.clearTimeout(entry.timer);
+  }
+  map.delete(objectId);
 }
 
 function postCancel(worker: Worker | null, objectId: UUID): void {

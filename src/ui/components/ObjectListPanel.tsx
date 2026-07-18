@@ -3,6 +3,7 @@ import type { PlotJobStatus, SceneObject } from '../../types/contracts';
 
 function objectIcon(obj: SceneObject): string {
   if (obj.type === 'point_light') return '●';
+  if (obj.type === 'intersection') return '⋂';
   switch (obj.equation.kind) {
     case 'parametric_curve':
       return '∿';
@@ -17,6 +18,7 @@ function objectIcon(obj: SceneObject): string {
 
 function objectKindLabel(obj: SceneObject): string {
   if (obj.type === 'point_light') return 'Point light';
+  if (obj.type === 'intersection') return 'Surface intersection';
   switch (obj.equation.kind) {
     case 'parametric_curve':
       return 'Parametric curve';
@@ -44,8 +46,35 @@ function jobActivity(job: PlotJobStatus | undefined): 'idle' | 'busy' | 'error' 
   return 'idle';
 }
 
+export function ObjectCardSummary({
+  object,
+  activity = 'idle',
+  errorDetail,
+}: {
+  object: SceneObject;
+  activity?: 'idle' | 'busy' | 'error';
+  errorDetail?: string;
+}) {
+  return (
+    <span className="object-card__summary" title={`${object.name} — ${objectKindLabel(object)}`}>
+      <span className="object-card__icon" aria-hidden="true">{objectIcon(object)}</span>
+      <span className="object-card__swatch" style={{ background: objectSwatchColor(object) }} aria-hidden="true" />
+      <span className="object-card__name">{object.name}</span>
+      {activity === 'busy' ? (
+        <span className="object-card__spinner" role="status" aria-label={`Building ${object.name}`} />
+      ) : null}
+      {activity === 'error' ? (
+        <span className="object-card__error" role="img" aria-label="Build error" title={errorDetail ?? 'Build error'}>
+          !
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 export function ObjectListPanel() {
   const addPlot = useAppStore((s) => s.addPlot);
+  const addIntersection = useAppStore((s) => s.addIntersection);
   const addPointLight = useAppStore((s) => s.addPointLight);
   const objects = useAppStore((s) => s.objects);
   const selectedId = useAppStore((s) => s.selectedId);
@@ -57,35 +86,41 @@ export function ObjectListPanel() {
     <aside className="panel panel--left panel--creator">
       <div className="panel__header">
         <h2>Create</h2>
-        <div className="panel__actions panel__actions--stack">
-          <button onClick={() => addPlot('curve')}>+ Curve</button>
-          <button onClick={() => addPlot('graph')}>+ Graph</button>
-          <button onClick={() => addPlot('surface')}>+ Parametric</button>
-          <button onClick={() => addPlot('implicit')}>+ Implicit</button>
-          <button onClick={() => addPointLight()}>+ Light</button>
+        <div className="creator-groups">
+          <section className="creator-group" aria-labelledby="creator-group-curve">
+            <h3 id="creator-group-curve">Curve</h3>
+            <div className="panel__actions panel__actions--stack">
+              <button onClick={() => addPlot('curve')}>+ Parametric</button>
+              <button onClick={() => addIntersection()}>+ Intersection</button>
+            </div>
+          </section>
+          <section className="creator-group" aria-labelledby="creator-group-surface">
+            <h3 id="creator-group-surface">Surface</h3>
+            <div className="panel__actions panel__actions--stack">
+              <button onClick={() => addPlot('graph')}>+ Graph</button>
+              <button onClick={() => addPlot('surface')}>+ Parametric</button>
+              <button onClick={() => addPlot('implicit')}>+ Implicit</button>
+            </div>
+          </section>
+          <section className="creator-group" aria-labelledby="creator-group-lights">
+            <h3 id="creator-group-lights">Lights</h3>
+            <div className="panel__actions panel__actions--stack">
+              <button onClick={() => addPointLight()}>+ Light</button>
+            </div>
+          </section>
         </div>
       </div>
       <div className="object-list object-list--compact">
         {objects.map((obj) => {
-          const activity = obj.type === 'plot' ? jobActivity(plotJobs[obj.id]) : 'idle';
-          const errorDetail = obj.type === 'plot' ? plotJobs[obj.id]?.lastError : undefined;
+          const activity = obj.type !== 'point_light' ? jobActivity(plotJobs[obj.id]) : 'idle';
+          const errorDetail = obj.type !== 'point_light' ? plotJobs[obj.id]?.lastError : undefined;
           return (
             <div
               key={obj.id}
               className={`object-card ${selectedId === obj.id ? 'object-card--selected' : ''} ${obj.visible ? '' : 'object-card--hidden'}`.trim()}
             >
               <button className="object-card__select" onClick={() => selectObject(obj.id)} title={`${obj.name} — ${objectKindLabel(obj)}`}>
-                <span className="object-card__icon" aria-hidden="true">{objectIcon(obj)}</span>
-                <span className="object-card__swatch" style={{ background: objectSwatchColor(obj) }} aria-hidden="true" />
-                <span className="object-card__name">{obj.name}</span>
-                {activity === 'busy' ? (
-                  <span className="object-card__spinner" role="status" aria-label={`Building ${obj.name}`} />
-                ) : null}
-                {activity === 'error' ? (
-                  <span className="object-card__error" role="img" aria-label="Build error" title={errorDetail ?? 'Build error'}>
-                    !
-                  </span>
-                ) : null}
+                <ObjectCardSummary object={obj} activity={activity} errorDetail={errorDetail} />
               </button>
               <label className="object-card__toggle" title={obj.type === 'point_light' ? 'Show light gizmo' : 'Show object'}>
                 <input

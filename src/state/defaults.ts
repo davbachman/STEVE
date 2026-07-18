@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import type {
   Bounds3D,
+  IntersectionObject,
   MaterialParams,
   PlotObject,
   PointLightObject,
@@ -315,6 +316,22 @@ export function createDefaultCurve(name = 'Curve'): PlotObject {
       renderAsTube: true,
     },
     material: { ...materialPresets['Chrome'] },
+  };
+}
+
+export function createDefaultIntersection(name = 'Intersection'): IntersectionObject {
+  return {
+    id: uuidv4(),
+    name,
+    type: 'intersection',
+    visible: true,
+    transform: { position: { x: 0, y: 0, z: 0 } },
+    material: { ...materialPresets['Chrome'] },
+    sourceSurfaceIds: [null, null],
+    curveStyle: {
+      tubeRadius: 0.06,
+      renderAsTube: true,
+    },
   };
 }
 

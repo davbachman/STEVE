@@ -155,6 +155,21 @@ export interface PlotObject {
   material: MaterialParams;
 }
 
+export interface IntersectionObject {
+  id: UUID;
+  name: string;
+  type: 'intersection';
+  visible: boolean;
+  /** Intersections are derived in world space and always keep an identity transform. */
+  transform: Transform;
+  material: MaterialParams;
+  sourceSurfaceIds: [UUID | null, UUID | null];
+  curveStyle: {
+    tubeRadius: number;
+    renderAsTube: boolean;
+  };
+}
+
 export interface PointLightObject {
   id: UUID;
   name: string;
@@ -223,7 +238,9 @@ export interface RenderSettings {
   showDiagnostics: boolean;
 }
 
-export type SceneObject = PlotObject | PointLightObject;
+export type RenderableObject = PlotObject | IntersectionObject;
+
+export type SceneObject = RenderableObject | PointLightObject;
 
 export interface ProjectFileV1 {
   schemaVersion: 1;
@@ -271,6 +288,12 @@ export interface ParseClassifyResult {
   warning?: string;
 }
 
+export interface SurfaceMeshWorkerInput {
+  positions: Float32Array;
+  indices: Uint32Array;
+  translation: Vec3;
+}
+
 export type WorkerJobPriority = 'preview' | 'refine' | 'interactive' | 'background';
 
 export type WorkerRequest =
@@ -285,6 +308,14 @@ export type WorkerRequest =
     }
   | { type: 'build_curve_mesh'; jobId: UUID; objectId: UUID; spec: ParametricCurveSpec; priority: WorkerJobPriority }
   | { type: 'build_implicit_mesh'; jobId: UUID; objectId: UUID; spec: ImplicitSurfaceSpec; priority: WorkerJobPriority }
+  | {
+      type: 'build_surface_intersection_mesh';
+      jobId: UUID;
+      objectId: UUID;
+      sourceA: SurfaceMeshWorkerInput;
+      sourceB: SurfaceMeshWorkerInput;
+      priority: WorkerJobPriority;
+    }
   | { type: 'cancel_jobs'; jobId: UUID; objectId: UUID };
 
 export type WorkerResponse =
