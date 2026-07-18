@@ -333,7 +333,10 @@ export class SceneController {
   private readonly emptyProbeCenter = vec3.fromValues(0, 0, 0);
   private environmentFacePixelCache = new Map<string, Uint8Array[]>();
 
-  constructor(private readonly canvas: HTMLCanvasElement) {}
+  constructor(
+    private readonly canvas: HTMLCanvasElement,
+    private readonly onObjectDragChange?: (dragging: boolean) => void,
+  ) {}
 
   async init(): Promise<void> {
     const gl = this.canvas.getContext('webgl2', {
@@ -372,6 +375,10 @@ export class SceneController {
 
   dispose(): void {
     this.disposed = true;
+    if (this.dragState) {
+      this.dragState = null;
+      this.onObjectDragChange?.(false);
+    }
     if (this.animationFrame) {
       cancelAnimationFrame(this.animationFrame);
     }
@@ -383,6 +390,7 @@ export class SceneController {
     }
     if (this.pointerUpListener) {
       window.removeEventListener('pointerup', this.pointerUpListener);
+      window.removeEventListener('pointercancel', this.pointerUpListener);
     }
     if (this.wheelListener) {
       this.canvas.removeEventListener('wheel', this.wheelListener);
@@ -2543,6 +2551,7 @@ export class SceneController {
     this.canvas.addEventListener('pointerdown', this.pointerDownListener);
     window.addEventListener('pointermove', this.pointerMoveListener);
     window.addEventListener('pointerup', this.pointerUpListener);
+    window.addEventListener('pointercancel', this.pointerUpListener);
     this.canvas.addEventListener('wheel', this.wheelListener, { passive: false });
     window.addEventListener('resize', this.resizeListener);
   }
@@ -2616,6 +2625,7 @@ export class SceneController {
       };
       useAppStore.getState().beginObjectDragHistory(hit.id);
       this.capturePointer(event.pointerId);
+      this.onObjectDragChange?.(true);
       return;
     }
     const planeHit = rayPlaneIntersectZ(ray, startPosition[2]);
@@ -2631,6 +2641,7 @@ export class SceneController {
     };
     useAppStore.getState().beginObjectDragHistory(hit.id);
     this.capturePointer(event.pointerId);
+    this.onObjectDragChange?.(true);
   }
 
   private handlePointerMove(event: PointerEvent): void {
@@ -2693,6 +2704,7 @@ export class SceneController {
       this.dragState = null;
       useAppStore.getState().commitObjectDragHistory(dragObjectId);
       this.releasePointer(event.pointerId);
+      this.onObjectDragChange?.(false);
     }
   }
 

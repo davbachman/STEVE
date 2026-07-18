@@ -413,12 +413,12 @@ export function TopBar({
                     checked={render.bloomEnabled}
                     onChange={(e) => updateRender({ bloomEnabled: e.target.checked })}
                   />
-                  Bloom
+                  Halos
                 </label>
                 {render.bloomEnabled ? (
                   <>
                     <RangeField
-                      label="Bloom strength"
+                      label="Halo strength"
                       min={0}
                       max={2}
                       step={0.01}
@@ -426,7 +426,7 @@ export function TopBar({
                       onChange={(value) => updateRender({ bloomStrength: value })}
                     />
                     <RangeField
-                      label="Bloom radius"
+                      label="Halo radius"
                       min={0.25}
                       max={4}
                       step={0.05}
@@ -434,7 +434,7 @@ export function TopBar({
                       onChange={(value) => updateRender({ bloomRadius: value })}
                     />
                     <RangeField
-                      label="Bloom threshold"
+                      label="Halo threshold"
                       min={0}
                       max={5}
                       step={0.05}

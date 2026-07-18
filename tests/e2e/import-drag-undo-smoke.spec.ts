@@ -27,8 +27,10 @@ test.describe('Import + Drag Undo Smoke', () => {
     const end = { x: start.x + 120, y: start.y - 40 };
     await page.mouse.move(start.x, start.y);
     await page.mouse.down();
+    await expect(page.getByRole('status')).toHaveText('Hold Shift while dragging to change elevation');
     await page.mouse.move(end.x, end.y, { steps: 12 });
     await page.mouse.up();
+    await expect(page.getByText('Hold Shift while dragging to change elevation')).toHaveCount(0);
     await page.waitForTimeout(400);
 
     await expect(xInput).not.toHaveValue('0');

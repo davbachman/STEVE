@@ -111,7 +111,7 @@ describe('TopBar menus', () => {
     ) {
       throw new Error('Expected settings selects');
     }
-    for (const label of ['Exposure', 'Bloom strength', 'Bloom radius', 'Bloom threshold']) {
+    for (const label of ['Exposure', 'Halo strength', 'Halo radius', 'Halo threshold']) {
       expect(Array.from(settingsDialog?.querySelectorAll('.range-field') ?? []).some(
         (field) => field.firstElementChild?.textContent === label,
       )).toBe(true);
@@ -128,15 +128,16 @@ describe('TopBar menus', () => {
     expect(useAppStore.getState().render.toneMapping).toBe('filmic');
     expect(useAppStore.getState().render.interactiveQuality).toBe('performance');
 
-    const bloomCheckbox = Array.from(settingsDialog?.querySelectorAll('input[type="checkbox"]') ?? []).find(
-      (input) => input.parentElement?.textContent?.includes('Bloom'),
+    const haloCheckbox = Array.from(settingsDialog?.querySelectorAll('input[type="checkbox"]') ?? []).find(
+      (input) => input.parentElement?.textContent?.includes('Halos'),
     );
-    expect(bloomCheckbox).toBeInstanceOf(HTMLInputElement);
-    act(() => bloomCheckbox?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(haloCheckbox).toBeInstanceOf(HTMLInputElement);
+    act(() => haloCheckbox?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     expect(useAppStore.getState().render.bloomEnabled).toBe(false);
     expect(Array.from(settingsDialog?.querySelectorAll('.range-field') ?? []).some(
-      (field) => field.firstElementChild?.textContent === 'Bloom strength',
+      (field) => field.firstElementChild?.textContent === 'Halo strength',
     )).toBe(false);
+    expect(settingsDialog?.textContent).not.toContain('Bloom');
 
     act(() => buttonWithText(host, 'Close settings').click());
     act(() => buttonWithText(host, 'File').click());

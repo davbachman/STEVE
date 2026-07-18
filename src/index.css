@@ -1141,7 +1141,8 @@ input[type='color'] {
   cursor: crosshair;
 }
 
-.viewport-pick-prompt {
+.viewport-pick-prompt,
+.viewport-drag-prompt {
   position: absolute;
   z-index: 7;
   top: 3.25rem;

@@ -24,6 +24,7 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
   const [error, setError] = useState<string | null>(null);
   const [controllerReady, setControllerReady] = useState(false);
   const [hintVisible, setHintVisible] = useState(() => !readHintDismissed());
+  const [objectDragging, setObjectDragging] = useState(false);
 
   const scene = useAppStore((s) => s.scene);
   const render = useAppStore((s) => s.render);
@@ -40,7 +41,7 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
     let disposed = false;
     let controller: SceneController;
     try {
-      controller = new SceneController(canvas);
+      controller = new SceneController(canvas, setObjectDragging);
     } catch (err) {
       // The controller is created only after the canvas mounts, so initialization failures surface here.
       // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -140,6 +141,11 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
           Click a surface for Surface {intersectionSourcePick.slot + 1} · Esc to cancel
         </div>
       ) : null}
+      {!error && controllerReady && objectDragging ? (
+        <div className="viewport-drag-prompt" role="status" aria-live="polite">
+          Hold Shift while dragging to change elevation
+        </div>
+      ) : null}
       {!error && controllerReady ? (
         <div className="viewport-toolbar" role="toolbar" aria-label="View controls">
           <button onClick={() => applyViewPreset('top')} title="Top view (looking down the z axis)">Top</button>
@@ -168,7 +174,7 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
       {!error && controllerReady && hintVisible ? (
         <div className="viewport-hint" role="note">
           <span>
-            Right-drag orbit · Shift + right-drag pan · Scroll zoom · Left-drag move object · Double-click frame
+            Right-drag orbit · Shift + right-drag pan · Scroll zoom · Left-drag move object · Shift + left-drag change elevation · Double-click frame
           </span>
           <button onClick={dismissHint} title="Dismiss" aria-label="Dismiss controls hint">×</button>
         </div>
