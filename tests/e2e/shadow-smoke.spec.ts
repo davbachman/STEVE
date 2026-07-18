@@ -4,35 +4,30 @@ test.describe('WebGL2 Shadow Smoke', () => {
   test('opens app, toggles shadow controls, and captures a shadow-debug screenshot', async ({ page }, testInfo) => {
     await page.goto('/');
 
-    await expect(page.getByRole('button', { name: 'Lighting' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Appearance' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Lighting' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Scene' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Render' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Render' })).toHaveCount(0);
+    await expect(page.locator('.viewport-overlay--diagnostics')).toHaveCount(0);
 
     const webGpuGate = page.getByRole('heading', { name: 'WebGL2 Required' });
     if (await webGpuGate.isVisible().catch(() => false)) {
       test.skip(true, 'WebGL2 not available in this Playwright browser session');
     }
 
-    await page.getByRole('button', { name: 'Render' }).click();
-    await page.getByLabel('Render diagnostics overlay').check();
-    await expect(page.locator('.viewport-overlay--diagnostics')).toContainText('Renderer Diagnostics');
-
-    await page.getByRole('button', { name: 'Lighting' }).click();
-    await setRangeField(page, 'Shadow map resolution', '1024');
+    await page.getByRole('button', { name: 'Scene' }).click();
+    await page.getByLabel('Shadow map resolution').selectOption('1024');
     await setRangeField(page, 'Shadow softness', '0.55');
-    await page.getByLabel('Directional shadows').check();
-    await setRangeField(page, 'Intensity', '0.05', { occurrence: 0 }); // ambient intensity
-    await setRangeField(page, 'Intensity', '1.8', { occurrence: 1 }); // directional intensity
+    await setRangeField(page, 'Intensity', '0.05'); // ambient intensity
+
+    await page.getByRole('button', { name: /Directional Light 1/ }).click();
+    await page.getByRole('button', { name: 'Appearance' }).click();
+    await page.getByLabel('Cast shadows').check();
+    await setRangeField(page, 'Intensity', '1.8');
 
     await page.getByRole('button', { name: 'Scene' }).click();
     await page.getByLabel('XY grid').check();
     await page.getByLabel('Ground plane').check();
-
-    await page.getByRole('button', { name: 'Render' }).click();
-    const diagnosticsOverlay = page.locator('.viewport-overlay--diagnostics');
-    await expect(diagnosticsOverlay).toBeVisible();
-    await expect(diagnosticsOverlay.getByText(/Backend: webgl2/i)).toBeVisible();
-    await expect(diagnosticsOverlay.getByText(/Shadow atlas usage:/i)).toBeVisible();
 
     // Give the WebGL renderer a moment to refresh shadow maps after control changes.
     await page.waitForTimeout(1200);
@@ -56,7 +51,7 @@ async function setRangeField(
   const occurrence = options?.occurrence ?? 0;
   const label = page.locator('label.range-field').filter({ hasText: labelText }).nth(occurrence);
   await expect(label).toBeVisible();
-  const numberInput = label.locator('input[type="number"]').last();
+  const numberInput = label.locator('input.numeric-expression-input').last();
   await numberInput.fill(numericValue);
   await numberInput.blur();
 }

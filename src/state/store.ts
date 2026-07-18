@@ -3,6 +3,7 @@ import { produce } from 'immer';
 import { v4 as uuidv4 } from 'uuid';
 import type {
   EquationSpec,
+  DirectionalLightObject,
   HistorySnapshot,
   IntersectionObject,
   PlotObject,
@@ -34,6 +35,7 @@ import {
   createDefaultIntersection,
   createDefaultObjects,
   createDefaultSurface,
+  createDirectionalLight,
   createPointLight,
   MAX_TURNTABLE_SPEED,
   MIN_TURNTABLE_SPEED,
@@ -50,7 +52,7 @@ interface AppStateShape {
   selectedId: UUID | null;
   clipboardObject: SceneObject | null;
   ui: {
-    inspectorTab: 'object' | 'material' | 'lighting' | 'scene' | 'render';
+    inspectorTab: 'object' | 'material' | 'scene';
     intersectionSourcePick: { intersectionId: UUID; slot: 0 | 1 } | null;
   };
   renderDiagnostics: RenderDiagnostics;
@@ -76,6 +78,7 @@ interface AppActions {
   addPlot: (template?: 'curve' | 'graph' | 'surface' | 'implicit') => void;
   addIntersection: () => void;
   addPointLight: () => void;
+  addDirectionalLight: () => void;
   beginIntersectionSourcePick: (intersectionId: UUID, slot: 0 | 1) => void;
   cancelIntersectionSourcePick: () => void;
   setIntersectionSource: (intersectionId: UUID, slot: 0 | 1, surfaceId: UUID | null) => void;
@@ -84,6 +87,7 @@ interface AppActions {
   updatePlotMaterial: (id: UUID, patch: Partial<RenderableObject['material']>) => void;
   applyMaterialPreset: (id: UUID, presetName: string) => void;
   updatePointLight: (id: UUID, patch: Partial<PointLightObject>) => void;
+  updateDirectionalLight: (id: UUID, patch: Partial<DirectionalLightObject>) => void;
   updateScene: (patch: Partial<SceneSettings>) => void;
   updateRender: (patch: Partial<RenderSettings>) => void;
   setObjectName: (id: UUID, name: string) => void;
@@ -370,7 +374,7 @@ function cloneWithNewId(object: SceneObject, offsetPosition = true): SceneObject
     if (cloned.type === 'plot') {
       cloned.transform.position.x += 0.4;
       cloned.transform.position.y += 0.4;
-    } else if (cloned.type === 'point_light') {
+    } else if (cloned.type === 'point_light' || cloned.type === 'directional_light') {
       cloned.position.x += 0.4;
       cloned.position.y += 0.4;
     }
@@ -477,18 +481,24 @@ function normalizeImportedProject(project: ProjectFileV1): ProjectFileV1 {
   const shadowInput = asRecord(sceneInput.shadow) ?? {};
   const sceneDefaults = defaultSceneSettings();
   const renderDefaults = defaultRenderSettings();
-  const mergedRender: RenderSettings = {
-    ...renderDefaults,
-    ...(renderInput as Partial<RenderSettings>),
-    showDiagnostics: (renderInput as Partial<RenderSettings>).showDiagnostics ?? renderDefaults.showDiagnostics,
-  };
   const normalizedScene = normalizeSceneSettingsImport(sceneInput, ambientInput, directionalInput, shadowInput, sceneDefaults);
-  const normalizedRender = normalizeRenderSettingsImport(mergedRender, renderInput, renderDefaults);
+  const normalizedRender = normalizeRenderSettingsImport(renderInput, renderDefaults);
   const objectInputs = Array.isArray(projectRecord.objects) ? projectRecord.objects : [];
-  const normalizedObjects = clearInvalidIntersectionSources(ensureUniqueObjectIds(objectInputs
+  let normalizedObjects = clearInvalidIntersectionSources(ensureUniqueObjectIds(objectInputs
     .map((obj, index) => normalizeSceneObjectImport(obj, index))
     .filter((result): result is { object: SceneObject } => !!result)
     .map((result) => result.object)));
+  if (!normalizedObjects.some((object) => object.type === 'directional_light') && normalizedScene.directional.enabled) {
+    const migrated = createDirectionalLight(`Directional Light ${countDirectionalLights(normalizedObjects) + 1}`);
+    migrated.direction = { ...normalizedScene.directional.direction };
+    migrated.color = normalizedScene.directional.color;
+    migrated.intensity = Math.max(0, normalizedScene.directional.intensity);
+    migrated.castShadows = normalizedScene.directional.castShadows;
+    normalizedObjects = [...normalizedObjects, migrated];
+  }
+  // New projects store directional sources as objects. Keeping this disabled
+  // marker prevents a deleted light from being recreated when a v1 file reloads.
+  normalizedScene.directional = { ...normalizedScene.directional, enabled: false };
   return {
     schemaVersion: 1,
     appVersion: typeof projectRecord.appVersion === 'string' ? projectRecord.appVersion : APP_VERSION,
@@ -565,6 +575,19 @@ export const useAppStore = create<AppState>((set, get) => ({
         objects: [...state.objects, light],
         selectedId: light.id,
         ui: { ...state.ui, intersectionSourcePick: null },
+        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyFuture: [],
+      };
+    }),
+
+  addDirectionalLight: () =>
+    set((state) => {
+      const light = createDirectionalLight(`Directional Light ${countDirectionalLights(state.objects) + 1}`);
+      return {
+        ...state,
+        objects: [...state.objects, light],
+        selectedId: light.id,
+        ui: { ...state.ui, inspectorTab: 'object', intersectionSourcePick: null },
         historyPast: [...state.historyPast, snapshotOf(state)],
         historyFuture: [],
       };
@@ -714,6 +737,21 @@ export const useAppStore = create<AppState>((set, get) => ({
       };
     }),
 
+  updateDirectionalLight: (id, patch) =>
+    set((state) => {
+      const idx = state.objects.findIndex((obj) => obj.id === id && obj.type === 'directional_light');
+      if (idx === -1) return state;
+      const next = produce(state, (draft) => {
+        const light = draft.objects[idx] as DirectionalLightObject;
+        Object.assign(light, patch);
+      });
+      return {
+        ...next,
+        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyFuture: [],
+      };
+    }),
+
   updateScene: (patch) =>
     set((state) => ({
       ...state,
@@ -774,7 +812,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         const obj = draft.objects[idx];
         if (obj.type === 'plot') {
           obj.transform.position = { ...pos };
-        } else if (obj.type === 'point_light') {
+        } else if (obj.type === 'point_light' || obj.type === 'directional_light') {
           obj.position = { ...pos };
         }
       });
@@ -1176,7 +1214,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 }));
 
 function getObjectPosition(obj: SceneObject): { x: number; y: number; z: number } {
-  return obj.type === 'point_light' ? { ...obj.position } : { ...obj.transform.position };
+  return obj.type === 'point_light' || obj.type === 'directional_light'
+    ? { ...obj.position }
+    : { ...obj.transform.position };
 }
 
 function positionsEqual(
@@ -1242,29 +1282,26 @@ function normalizeSceneSettingsImport(
 }
 
 function normalizeRenderSettingsImport(
-  mergedRender: RenderSettings,
   renderInput: Record<string, unknown>,
   defaults: RenderSettings,
 ): RenderSettings {
   return {
-    ...mergedRender,
-    toneMapping: asEnum(renderInput.toneMapping, ['aces', 'filmic', 'none']) ?? mergedRender.toneMapping,
-    interactiveQuality: asEnum(renderInput.interactiveQuality, ['performance', 'balanced', 'quality']) ?? mergedRender.interactiveQuality,
-    showDiagnostics: asBoolean(renderInput.showDiagnostics) ?? mergedRender.showDiagnostics ?? defaults.showDiagnostics,
-    exposure: asFiniteNumber(renderInput.exposure) ?? mergedRender.exposure,
-    bloomEnabled: asBoolean(renderInput.bloomEnabled) ?? mergedRender.bloomEnabled ?? defaults.bloomEnabled,
+    toneMapping: asEnum(renderInput.toneMapping, ['aces', 'filmic', 'none']) ?? defaults.toneMapping,
+    interactiveQuality: asEnum(renderInput.interactiveQuality, ['performance', 'balanced', 'quality']) ?? defaults.interactiveQuality,
+    exposure: asFiniteNumber(renderInput.exposure) ?? defaults.exposure,
+    bloomEnabled: asBoolean(renderInput.bloomEnabled) ?? defaults.bloomEnabled,
     bloomStrength: clampNumber(
-      asFiniteNumber(renderInput.bloomStrength) ?? mergedRender.bloomStrength ?? defaults.bloomStrength,
+      asFiniteNumber(renderInput.bloomStrength) ?? defaults.bloomStrength,
       0,
       2,
     ),
     bloomRadius: clampNumber(
-      asFiniteNumber(renderInput.bloomRadius) ?? mergedRender.bloomRadius ?? defaults.bloomRadius,
+      asFiniteNumber(renderInput.bloomRadius) ?? defaults.bloomRadius,
       0.25,
       4,
     ),
     bloomThreshold: clampNumber(
-      asFiniteNumber(renderInput.bloomThreshold) ?? mergedRender.bloomThreshold ?? defaults.bloomThreshold,
+      asFiniteNumber(renderInput.bloomThreshold) ?? defaults.bloomThreshold,
       0,
       5,
     ),
@@ -1274,7 +1311,7 @@ function normalizeRenderSettingsImport(
 function normalizeSceneObjectImport(input: unknown, index: number): { object: SceneObject } | null {
   const record = asRecord(input);
   if (!record) return null;
-  const type = asEnum(record.type, ['plot', 'intersection', 'point_light']);
+  const type = asEnum(record.type, ['plot', 'intersection', 'point_light', 'directional_light']);
   if (type === 'plot') {
     return { object: normalizePlotObjectImport(record, index) };
   }
@@ -1283,6 +1320,9 @@ function normalizeSceneObjectImport(input: unknown, index: number): { object: Sc
   }
   if (type === 'point_light') {
     return { object: normalizePointLightObjectImport(record, index) };
+  }
+  if (type === 'directional_light') {
+    return { object: normalizeDirectionalLightObjectImport(record, index) };
   }
   return null;
 }
@@ -1343,23 +1383,38 @@ function normalizePointLightObjectImport(record: Record<string, unknown>, index:
   };
 }
 
+function normalizeDirectionalLightObjectImport(record: Record<string, unknown>, index: number): DirectionalLightObject {
+  const fallback = createDirectionalLight(`Imported Directional Light ${index + 1}`);
+  return {
+    ...fallback,
+    id: asNonEmptyString(record.id) ?? fallback.id,
+    name: asNonEmptyString(record.name) ?? fallback.name,
+    visible: asBoolean(record.visible) ?? fallback.visible,
+    position: normalizeVec3(record.position, fallback.position),
+    direction: normalizeVec3(record.direction, fallback.direction),
+    color: asNonEmptyString(record.color) ?? fallback.color,
+    intensity: Math.max(0, asFiniteNumber(record.intensity) ?? fallback.intensity),
+    castShadows: asBoolean(record.castShadows) ?? fallback.castShadows,
+  };
+}
+
 function normalizeMaterialImport(
   materialInput: Record<string, unknown> | null,
   fallback: PlotObject['material'],
 ): PlotObject['material'] {
   if (!materialInput) return { ...fallback };
+  const importedEmissionStrength = asFiniteNumber(materialInput.emissionStrength);
+  const emissionStrength = clampNumber(importedEmissionStrength ?? fallback.emissionStrength ?? 0, 0, 10);
   return {
     ...fallback,
     baseColor: asHexColor(materialInput.baseColor) ?? fallback.baseColor,
     opacity: clampNumber(asFiniteNumber(materialInput.opacity) ?? fallback.opacity, 0, 1),
     reflectiveness: clampNumber(asFiniteNumber(materialInput.reflectiveness) ?? fallback.reflectiveness, 0, 1),
     roughness: clampNumber(asFiniteNumber(materialInput.roughness) ?? fallback.roughness, 0, 1),
+    emissionEnabled: asBoolean(materialInput.emissionEnabled)
+      ?? (importedEmissionStrength != null ? importedEmissionStrength > 0 : fallback.emissionEnabled ?? false),
     emissionColor: asHexColor(materialInput.emissionColor) ?? fallback.emissionColor ?? fallback.baseColor,
-    emissionStrength: clampNumber(
-      asFiniteNumber(materialInput.emissionStrength) ?? fallback.emissionStrength ?? 0,
-      0,
-      10,
-    ),
+    emissionStrength,
     refractionEnabled: asBoolean(materialInput.refractionEnabled) ?? fallback.refractionEnabled ?? false,
     ior: clampNumber(asFiniteNumber(materialInput.ior) ?? fallback.ior ?? 1.45, 1, 2.5),
     presetName: asNonEmptyString(materialInput.presetName) ?? fallback.presetName,
@@ -1568,6 +1623,10 @@ function countPlotsByKind(objects: SceneObject[], kind: 'curve' | 'graph' | 'par
 
 function countPointLights(objects: SceneObject[]): number {
   return objects.filter((obj) => obj.type === 'point_light').length;
+}
+
+function countDirectionalLights(objects: SceneObject[]): number {
+  return objects.filter((obj) => obj.type === 'directional_light').length;
 }
 
 function nextIntersectionName(objects: SceneObject[]): string {

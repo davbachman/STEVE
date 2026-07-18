@@ -88,9 +88,11 @@ export interface MaterialParams {
   opacity: number;
   reflectiveness: number;
   roughness: number;
+  /** Whether the material contributes self-lit color. */
+  emissionEnabled?: boolean;
   /** Self-lit surface color; falls back to baseColor when omitted. */
   emissionColor?: string;
-  /** Self-lit HDR contribution. Zero disables emission. */
+  /** Self-lit HDR contribution while emissionEnabled. */
   emissionStrength?: number;
   /** Bend the background seen through transparent surfaces (screen-space refraction). */
   refractionEnabled?: boolean;
@@ -182,6 +184,21 @@ export interface PointLightObject {
   castShadows: boolean;
 }
 
+export interface DirectionalLightObject {
+  id: UUID;
+  name: string;
+  type: 'directional_light';
+  visible: boolean;
+  /** Positions the editor gizmo; directional lighting itself is position-independent. */
+  position: Vec3;
+  /** Direction in which the light rays travel (toward the scene). */
+  direction: Vec3;
+  color: string;
+  intensity: number;
+  castShadows: boolean;
+}
+
+/** Retained only so schema-v1 projects can migrate their former scene light. */
 export interface DirectionalLightSettings {
   enabled: boolean;
   direction: Vec3;
@@ -235,12 +252,11 @@ export interface RenderSettings {
   bloomRadius: number;
   bloomThreshold: number;
   interactiveQuality: 'performance' | 'balanced' | 'quality';
-  showDiagnostics: boolean;
 }
 
 export type RenderableObject = PlotObject | IntersectionObject;
 
-export type SceneObject = RenderableObject | PointLightObject;
+export type SceneObject = RenderableObject | PointLightObject | DirectionalLightObject;
 
 export interface ProjectFileV1 {
   schemaVersion: 1;

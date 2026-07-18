@@ -6,7 +6,7 @@ describe('store object row actions', () => {
   beforeEach(() => {
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
     useAppStore.getState().newProject();
-    // The default scene is empty; create a plot and a light to act on.
+    // Add a plot and point light alongside the default directional source.
     useAppStore.getState().addPlot('surface');
     useAppStore.getState().addPointLight();
   });
@@ -60,7 +60,8 @@ describe('store object row actions', () => {
       },
     });
 
-    const plot = useAppStore.getState().objects[0] as PlotObject;
+    const plot = useAppStore.getState().objects.find((object): object is PlotObject => object.type === 'plot');
+    if (!plot) throw new Error('Expected plot');
     useAppStore.getState().updatePlotEquationText(plot.id, '(u, v, a*u)');
     useAppStore.getState().updatePlotSpec(plot.id, (spec) => {
       if (spec.kind !== 'parametric_surface') return spec;

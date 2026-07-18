@@ -10,7 +10,8 @@ describe('material preset application', () => {
   });
 
   it('preserves wireframe and contour decorations when changing presets', () => {
-    const plot = useAppStore.getState().objects[0] as PlotObject;
+    const plot = useAppStore.getState().objects.find((object): object is PlotObject => object.type === 'plot');
+    if (!plot) throw new Error('Expected plot');
     const decorations = {
       wireframeVisible: true,
       wireframeCellSize: 9,
@@ -29,7 +30,7 @@ describe('material preset application', () => {
 
     useAppStore.getState().applyMaterialPreset(plot.id, 'Clear Glass');
 
-    const material = (useAppStore.getState().objects[0] as PlotObject).material;
+    const material = useAppStore.getState().objects.find((object): object is PlotObject => object.type === 'plot')?.material;
     expect(material).toMatchObject(decorations);
     expect(material).toMatchObject({
       baseColor: materialPresets['Clear Glass'].baseColor,

@@ -5,6 +5,7 @@ import { useAppStore } from '../../state/store';
 import type { ViewportApi } from '../../renderer/SceneController';
 import type { RenderableObject } from '../../types/contracts';
 import { isRenderableObject } from '../../types/guards';
+import { RangeField } from './InspectorPanel';
 
 const APP_GITHUB_URL = 'https://github.com/davbachman/STEVE';
 const DAVID_BACHMAN_URL = 'https://davidbachmandesign.com';
@@ -384,30 +385,92 @@ export function TopBar({
               </button>
             </header>
             <div className="settings-dialog__body">
-              <label>
-                <span>PNG Export Quality</span>
-                <select
-                  value={exportScale}
-                  onChange={(e) => setExportScale(Number(e.target.value))}
-                  aria-label="PNG Export Quality"
-                >
-                  <option value={1}>Standard (1×)</option>
-                  <option value={2}>High (2×)</option>
-                  <option value={4}>Ultra (4×)</option>
-                </select>
-              </label>
-              <label>
-                <span>Interactive Quality</span>
-                <select
-                  value={render.interactiveQuality}
-                  onChange={(e) => updateRender({ interactiveQuality: e.target.value as typeof render.interactiveQuality })}
-                  aria-label="Interactive Quality"
-                >
-                  <option value="performance">Performance</option>
-                  <option value="balanced">Balanced</option>
-                  <option value="quality">Quality</option>
-                </select>
-              </label>
+              <div className="settings-dialog__section">
+                <h3>Rendering</h3>
+                <label>
+                  <span>Tone Mapping</span>
+                  <select
+                    value={render.toneMapping}
+                    onChange={(e) => updateRender({ toneMapping: e.target.value as typeof render.toneMapping })}
+                    aria-label="Tone Mapping"
+                  >
+                    <option value="aces">ACES</option>
+                    <option value="filmic">Filmic</option>
+                    <option value="none">None</option>
+                  </select>
+                </label>
+                <RangeField
+                  label="Exposure"
+                  min={0.2}
+                  max={3}
+                  step={0.01}
+                  value={render.exposure}
+                  onChange={(value) => updateRender({ exposure: value })}
+                />
+                <label className="checkbox-row settings-dialog__checkbox">
+                  <input
+                    type="checkbox"
+                    checked={render.bloomEnabled}
+                    onChange={(e) => updateRender({ bloomEnabled: e.target.checked })}
+                  />
+                  Bloom
+                </label>
+                {render.bloomEnabled ? (
+                  <>
+                    <RangeField
+                      label="Bloom strength"
+                      min={0}
+                      max={2}
+                      step={0.01}
+                      value={render.bloomStrength}
+                      onChange={(value) => updateRender({ bloomStrength: value })}
+                    />
+                    <RangeField
+                      label="Bloom radius"
+                      min={0.25}
+                      max={4}
+                      step={0.05}
+                      value={render.bloomRadius}
+                      onChange={(value) => updateRender({ bloomRadius: value })}
+                    />
+                    <RangeField
+                      label="Bloom threshold"
+                      min={0}
+                      max={5}
+                      step={0.05}
+                      value={render.bloomThreshold}
+                      onChange={(value) => updateRender({ bloomThreshold: value })}
+                    />
+                  </>
+                ) : null}
+              </div>
+              <div className="settings-dialog__section">
+                <h3>Quality</h3>
+                <label>
+                  <span>PNG Export Quality</span>
+                  <select
+                    value={exportScale}
+                    onChange={(e) => setExportScale(Number(e.target.value))}
+                    aria-label="PNG Export Quality"
+                  >
+                    <option value={1}>Standard (1×)</option>
+                    <option value={2}>High (2×)</option>
+                    <option value={4}>Ultra (4×)</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Interactive Quality</span>
+                  <select
+                    value={render.interactiveQuality}
+                    onChange={(e) => updateRender({ interactiveQuality: e.target.value as typeof render.interactiveQuality })}
+                    aria-label="Interactive Quality"
+                  >
+                    <option value="performance">Performance</option>
+                    <option value="balanced">Balanced</option>
+                    <option value="quality">Quality</option>
+                  </select>
+                </label>
+              </div>
             </div>
           </section>
         </div>

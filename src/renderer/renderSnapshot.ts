@@ -1,5 +1,6 @@
 import type { AppState } from '../state/store';
 import type {
+  DirectionalLightObject,
   PlotJobStatus,
   PointLightObject,
   RenderableObject,
@@ -45,6 +46,10 @@ export interface RendererPointLightSnapshot {
   light: PointLightObject;
 }
 
+export interface RendererDirectionalLightSnapshot {
+  light: DirectionalLightObject;
+}
+
 export interface RendererSceneSnapshot {
   scene: AppState['scene'];
   render: AppState['render'];
@@ -53,6 +58,7 @@ export interface RendererSceneSnapshot {
   plotJobs: Record<string, PlotJobStatus>;
   plots: RendererPlotSnapshot[];
   pointLights: RendererPointLightSnapshot[];
+  directionalLights: RendererDirectionalLightSnapshot[];
   camera: RendererCameraSnapshot | null;
 }
 
@@ -153,6 +159,9 @@ export function createRendererSceneSnapshot(
       }),
     pointLights: state.objects
       .filter((object): object is PointLightObject => object.type === 'point_light')
+      .map((light) => ({ light })),
+    directionalLights: state.objects
+      .filter((object): object is DirectionalLightObject => object.type === 'directional_light')
       .map((light) => ({ light })),
     camera: camera
       ? {

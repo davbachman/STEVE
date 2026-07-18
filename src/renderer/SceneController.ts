@@ -2,6 +2,7 @@ import { mat3, mat4, vec3, vec4 } from 'gl-matrix';
 import type { AppState } from '../state/store';
 import { useAppStore } from '../state/store';
 import type {
+  DirectionalLightObject,
   PointLightObject,
   RenderableObject,
   SceneObject,
@@ -78,6 +79,11 @@ interface ActivePointShadowLight {
   light: PointLightObject;
   lightIndex: number;
   shadowSlot: number;
+}
+
+interface ActiveDirectionalShadowLight {
+  light: DirectionalLightObject;
+  lightIndex: number;
 }
 
 interface RenderTargets {
@@ -198,6 +204,7 @@ type DragState =
     };
 
 const MAX_POINT_LIGHTS = 4;
+const MAX_DIRECTIONAL_LIGHTS = 4;
 const MAX_POINT_SHADOW_LIGHTS = 3;
 const PROBE_REFRESH_INTERVAL = 18;
 const DEFAULT_PROBE_SIZE = 96;
@@ -503,7 +510,7 @@ export class SceneController {
     if (!object) {
       return null;
     }
-    if (object.type === 'point_light') {
+    if (object.type === 'point_light' || object.type === 'directional_light') {
       return {
         center: vec3.fromValues(object.position.x, object.position.y, object.position.z),
         radius: 2,
@@ -645,7 +652,7 @@ export class SceneController {
     this.renderSelectionOutline();
     this.renderSelectedFeatureEdges(snapshot);
     this.renderOverlayLines(snapshot);
-    this.renderPointLightGizmos(snapshot, programs.gizmo);
+    this.renderLightGizmos(snapshot, programs.gizmo);
     this.syncRenderDiagnostics(snapshot, pointShadowLights);
   }
 
@@ -775,6 +782,13 @@ export class SceneController {
       .slice(0, MAX_POINT_LIGHTS);
   }
 
+  private collectRenderableDirectionalLights(snapshot: RendererSceneSnapshot): DirectionalLightObject[] {
+    return snapshot.directionalLights
+      .map(({ light }) => light)
+      .filter((light) => Number.isFinite(light.intensity) && light.intensity > 0)
+      .slice(0, MAX_DIRECTIONAL_LIGHTS);
+  }
+
   private collectActivePointShadowLights(
     _snapshot: RendererSceneSnapshot,
     pointLights: ReadonlyArray<PointLightObject>,
@@ -806,8 +820,14 @@ export class SceneController {
     return Math.max(0, Math.min(MAX_POINT_SHADOW_LIGHTS, Math.floor(availableUnits / POINT_SHADOW_TEXTURE_UNIT_STRIDE)));
   }
 
-  private directionalShadowsEnabled(scene: RendererSceneSnapshot['scene']): boolean {
-    return scene.directional.enabled && scene.directional.castShadows;
+  private activeDirectionalShadowLight(snapshot: RendererSceneSnapshot): ActiveDirectionalShadowLight | null {
+    const lights = this.collectRenderableDirectionalLights(snapshot);
+    const lightIndex = lights.findIndex((light) => light.castShadows);
+    return lightIndex === -1 ? null : { light: lights[lightIndex], lightIndex };
+  }
+
+  private directionalShadowsEnabled(snapshot: RendererSceneSnapshot): boolean {
+    return this.activeDirectionalShadowLight(snapshot) !== null;
   }
 
   private syncPlots(snapshot: RendererSceneSnapshot): void {
@@ -886,12 +906,13 @@ export class SceneController {
   private renderDirectionalShadowMaps(snapshot: RendererSceneSnapshot): void {
     const gl = this.gl!;
     const scene = snapshot.scene;
-    if (!this.directionalShadowsEnabled(scene)) {
+    const activeShadowLight = this.activeDirectionalShadowLight(snapshot);
+    if (!activeShadowLight) {
       return;
     }
     const shadow = this.shadowResources;
     const shadowSize = shadow.size;
-    const lightDirection = normalizeVec3(scene.directional.direction, { x: -0.6, y: -0.4, z: -1 });
+    const lightDirection = normalizeVec3(activeShadowLight.light.direction, { x: -0.6, y: -0.4, z: -1 });
     const cameraTarget = this.camera.target;
     const lightDistance = 24;
     const lightPosition = vec3.fromValues(
@@ -1773,7 +1794,7 @@ export class SceneController {
     gl.depthFunc(gl.LESS);
   }
 
-  private renderPointLightGizmos(snapshot: RendererSceneSnapshot, program: ProgramBundle): void {
+  private renderLightGizmos(snapshot: RendererSceneSnapshot, program: ProgramBundle): void {
     const gl = this.gl!;
     this.gizmoPointBuffer ??= createPointBuffer(gl);
     const pointBuffer = this.gizmoPointBuffer;
@@ -1789,18 +1810,22 @@ export class SceneController {
     gl.disable(gl.CULL_FACE);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    for (const light of snapshot.pointLights) {
-      if (!shouldRenderPointLightGizmo(light.light)) {
+    const lights = [
+      ...snapshot.pointLights.map(({ light }) => light),
+      ...snapshot.directionalLights.map(({ light }) => light),
+    ];
+    for (const light of lights) {
+      if (light.type === 'point_light' ? !shouldRenderPointLightGizmo(light) : !light.visible) {
         continue;
       }
-      const selected = snapshot.selectedId === light.light.id;
+      const selected = snapshot.selectedId === light.id;
       const model = mat4.fromTranslation(
         mat4.create(),
-        vec3.fromValues(light.light.position.x, light.light.position.y, light.light.position.z),
+        vec3.fromValues(light.position.x, light.position.y, light.position.z),
       );
       gl.uniformMatrix4fv(program.uniforms.u_model, false, model);
       gl.uniform1f(program.uniforms.u_size, selected ? 360 : 300);
-      gl.uniform3fv(program.uniforms.u_color, pointLightGizmoColor(light.light.color, selected));
+      gl.uniform3fv(program.uniforms.u_color, pointLightGizmoColor(light.color, selected));
       gl.uniform1f(program.uniforms.u_selected, selected ? 1 : 0);
       drawLineBuffer(gl, pointBuffer);
     }
@@ -1882,7 +1907,10 @@ export class SceneController {
     gl.uniform1f(program.uniforms.u_reflectiveness, clamp01(plot.material.reflectiveness));
     gl.uniform1f(program.uniforms.u_roughness, clamp(plot.material.roughness, 0.04, 1));
     gl.uniform3fv(program.uniforms.u_emissionColor, hexToRgb(plot.material.emissionColor ?? plot.material.baseColor));
-    gl.uniform1f(program.uniforms.u_emissionStrength, clamp(plot.material.emissionStrength ?? 0, 0, 10));
+    gl.uniform1f(
+      program.uniforms.u_emissionStrength,
+      materialEmissionEnabled(plot.material) ? clamp(plot.material.emissionStrength ?? 0, 0, 10) : 0,
+    );
     this.bindContourUniforms(program, contourUniformState(plot));
     gl.uniform1i(program.uniforms.u_isTransparentPass, transparentPass ? 1 : 0);
     gl.uniform1i(program.uniforms.u_refractionEnabled, transparentPass && plotUsesRefraction(plot) ? 1 : 0);
@@ -1963,16 +1991,7 @@ export class SceneController {
       program.uniforms.u_ambientColor,
       hexToRgb(scene.ambient.color).map((value) => value * (scene.ambient.enabled ? scene.ambient.intensity : 0)),
     );
-    gl.uniform3fv(
-      program.uniforms.u_dirColor,
-      hexToRgb(scene.directional.color).map((value) => value * (scene.directional.enabled ? scene.directional.intensity : 0)),
-    );
-    gl.uniform3f(
-      program.uniforms.u_dirDirection,
-      scene.directional.direction.x,
-      scene.directional.direction.y,
-      scene.directional.direction.z * lightZSign,
-    );
+    this.bindDirectionalLightUniforms(program, snapshot, lightZSign);
     gl.uniform1i(program.uniforms.u_pointCount, pointLights.length);
     const pointPositions = new Float32Array(MAX_POINT_LIGHTS * 3);
     const pointColors = new Float32Array(MAX_POINT_LIGHTS * 3);
@@ -1999,7 +2018,7 @@ export class SceneController {
     });
     gl.uniform1iv(program.uniforms.u_pointShadowSlot, pointShadowSlots);
     gl.uniform1f(program.uniforms.u_shadowSoftness, clamp(scene.shadow.shadowSoftness, 0, 1));
-    gl.uniform1i(program.uniforms.u_enableShadows, enableShadows && this.directionalShadowsEnabled(scene) ? 1 : 0);
+    gl.uniform1i(program.uniforms.u_enableShadows, enableShadows && this.directionalShadowsEnabled(snapshot) ? 1 : 0);
     gl.uniform1i(program.uniforms.u_enableReflections, enableReflections ? 1 : 0);
     gl.uniform1f(program.uniforms.u_probeMaxLod, Math.max(0, Math.log2(this.probeRenderResources.size || DEFAULT_PROBE_SIZE) - 1));
     gl.uniform1f(program.uniforms.u_envMaxLod, Math.max(0, Math.log2(ENVIRONMENT_CUBEMAP_SIZE) - 1));
@@ -2056,6 +2075,37 @@ export class SceneController {
     gl.uniform1i(program.uniforms.u_pointShadowDepth2, pointShadowUnit(2, 0));
     gl.uniform1i(program.uniforms.u_pointShadowTransDepth2, pointShadowUnit(2, 1));
     gl.uniform1i(program.uniforms.u_pointShadowTransColor2, pointShadowUnit(2, 2));
+  }
+
+  private bindDirectionalLightUniforms(
+    program: ProgramBundle,
+    snapshot: RendererSceneSnapshot,
+    lightZSign = 1,
+  ): void {
+    const gl = this.gl!;
+    const lights = this.collectRenderableDirectionalLights(snapshot);
+    const colors = new Float32Array(MAX_DIRECTIONAL_LIGHTS * 3);
+    const directions = new Float32Array(MAX_DIRECTIONAL_LIGHTS * 3);
+    lights.forEach((light, index) => {
+      const color = hexToRgb(light.color);
+      colors[index * 3] = color[0] * light.intensity;
+      colors[index * 3 + 1] = color[1] * light.intensity;
+      colors[index * 3 + 2] = color[2] * light.intensity;
+      directions[index * 3] = light.direction.x;
+      directions[index * 3 + 1] = light.direction.y;
+      directions[index * 3 + 2] = light.direction.z * lightZSign;
+    });
+    const shadowLight = this.activeDirectionalShadowLight(snapshot);
+    gl.uniform1i(program.uniforms.u_dirCount, lights.length);
+    gl.uniform3fv(program.uniforms.u_dirColors, colors);
+    gl.uniform3fv(program.uniforms.u_dirDirections, directions);
+    gl.uniform1i(program.uniforms.u_directionalShadowIndex, shadowLight?.lightIndex ?? -1);
+    gl.uniform3f(
+      program.uniforms.u_shadowDirDirection,
+      shadowLight?.light.direction.x ?? -0.6,
+      shadowLight?.light.direction.y ?? -0.4,
+      (shadowLight?.light.direction.z ?? -1) * lightZSign,
+    );
   }
 
   private prepareProbeForPlot(snapshot: RendererSceneSnapshot, plot: RenderableObject): ProbeUsage {
@@ -2177,12 +2227,14 @@ export class SceneController {
       scene.ambient.enabled ? 1 : 0,
       scene.ambient.color,
       round3(scene.ambient.intensity),
-      scene.directional.enabled ? 1 : 0,
-      scene.directional.color,
-      round3(scene.directional.intensity),
-      round3(scene.directional.direction.x),
-      round3(scene.directional.direction.y),
-      round3(scene.directional.direction.z),
+      snapshot.directionalLights.map(({ light }) => [
+        light.id,
+        light.color,
+        round3(light.intensity),
+        round3(light.direction.x),
+        round3(light.direction.y),
+        round3(light.direction.z),
+      ].join(':')).join('|'),
       plotSignature,
     ].join('|');
   }
@@ -2266,11 +2318,7 @@ export class SceneController {
       program.uniforms.u_ambientColor,
       hexToRgb(scene.ambient.color).map((value) => value * (scene.ambient.enabled ? scene.ambient.intensity : 0)),
     );
-    gl.uniform3fv(
-      program.uniforms.u_dirColor,
-      hexToRgb(scene.directional.color).map((value) => value * (scene.directional.enabled ? scene.directional.intensity : 0)),
-    );
-    gl.uniform3f(program.uniforms.u_dirDirection, scene.directional.direction.x, scene.directional.direction.y, scene.directional.direction.z);
+    this.bindDirectionalLightUniforms(program, snapshot);
     gl.uniform1i(program.uniforms.u_pointCount, 0);
     gl.uniform1iv(program.uniforms.u_pointShadowSlot, new Int32Array(MAX_POINT_LIGHTS).fill(-1));
     gl.uniform1f(program.uniforms.u_shadowSoftness, 0);
@@ -2318,7 +2366,10 @@ export class SceneController {
     gl.uniform1f(program.uniforms.u_reflectiveness, clamp01(plot.material.reflectiveness));
     gl.uniform1f(program.uniforms.u_roughness, clamp(plot.material.roughness, 0.04, 1));
     gl.uniform3fv(program.uniforms.u_emissionColor, hexToRgb(plot.material.emissionColor ?? plot.material.baseColor));
-    gl.uniform1f(program.uniforms.u_emissionStrength, clamp(plot.material.emissionStrength ?? 0, 0, 10));
+    gl.uniform1f(
+      program.uniforms.u_emissionStrength,
+      materialEmissionEnabled(plot.material) ? clamp(plot.material.emissionStrength ?? 0, 0, 10) : 0,
+    );
     this.bindContourUniforms(program, contourUniformState(plot));
     gl.uniform1i(program.uniforms.u_isTransparentPass, transparentPass ? 1 : 0);
     gl.uniform1i(program.uniforms.u_refractionEnabled, 0);
@@ -2381,7 +2432,7 @@ export class SceneController {
       const opacity = clamp01(plot.material.opacity);
       return plot.visible && opacity < 0.999;
     }).length;
-    const directionalUsage = this.directionalShadowsEnabled(snapshot.scene) ? 0.5 : 0;
+    const directionalUsage = this.directionalShadowsEnabled(snapshot) ? 0.5 : 0;
     const pointCapacity = Math.max(1, this.supportedPointShadowLightCount());
     const pointUsage = pointShadowCount > 0 ? (pointShadowCount / pointCapacity) * 0.5 : 0;
     useAppStore.getState().setRenderDiagnostics({
@@ -2659,6 +2710,16 @@ export class SceneController {
         bestDistance = distance;
       }
     }
+    for (const { light } of this.latestSnapshot?.directionalLights ?? []) {
+      if (!light.visible) {
+        continue;
+      }
+      const distance = intersectSphere(ray.origin, ray.direction, light.position, Math.max(0.16, this.camera.radius * 0.02));
+      if (distance !== null && distance < bestDistance) {
+        bestId = light.id;
+        bestDistance = distance;
+      }
+    }
     for (const [plotId, visual] of this.plotVisuals.entries()) {
       const plot = this.latestSnapshot?.objects.find(
         (object): object is RenderableObject => isRenderableObject(object) && object.id === plotId,
@@ -2920,8 +2981,11 @@ function createPrograms(gl: WebGL2RenderingContext): RenderPrograms {
     'u_zContourSpacing',
     'u_zContourColor',
     'u_ambientColor',
-    'u_dirColor',
-    'u_dirDirection',
+    'u_dirCount',
+    'u_dirColors',
+    'u_dirDirections',
+    'u_directionalShadowIndex',
+    'u_shadowDirDirection',
     'u_pointCount',
     'u_pointPositions',
     'u_pointColors',
@@ -3131,8 +3195,11 @@ uniform int u_zContoursVisible;
 uniform float u_zContourSpacing;
 uniform vec3 u_zContourColor;
 uniform vec3 u_ambientColor;
-uniform vec3 u_dirColor;
-uniform vec3 u_dirDirection;
+uniform int u_dirCount;
+uniform vec3 u_dirColors[${MAX_DIRECTIONAL_LIGHTS}];
+uniform vec3 u_dirDirections[${MAX_DIRECTIONAL_LIGHTS}];
+uniform int u_directionalShadowIndex;
+uniform vec3 u_shadowDirDirection;
 uniform int u_pointCount;
 uniform vec3 u_pointPositions[${MAX_POINT_LIGHTS}];
 uniform vec3 u_pointColors[${MAX_POINT_LIGHTS}];
@@ -3228,7 +3295,7 @@ float sampleShadow() {
   if (projected.x < 0.0 || projected.x > 1.0 || projected.y < 0.0 || projected.y > 1.0 || projected.z < 0.0 || projected.z > 1.0) {
     return 1.0;
   }
-  float bias = 0.0018 + max(0.0, 1.0 - abs(dot(normalize(v_worldNormal), normalize(-u_dirDirection)))) * 0.003;
+  float bias = 0.0018 + max(0.0, 1.0 - abs(dot(normalize(v_worldNormal), normalize(-u_shadowDirDirection)))) * 0.003;
   float softness = mix(0.65, 2.25, clamp(u_shadowSoftness, 0.0, 1.0));
   float visibility = 0.0;
   for (int y = -1; y <= 1; y += 1) {
@@ -3301,21 +3368,26 @@ vec3 applyLighting(vec3 N, vec3 V) {
     * mix(1.0, 2.4, polished);
   float bloomStrength = specularStrength * mix(0.9, 2.1, roughness);
   vec3 specularColor = vec3(mix(0.7, 1.45, reflectiveness));
-  vec3 dir = normalize(-u_dirDirection);
-  float ndl = max(dot(N, dir), 0.0);
   vec3 color = u_baseColor * u_ambientColor * diffuseScale;
-  float shadow = 1.0;
-  if (u_enableShadows == 1) {
-    shadow = sampleShadow();
-  }
-  color += u_dirColor * ndl * shadow * u_baseColor * diffuseScale;
-  if (ndl > 0.0) {
-    vec3 dirHalfVector = normalize(dir + V);
-    float dirHalfDot = max(dot(N, dirHalfVector), 0.0);
-    float dirSpecularCore = pow(dirHalfDot, specularCoreExponent);
-    float dirSpecularBloom = pow(dirHalfDot, specularBloomExponent);
-    color += u_dirColor * shadow * specularColor
-      * (dirSpecularCore * specularStrength + dirSpecularBloom * bloomStrength);
+  for (int i = 0; i < ${MAX_DIRECTIONAL_LIGHTS}; i += 1) {
+    if (i >= u_dirCount) {
+      break;
+    }
+    vec3 dir = normalize(-u_dirDirections[i]);
+    float ndl = max(dot(N, dir), 0.0);
+    float shadow = 1.0;
+    if (u_enableShadows == 1 && i == u_directionalShadowIndex) {
+      shadow = sampleShadow();
+    }
+    color += u_dirColors[i] * ndl * shadow * u_baseColor * diffuseScale;
+    if (ndl > 0.0) {
+      vec3 dirHalfVector = normalize(dir + V);
+      float dirHalfDot = max(dot(N, dirHalfVector), 0.0);
+      float dirSpecularCore = pow(dirHalfDot, specularCoreExponent);
+      float dirSpecularBloom = pow(dirHalfDot, specularBloomExponent);
+      color += u_dirColors[i] * shadow * specularColor
+        * (dirSpecularCore * specularStrength + dirSpecularBloom * bloomStrength);
+    }
   }
   for (int i = 0; i < ${MAX_POINT_LIGHTS}; i += 1) {
     if (i >= u_pointCount) {
@@ -4187,7 +4259,6 @@ function buildEnvironmentSignature(scene: RendererSceneSnapshot['scene']): strin
     scene.groundPlaneVisible ? 'ground:on' : 'ground:off',
     scene.groundPlaneColor,
     scene.ambient.color,
-    scene.directional.color,
   ].join('|');
 }
 
@@ -4278,6 +4349,10 @@ function plotUsesRefraction(plot: RenderableObject): boolean {
   return Boolean(plot.material.refractionEnabled)
     && (plot.material.ior ?? 1.45) > 1.001
     && clamp01(plot.material.opacity) < 0.999;
+}
+
+function materialEmissionEnabled(material: RenderableObject['material']): boolean {
+  return material.emissionEnabled ?? (material.emissionStrength ?? 0) > 0;
 }
 
 interface AxisLabelAtlas {

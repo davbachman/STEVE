@@ -212,7 +212,40 @@ describe('RangeField numeric entry', () => {
     )).toBe(true);
   });
 
-  it('exposes per-object emission color and strength in Appearance', () => {
+  it('shows only the color controls relevant to the selected background mode', () => {
+    act(() => {
+      const store = useAppStore.getState();
+      store.newProject();
+      store.setInspectorTab('scene');
+    });
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => root?.render(<InspectorPanel />));
+
+    const labelTexts = () => Array.from(container?.querySelectorAll('label') ?? [])
+      .map((label) => label.textContent?.trim() ?? '');
+    expect(labelTexts().some((text) => text.startsWith('Solid Color'))).toBe(false);
+    expect(labelTexts().some((text) => text.startsWith('Gradient Top'))).toBe(true);
+    expect(labelTexts().some((text) => text.startsWith('Gradient Bottom'))).toBe(true);
+
+    const backgroundMode = Array.from(container.querySelectorAll('label')).find(
+      (label) => label.textContent?.includes('Background Mode'),
+    )?.querySelector('select');
+    expect(backgroundMode).toBeInstanceOf(HTMLSelectElement);
+    act(() => {
+      if (!backgroundMode) return;
+      backgroundMode.value = 'solid';
+      backgroundMode.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    expect(labelTexts().some((text) => text.startsWith('Solid Color'))).toBe(true);
+    expect(labelTexts().some((text) => text.startsWith('Gradient Top'))).toBe(false);
+    expect(labelTexts().some((text) => text.startsWith('Gradient Bottom'))).toBe(false);
+  });
+
+  it('reveals emission controls only when Emission is checked for surfaces and curves', () => {
     act(() => {
       const store = useAppStore.getState();
       store.newProject();
@@ -227,13 +260,84 @@ describe('RangeField numeric entry', () => {
       root?.render(<InspectorPanel />);
     });
 
-    expect(container.querySelector('input[type="color"]')?.parentElement?.textContent).toContain('Color');
-    expect(Array.from(container.querySelectorAll('label')).some(
+    const emissionCheckbox = () => Array.from(container?.querySelectorAll('label') ?? []).find(
+      (label) => label.textContent?.trim() === 'Emission',
+    )?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    const hasEmissionColor = () => Array.from(container?.querySelectorAll('label') ?? []).some(
       (label) => label.textContent?.includes('Emission color'),
-    )).toBe(true);
-    expect(Array.from(container.querySelectorAll('.range-field')).some(
+    );
+    const hasEmissionStrength = () => Array.from(container?.querySelectorAll('.range-field') ?? []).some(
       (field) => field.firstElementChild?.textContent === 'Emission strength',
-    )).toBe(true);
+    );
+
+    expect(emissionCheckbox()).toBeInstanceOf(HTMLInputElement);
+    expect(emissionCheckbox()?.checked).toBe(false);
+    expect(hasEmissionColor()).toBe(false);
+    expect(hasEmissionStrength()).toBe(false);
+
+    act(() => emissionCheckbox()?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+
+    expect(emissionCheckbox()?.checked).toBe(true);
+    expect(hasEmissionColor()).toBe(true);
+    expect(hasEmissionStrength()).toBe(true);
+    const selectedSurface = useAppStore.getState().objects.find(
+      (object) => object.id === useAppStore.getState().selectedId,
+    );
+    if (selectedSurface?.type !== 'plot') throw new Error('Expected selected surface plot');
+    expect(selectedSurface?.material.emissionEnabled).toBe(true);
+    expect(selectedSurface?.material.emissionStrength).toBe(1);
+
+    act(() => {
+      const store = useAppStore.getState();
+      store.newProject();
+      store.addPlot('curve');
+      store.setInspectorTab('material');
+    });
+    expect(emissionCheckbox()).toBeInstanceOf(HTMLInputElement);
+    expect(emissionCheckbox()?.checked).toBe(false);
+    expect(hasEmissionColor()).toBe(false);
+    expect(hasEmissionStrength()).toBe(false);
+  });
+
+  it('groups grid and contour controls in one Surface Decorations dropdown', () => {
+    act(() => {
+      const store = useAppStore.getState();
+      store.newProject();
+      store.addPlot('surface');
+      store.setInspectorTab('material');
+    });
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => root?.render(<InspectorPanel />));
+
+    const collapsibleButtons = Array.from(container.querySelectorAll<HTMLButtonElement>('.collapsible__header'));
+    expect(collapsibleButtons).toHaveLength(1);
+    const decorationsButton = collapsibleButtons[0];
+    expect(decorationsButton?.textContent).toContain('Surface Decorations');
+    expect(decorationsButton?.getAttribute('aria-expanded')).toBe('false');
+    expect(container.querySelector('[aria-label="Contour lines"]')).toBeNull();
+
+    act(() => decorationsButton?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+
+    expect(decorationsButton?.getAttribute('aria-expanded')).toBe('true');
+    const gridLabel = Array.from(container.querySelectorAll('label')).find(
+      (label) => label.textContent?.trim() === 'Grid',
+    );
+    const gridCheckbox = gridLabel?.querySelector('input[type="checkbox"]');
+    expect(gridCheckbox).toBeInstanceOf(HTMLInputElement);
+    expect(container.querySelector('[aria-label="Contour lines"]')).toBeInstanceOf(HTMLDivElement);
+    expect(container.textContent).not.toContain('Wireframe grid');
+    expect(Array.from(container.querySelectorAll<HTMLButtonElement>('.collapsible__header')).some(
+      (button) => button.textContent?.includes('Wireframe') || button.textContent?.includes('Contours'),
+    )).toBe(false);
+
+    act(() => gridCheckbox?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(container.textContent).toContain('Grid color');
+    expect(container.textContent).toContain('Grid cell size');
+    expect(container.textContent).not.toContain('Wireframe color');
+    expect(container.textContent).not.toContain('Wire cell step');
   });
 
   it('arms two canvas surface-pick buttons and replaces an assigned source', () => {
@@ -318,46 +422,115 @@ describe('RangeField numeric entry', () => {
     });
 
     const labelTexts = Array.from(container.querySelectorAll('label')).map((label) => label.textContent?.trim());
-    for (const label of ['Preset', 'Color', 'Opacity', 'Reflectiveness', 'Roughness', 'Refraction', 'Emission color', 'Emission strength']) {
+    for (const label of ['Preset', 'Color', 'Opacity', 'Reflectiveness', 'Roughness', 'Refraction', 'Emission']) {
       expect(labelTexts.some((text) => text?.startsWith(label)), label).toBe(true);
     }
+    expect(container.textContent).not.toContain('Emission color');
+    expect(container.textContent).not.toContain('Emission strength');
     expect(container.textContent).not.toContain('Surface Decorations');
     expect(container.textContent).not.toContain('Wireframe');
     expect(container.textContent).not.toContain('Contours');
   });
 
-  it('exposes bloom controls in Render and hides tuning controls when disabled', () => {
+  it('shows Scene controls by themselves when no object is selected', () => {
     act(() => {
-      const store = useAppStore.getState();
-      store.newProject();
-      store.setInspectorTab('render');
+      useAppStore.getState().newProject();
+      useAppStore.getState().setInspectorTab('scene');
     });
-
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
-    act(() => {
-      root?.render(<InspectorPanel />);
-    });
+    act(() => root?.render(<InspectorPanel />));
 
-    const bloomCheckbox = Array.from(container.querySelectorAll('input[type="checkbox"]')).find(
-      (input) => input.parentElement?.textContent?.includes('Bloom'),
+    const tabLabels = Array.from(container.querySelectorAll('.tabs__tab')).map((button) => button.textContent);
+    expect(tabLabels).toEqual(['Scene']);
+    expect(Array.from(container.querySelectorAll('label')).some(
+      (label) => label.textContent?.includes('Ambient light'),
+    )).toBe(true);
+    expect(container.textContent).toContain('Shadow map resolution');
+    expect(container.textContent).toContain('Shadow softness');
+  });
+
+  it('shows only Object and Appearance when an object is selected', () => {
+    act(() => {
+      const store = useAppStore.getState();
+      store.newProject();
+      store.addPlot('surface');
+      store.setInspectorTab('scene');
+    });
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => root?.render(<InspectorPanel />));
+
+    const tabLabels = () => Array.from(container?.querySelectorAll('.tabs__tab') ?? []).map(
+      (button) => button.textContent,
     );
-    expect(bloomCheckbox).toBeInstanceOf(HTMLInputElement);
-    expect((bloomCheckbox as HTMLInputElement | undefined)?.checked).toBe(true);
-    for (const label of ['Bloom strength', 'Bloom radius', 'Bloom threshold']) {
-      expect(Array.from(container.querySelectorAll('.range-field')).some(
-        (field) => field.firstElementChild?.textContent === label,
-      )).toBe(true);
-    }
+    expect(tabLabels()).toEqual(['Object', 'Appearance']);
+    expect(container.querySelector('.tabs__tab--active')?.textContent).toBe('Object');
+    expect(container.textContent).not.toContain('Ambient light');
 
+    act(() => useAppStore.getState().selectObject(null));
+    expect(tabLabels()).toEqual(['Scene']);
+    expect(container.querySelector('.tabs__tab--active')?.textContent).toBe('Scene');
+    expect(container.textContent).toContain('Ambient light');
+  });
+
+  it('keeps point-light position in Object and puts its other controls in Appearance', () => {
     act(() => {
-      bloomCheckbox?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      useAppStore.getState().newProject();
+      useAppStore.getState().addPointLight();
+      useAppStore.getState().setInspectorTab('object');
     });
-    expect(useAppStore.getState().render.bloomEnabled).toBe(false);
-    expect(Array.from(container.querySelectorAll('.range-field')).some(
-      (field) => field.firstElementChild?.textContent === 'Bloom strength',
-    )).toBe(false);
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => root?.render(<InspectorPanel />));
+
+    let content = container.querySelector('.inspector-content');
+    expect(content?.textContent).toContain('Position');
+    expect(content?.textContent).not.toContain('Intensity');
+    expect(content?.textContent).not.toContain('Range');
+    expect(content?.textContent).not.toContain('Cast shadows');
+
+    act(() => useAppStore.getState().setInspectorTab('material'));
+    content = container.querySelector('.inspector-content');
+    expect(content?.textContent).toContain('Color');
+    expect(content?.textContent).toContain('Intensity');
+    expect(content?.textContent).toContain('Range');
+    expect(content?.textContent).toContain('Cast shadows');
+    expect(content?.textContent).not.toContain('Position');
+  });
+
+  it('splits directional position and direction from directional appearance', () => {
+    act(() => {
+      const store = useAppStore.getState();
+      store.newProject();
+      const light = useAppStore.getState().objects.find((object) => object.type === 'directional_light');
+      if (!light) throw new Error('Expected default directional light');
+      store.selectObject(light.id);
+      store.setInspectorTab('object');
+    });
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => root?.render(<InspectorPanel />));
+
+    let content = container.querySelector('.inspector-content');
+    expect(content?.textContent).toContain('Position');
+    expect(content?.textContent).toContain('Sun azimuth');
+    expect(content?.textContent).toContain('Sun elevation');
+    expect(content?.textContent).toContain('Direction (points toward scene)');
+    expect(content?.textContent).not.toContain('Intensity');
+    expect(content?.textContent).not.toContain('Cast shadows');
+
+    act(() => useAppStore.getState().setInspectorTab('material'));
+    content = container.querySelector('.inspector-content');
+    expect(content?.textContent).toContain('Color');
+    expect(content?.textContent).toContain('Intensity');
+    expect(content?.textContent).toContain('Cast shadows');
+    expect(content?.textContent).not.toContain('Position');
+    expect(content?.textContent).not.toContain('Direction (points toward scene)');
   });
 });
 

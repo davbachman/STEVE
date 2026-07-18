@@ -39,7 +39,8 @@ describe('ObjectListPanel creation buttons', () => {
       '+ Graph',
       '+ Parametric',
       '+ Implicit',
-      '+ Light',
+      '+ Point',
+      '+ Directional',
     ]);
 
     act(() => {
@@ -51,6 +52,13 @@ describe('ObjectListPanel creation buttons', () => {
     if (graph?.equation.kind !== 'explicit_surface') throw new Error('Expected graph');
     expect(graph.equation.graphExpression).toBe(true);
     expect(graph.equation.source.rawText).toBe('x^2 - y^2');
+
+    act(() => {
+      buttons[5]?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      buttons[6]?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(useAppStore.getState().objects.filter((object) => object.type === 'point_light')).toHaveLength(1);
+    expect(useAppStore.getState().objects.filter((object) => object.type === 'directional_light')).toHaveLength(2);
   });
 
   it('creates intersections without making sidebar cards draggable', () => {

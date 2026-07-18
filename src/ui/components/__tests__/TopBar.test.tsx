@@ -21,7 +21,7 @@ describe('TopBar menus', () => {
     container = null;
   });
 
-  it('moves app actions into menus and quality controls into Settings', async () => {
+  it('moves rendering and quality controls into Settings', async () => {
     const exportPng = vi.fn(async () => undefined);
     const viewportApi: ViewportApi = {
       exportPng,
@@ -95,22 +95,48 @@ describe('TopBar menus', () => {
 
     act(() => steveButton.click());
     act(() => buttonWithText(host, 'Settings').click());
-    expect(host.querySelector('[role="dialog"]')).toBeInstanceOf(HTMLElement);
+    const settingsDialog = host.querySelector('[role="dialog"]');
+    expect(settingsDialog).toBeInstanceOf(HTMLElement);
+    expect(settingsDialog?.textContent).not.toContain('Render diagnostics overlay');
+    const toneMapping = host.querySelector('select[aria-label="Tone Mapping"]');
     const pngQuality = host.querySelector('select[aria-label="PNG Export Quality"]');
     const interactiveQuality = host.querySelector('select[aria-label="Interactive Quality"]');
+    expect(toneMapping).toBeInstanceOf(HTMLSelectElement);
     expect(pngQuality).toBeInstanceOf(HTMLSelectElement);
     expect(interactiveQuality).toBeInstanceOf(HTMLSelectElement);
-    if (!(pngQuality instanceof HTMLSelectElement) || !(interactiveQuality instanceof HTMLSelectElement)) {
+    if (
+      !(toneMapping instanceof HTMLSelectElement)
+      || !(pngQuality instanceof HTMLSelectElement)
+      || !(interactiveQuality instanceof HTMLSelectElement)
+    ) {
       throw new Error('Expected settings selects');
+    }
+    for (const label of ['Exposure', 'Bloom strength', 'Bloom radius', 'Bloom threshold']) {
+      expect(Array.from(settingsDialog?.querySelectorAll('.range-field') ?? []).some(
+        (field) => field.firstElementChild?.textContent === label,
+      )).toBe(true);
     }
 
     act(() => {
+      setNativeSelectValue(toneMapping, 'filmic');
+      toneMapping.dispatchEvent(new Event('change', { bubbles: true }));
       setNativeSelectValue(pngQuality, '4');
       pngQuality.dispatchEvent(new Event('change', { bubbles: true }));
       setNativeSelectValue(interactiveQuality, 'performance');
       interactiveQuality.dispatchEvent(new Event('change', { bubbles: true }));
     });
+    expect(useAppStore.getState().render.toneMapping).toBe('filmic');
     expect(useAppStore.getState().render.interactiveQuality).toBe('performance');
+
+    const bloomCheckbox = Array.from(settingsDialog?.querySelectorAll('input[type="checkbox"]') ?? []).find(
+      (input) => input.parentElement?.textContent?.includes('Bloom'),
+    );
+    expect(bloomCheckbox).toBeInstanceOf(HTMLInputElement);
+    act(() => bloomCheckbox?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    expect(useAppStore.getState().render.bloomEnabled).toBe(false);
+    expect(Array.from(settingsDialog?.querySelectorAll('.range-field') ?? []).some(
+      (field) => field.firstElementChild?.textContent === 'Bloom strength',
+    )).toBe(false);
 
     act(() => buttonWithText(host, 'Close settings').click());
     act(() => buttonWithText(host, 'File').click());

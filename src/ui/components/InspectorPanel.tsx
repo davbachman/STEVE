@@ -25,22 +25,22 @@ import { ObjectCardSummary } from './ObjectListPanel';
 const tabs = [
   { id: 'object', label: 'Object' },
   { id: 'material', label: 'Appearance' },
-  { id: 'lighting', label: 'Lighting' },
   { id: 'scene', label: 'Scene' },
-  { id: 'render', label: 'Render' },
 ] as const;
 
 export function InspectorPanel() {
-  const tab = useAppStore((s) => s.ui.inspectorTab);
+  const storedTab = useAppStore((s) => s.ui.inspectorTab);
   const setTab = useAppStore((s) => s.setInspectorTab);
   const objects = useAppStore((s) => s.objects);
   const selectedId = useAppStore((s) => s.selectedId);
   const selected = objects.find((o) => o.id === selectedId) ?? null;
+  const visibleTabs = selected ? tabs.filter((tab) => tab.id !== 'scene') : tabs.filter((tab) => tab.id === 'scene');
+  const tab = selected ? (storedTab === 'material' ? 'material' : 'object') : 'scene';
 
   return (
     <aside className="panel panel--right">
-      <div className="tabs">
-        {tabs.map((t) => (
+      <div className="tabs" style={{ gridTemplateColumns: `repeat(${visibleTabs.length}, 1fr)` }}>
+        {visibleTabs.map((t) => (
           <button key={t.id} className={tab === t.id ? 'tabs__tab tabs__tab--active' : 'tabs__tab'} onClick={() => setTab(t.id)}>
             {t.label}
           </button>
@@ -49,9 +49,7 @@ export function InspectorPanel() {
       <div className="inspector-content">
         {tab === 'object' ? <ObjectTab selected={selected} /> : null}
         {tab === 'material' ? <MaterialTab selected={selected} /> : null}
-        {tab === 'lighting' ? <LightingTab selected={selected} /> : null}
         {tab === 'scene' ? <SceneTab /> : null}
-        {tab === 'render' ? <RenderTab /> : null}
       </div>
     </aside>
   );
@@ -175,7 +173,7 @@ function ObjectTab({ selected }: { selected: SceneObject | null }) {
       ) : null}
       {selected.type === 'plot' && selected.equation.kind === 'implicit_surface' ? <ImplicitEditor plot={selected} /> : null}
       {selected.type === 'plot' ? <EquationParameterEditor plot={selected} /> : null}
-      {selected.type === 'point_light' ? <PointLightTabFields light={selected} /> : null}
+      {selected.type === 'directional_light' ? <DirectionalLightObjectFields light={selected} /> : null}
     </div>
   );
 }
@@ -225,11 +223,15 @@ function IntersectionObjectFields({ intersection }: { intersection: Extract<Scen
 function MaterialTab({ selected }: { selected: SceneObject | null }) {
   const updatePlotMaterial = useAppStore((s) => s.updatePlotMaterial);
   const applyPreset = useAppStore((s) => s.applyMaterialPreset);
-  if (!selected || selected.type === 'point_light') return <EmptyState text="Select a plot or intersection to edit appearance" />;
+  if (!selected) return <EmptyState text="Select an object or light to edit appearance" />;
+  if (selected.type === 'point_light') return <PointLightAppearanceFields light={selected} />;
+  if (selected.type === 'directional_light') return <DirectionalLightAppearanceFields light={selected} />;
   const supportsWireframe = selected.type === 'plot'
     && (selected.equation.kind === 'parametric_surface' || selected.equation.kind === 'explicit_surface');
   const supportsContours = selected.type === 'plot' && selected.equation.kind !== 'parametric_curve';
   const clampContourSpacing = (value: number) => Number.isFinite(value) ? Math.min(5, Math.max(0.1, value)) : 0.1;
+  const emissionEnabled = selected.material.emissionEnabled
+    ?? (selected.material.emissionStrength ?? 0) > 0;
 
   return (
     <div className="inspector-section">
@@ -274,85 +276,102 @@ function MaterialTab({ selected }: { selected: SceneObject | null }) {
           ) : null}
         </>
       ) : null}
-      <h3>Emission</h3>
-      <label>
-        Emission color
+      <label className="checkbox-row">
         <input
-          type="color"
-          value={selected.material.emissionColor ?? selected.material.baseColor}
-          onChange={(e) => updatePlotMaterial(selected.id, { emissionColor: e.target.value })}
+          type="checkbox"
+          checked={emissionEnabled}
+          onChange={(e) => updatePlotMaterial(selected.id, {
+            emissionEnabled: e.target.checked,
+            ...(e.target.checked && (selected.material.emissionStrength ?? 0) <= 0
+              ? { emissionStrength: 1 }
+              : null),
+          })}
         />
+        Emission
       </label>
-      <RangeField
-        label="Emission strength"
-        min={0}
-        max={10}
-        step={0.05}
-        value={selected.material.emissionStrength ?? 0}
-        onChange={(value) => updatePlotMaterial(selected.id, {
-          emissionStrength: Math.min(10, Math.max(0, value)),
-        })}
-      />
-      {(supportsWireframe || supportsContours) ? <h3>Surface Decorations</h3> : null}
-      {supportsWireframe ? (
-        <CollapsibleSection
-          key={`wireframe-${selected.id}`}
-          title="Wireframe"
-          defaultOpen={Boolean(selected.material.wireframeVisible)}
-        >
-          <label className="checkbox-row">
+      {emissionEnabled ? (
+        <>
+          <label>
+            Emission color
             <input
-              type="checkbox"
-              checked={Boolean(selected.material.wireframeVisible)}
-              onChange={(e) => updatePlotMaterial(selected.id, { wireframeVisible: e.target.checked })}
+              type="color"
+              value={selected.material.emissionColor ?? selected.material.baseColor}
+              onChange={(e) => updatePlotMaterial(selected.id, { emissionColor: e.target.value })}
             />
-            Wireframe grid
           </label>
-          {selected.material.wireframeVisible ? (
-            <>
-              <label>
-                Wireframe color
-                <input
-                  type="color"
-                  value={selected.material.wireframeColor ?? '#000000'}
-                  onChange={(e) => updatePlotMaterial(selected.id, { wireframeColor: e.target.value })}
-                />
-              </label>
-              <RangeField
-                label="Wire cell step"
-                min={1}
-                max={20}
-                step={1}
-                value={selected.material.wireframeCellSize ?? 4}
-                onChange={(v) => updatePlotMaterial(selected.id, { wireframeCellSize: Math.round(v) })}
-              />
-            </>
-          ) : null}
-        </CollapsibleSection>
-      ) : null}
-      {supportsContours ? (
-        <CollapsibleSection
-          key={`contours-${selected.id}`}
-          title="Contours"
-          defaultOpen={CONTOUR_AXES.some((axis) => contourAxisState(selected.material, axis).visible)}
-        >
-          <div className="contour-grid" role="group" aria-label="Contour lines">
-            <span className="contour-grid__heading" aria-hidden="true" />
-            <span className="contour-grid__heading">Color</span>
-            <span className="contour-grid__heading">Spacing</span>
-            {CONTOUR_AXES.map((axis) => {
-              const state = contourAxisState(selected.material, axis);
-              return (
-                <ContourAxisRow
-                  key={axis}
-                  axis={axis}
-                  state={state}
-                  onPatch={(patch) => updatePlotMaterial(selected.id, patch)}
-                  clampSpacing={clampContourSpacing}
-                />
-              );
+          <RangeField
+            label="Emission strength"
+            min={0}
+            max={10}
+            step={0.05}
+            value={selected.material.emissionStrength ?? 0}
+            onChange={(value) => updatePlotMaterial(selected.id, {
+              emissionStrength: Math.min(10, Math.max(0, value)),
             })}
-          </div>
+          />
+        </>
+      ) : null}
+      {(supportsWireframe || supportsContours) ? (
+        <CollapsibleSection
+          key={`surface-decorations-${selected.id}`}
+          title="Surface Decorations"
+          defaultOpen={Boolean(selected.material.wireframeVisible)
+            || CONTOUR_AXES.some((axis) => contourAxisState(selected.material, axis).visible)}
+        >
+          {supportsWireframe ? (
+            <div className="surface-decoration-group">
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={Boolean(selected.material.wireframeVisible)}
+                  onChange={(e) => updatePlotMaterial(selected.id, { wireframeVisible: e.target.checked })}
+                />
+                Grid
+              </label>
+              {selected.material.wireframeVisible ? (
+                <>
+                  <label>
+                    Grid color
+                    <input
+                      type="color"
+                      value={selected.material.wireframeColor ?? '#000000'}
+                      onChange={(e) => updatePlotMaterial(selected.id, { wireframeColor: e.target.value })}
+                    />
+                  </label>
+                  <RangeField
+                    label="Grid cell size"
+                    min={1}
+                    max={20}
+                    step={1}
+                    value={selected.material.wireframeCellSize ?? 4}
+                    onChange={(v) => updatePlotMaterial(selected.id, { wireframeCellSize: Math.round(v) })}
+                  />
+                </>
+              ) : null}
+            </div>
+          ) : null}
+          {supportsContours ? (
+            <div className="surface-decoration-group">
+              <h4>Contours</h4>
+              <div className="contour-grid" role="group" aria-label="Contour lines">
+                <span className="contour-grid__heading" aria-hidden="true" />
+                <span className="contour-grid__heading">Color</span>
+                <span className="contour-grid__heading">Spacing</span>
+                {CONTOUR_AXES.map((axis) => {
+                  const state = contourAxisState(selected.material, axis);
+                  return (
+                    <ContourAxisRow
+                      key={axis}
+                      axis={axis}
+                      state={state}
+                      onPatch={(patch) => updatePlotMaterial(selected.id, patch)}
+                      clampSpacing={clampContourSpacing}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
         </CollapsibleSection>
       ) : null}
     </div>
@@ -477,99 +496,6 @@ function CollapsibleSection({
   );
 }
 
-function LightingTab({ selected }: { selected: SceneObject | null }) {
-  const scene = useAppStore((s) => s.scene);
-  const updateScene = useAppStore((s) => s.updateScene);
-
-  return (
-    <div className="inspector-section">
-      <h3>General Lighting</h3>
-      <label className="checkbox-row">
-        <input
-          type="checkbox"
-          checked={scene.ambient.enabled}
-          onChange={(e) => updateScene({ ambient: { ...scene.ambient, enabled: e.target.checked } })}
-        />
-        Ambient light
-      </label>
-      {scene.ambient.enabled ? (
-        <>
-          <label>
-            Color
-            <input type="color" value={scene.ambient.color} onChange={(e) => updateScene({ ambient: { ...scene.ambient, color: e.target.value } })} />
-          </label>
-          <RangeField label="Intensity" min={0} max={2} step={0.01} value={scene.ambient.intensity} onChange={(v) => updateScene({ ambient: { ...scene.ambient, intensity: v } })} />
-        </>
-      ) : null}
-
-      <label className="checkbox-row">
-        <input
-          type="checkbox"
-          checked={scene.directional.enabled}
-          onChange={(e) => updateScene({ directional: { ...scene.directional, enabled: e.target.checked } })}
-        />
-        Directional light
-      </label>
-      {scene.directional.enabled ? (
-        <>
-          <label>
-            Color
-            <input type="color" value={scene.directional.color} onChange={(e) => updateScene({ directional: { ...scene.directional, color: e.target.value } })} />
-          </label>
-          <RangeField label="Intensity" min={0} max={4} step={0.01} value={scene.directional.intensity} onChange={(v) => updateScene({ directional: { ...scene.directional, intensity: v } })} />
-          <SunAngleFields
-            direction={scene.directional.direction}
-            onChange={(direction) => updateScene({ directional: { ...scene.directional, direction } })}
-          />
-          <NumberTriplet
-            label="Direction (points toward scene)"
-            value={scene.directional.direction}
-            onChange={(value) => updateScene({ directional: { ...scene.directional, direction: value } })}
-          />
-          <div className="inspector-note">Directional vector uses “light rays travel in this direction” semantics (points toward the scene).</div>
-
-          <h3>Shadows</h3>
-          <label className="checkbox-row">
-            <input type="checkbox" checked={scene.directional.castShadows} onChange={(e) => updateScene({ directional: { ...scene.directional, castShadows: e.target.checked } })} />
-            Directional shadows
-          </label>
-          {scene.directional.castShadows ? (
-            <>
-              <label>
-                Shadow map resolution
-                <select
-                  value={String(scene.shadow.shadowMapResolution)}
-                  onChange={(e) => updateScene({ shadow: { ...scene.shadow, shadowMapResolution: Number(e.target.value) } })}
-                >
-                  {![512, 1024, 2048, 4096].includes(scene.shadow.shadowMapResolution) ? (
-                    <option value={String(scene.shadow.shadowMapResolution)}>{scene.shadow.shadowMapResolution}</option>
-                  ) : null}
-                  <option value="512">512</option>
-                  <option value="1024">1024</option>
-                  <option value="2048">2048</option>
-                  <option value="4096">4096</option>
-                </select>
-              </label>
-              <RangeField
-                label="Shadow softness"
-                min={0}
-                max={1}
-                step={0.01}
-                value={scene.shadow.shadowSoftness}
-                onChange={(v) => updateScene({ shadow: { ...scene.shadow, shadowSoftness: v } })}
-              />
-            </>
-          ) : null}
-        </>
-      ) : null}
-
-      {selected?.type === 'point_light' ? (
-        <div className="inspector-note">Selected point light can also be edited in the Object tab.</div>
-      ) : null}
-    </div>
-  );
-}
-
 function SunAngleFields({
   direction,
   onChange,
@@ -625,6 +551,49 @@ function SceneTab() {
   return (
     <div className="inspector-section">
       <h3>Scene</h3>
+      <h3>Ambient Light</h3>
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={scene.ambient.enabled}
+          onChange={(e) => updateScene({ ambient: { ...scene.ambient, enabled: e.target.checked } })}
+        />
+        Ambient light
+      </label>
+      {scene.ambient.enabled ? (
+        <>
+          <label>
+            Color
+            <input type="color" value={scene.ambient.color} onChange={(e) => updateScene({ ambient: { ...scene.ambient, color: e.target.value } })} />
+          </label>
+          <RangeField label="Intensity" min={0} max={2} step={0.01} value={scene.ambient.intensity} onChange={(v) => updateScene({ ambient: { ...scene.ambient, intensity: v } })} />
+        </>
+      ) : null}
+      <h3>Shadows</h3>
+      <label>
+        Shadow map resolution
+        <select
+          value={String(scene.shadow.shadowMapResolution)}
+          onChange={(e) => updateScene({ shadow: { ...scene.shadow, shadowMapResolution: Number(e.target.value) } })}
+        >
+          {![512, 1024, 2048, 4096].includes(scene.shadow.shadowMapResolution) ? (
+            <option value={String(scene.shadow.shadowMapResolution)}>{scene.shadow.shadowMapResolution}</option>
+          ) : null}
+          <option value="512">512</option>
+          <option value="1024">1024</option>
+          <option value="2048">2048</option>
+          <option value="4096">4096</option>
+        </select>
+      </label>
+      <RangeField
+        label="Shadow softness"
+        min={0}
+        max={1}
+        step={0.01}
+        value={scene.shadow.shadowSoftness}
+        onChange={(v) => updateScene({ shadow: { ...scene.shadow, shadowSoftness: v } })}
+      />
+      <h3>Camera &amp; Environment</h3>
       <label>
         Camera Projection
         <select
@@ -662,18 +631,23 @@ function SceneTab() {
           <option value="gradient">Gradient</option>
         </select>
       </label>
-      <label>
-        Solid Color
-        <input type="color" value={scene.backgroundColor} onChange={(e) => updateScene({ backgroundColor: e.target.value })} />
-      </label>
-      <label>
-        Gradient Top
-        <input type="color" value={scene.gradientTopColor} onChange={(e) => updateScene({ gradientTopColor: e.target.value })} />
-      </label>
-      <label>
-        Gradient Bottom
-        <input type="color" value={scene.gradientBottomColor} onChange={(e) => updateScene({ gradientBottomColor: e.target.value })} />
-      </label>
+      {scene.backgroundMode === 'solid' ? (
+        <label>
+          Solid Color
+          <input type="color" value={scene.backgroundColor} onChange={(e) => updateScene({ backgroundColor: e.target.value })} />
+        </label>
+      ) : (
+        <>
+          <label>
+            Gradient Top
+            <input type="color" value={scene.gradientTopColor} onChange={(e) => updateScene({ gradientTopColor: e.target.value })} />
+          </label>
+          <label>
+            Gradient Bottom
+            <input type="color" value={scene.gradientBottomColor} onChange={(e) => updateScene({ gradientBottomColor: e.target.value })} />
+          </label>
+        </>
+      )}
       <label className="checkbox-row">
         <input type="checkbox" checked={scene.groundPlaneVisible} onChange={(e) => updateScene({ groundPlaneVisible: e.target.checked })} />
         Ground plane
@@ -721,82 +695,6 @@ function SceneTab() {
         </>
       ) : null}
       <BoundsEditor />
-    </div>
-  );
-}
-
-function RenderTab() {
-  const render = useAppStore((s) => s.render);
-  const updateRender = useAppStore((s) => s.updateRender);
-  const diagnostics = useAppStore((s) => s.renderDiagnostics);
-  return (
-    <div className="inspector-section">
-      <h3>Render</h3>
-      <label>
-        Tone Mapping
-        <select value={render.toneMapping} onChange={(e) => updateRender({ toneMapping: e.target.value as typeof render.toneMapping })}>
-          <option value="aces">ACES</option>
-          <option value="filmic">Filmic</option>
-          <option value="none">None</option>
-        </select>
-      </label>
-      <RangeField label="Exposure" min={0.2} max={3} step={0.01} value={render.exposure} onChange={(v) => updateRender({ exposure: v })} />
-      <label className="checkbox-row">
-        <input
-          type="checkbox"
-          checked={render.bloomEnabled ?? true}
-          onChange={(e) => updateRender({ bloomEnabled: e.target.checked })}
-        />
-        Bloom
-      </label>
-      {(render.bloomEnabled ?? true) ? (
-        <>
-          <RangeField
-            label="Bloom strength"
-            min={0}
-            max={2}
-            step={0.01}
-            value={render.bloomStrength ?? 0.65}
-            onChange={(v) => updateRender({ bloomStrength: v })}
-          />
-          <RangeField
-            label="Bloom radius"
-            min={0.25}
-            max={4}
-            step={0.05}
-            value={render.bloomRadius ?? 1.5}
-            onChange={(v) => updateRender({ bloomRadius: v })}
-          />
-          <RangeField
-            label="Bloom threshold"
-            min={0}
-            max={5}
-            step={0.05}
-            value={render.bloomThreshold ?? 1}
-            onChange={(v) => updateRender({ bloomThreshold: v })}
-          />
-        </>
-      ) : null}
-      <label className="checkbox-row">
-        <input type="checkbox" checked={render.showDiagnostics} onChange={(e) => updateRender({ showDiagnostics: e.target.checked })} />
-        Render diagnostics overlay
-      </label>
-      {render.showDiagnostics ? (
-        <div className="inspector-note">
-          <div>Backend: {diagnostics.backend}</div>
-          <div>WebGL2: {diagnostics.webglReady ? 'ready' : 'not ready'}</div>
-          <div>Plots: {diagnostics.plotCount}</div>
-          <div>Point lights: {diagnostics.pointLightCount}</div>
-          <div>Frame: {diagnostics.frameTimeMs.toFixed(1)} ms ({diagnostics.fps.toFixed(1)} fps)</div>
-          <div>Point shadows: {diagnostics.pointShadowCount}</div>
-          <div>Shadow atlas usage: {(diagnostics.shadowAtlasUsage * 100).toFixed(0)}%</div>
-          <div>Transmittance casters: {diagnostics.transmittanceShadowCasters}</div>
-          <div>Opaque casters: {diagnostics.opaqueShadowCasters}</div>
-          <div>Reflection source: {diagnostics.reflectionSource}</div>
-          <div>Reflection probes: {diagnostics.activeProbeCount} | refreshes {diagnostics.reflectionProbeRefreshCount}</div>
-          <div>Outline mode: {diagnostics.outlineMode}</div>
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -1006,7 +904,25 @@ function EquationParameterEditor({ plot }: { plot: PlotObject }) {
   );
 }
 
-function PointLightTabFields({ light }: { light: Extract<SceneObject, { type: 'point_light' }> }) {
+function DirectionalLightObjectFields({ light }: { light: Extract<SceneObject, { type: 'directional_light' }> }) {
+  const updateDirectionalLight = useAppStore((s) => s.updateDirectionalLight);
+  return (
+    <>
+      <SunAngleFields
+        direction={light.direction}
+        onChange={(direction) => updateDirectionalLight(light.id, { direction })}
+      />
+      <NumberTriplet
+        label="Direction (points toward scene)"
+        value={light.direction}
+        onChange={(direction) => updateDirectionalLight(light.id, { direction })}
+      />
+      <div className="inspector-note">Directional vector uses “light rays travel in this direction” semantics (points toward the scene).</div>
+    </>
+  );
+}
+
+function PointLightAppearanceFields({ light }: { light: Extract<SceneObject, { type: 'point_light' }> }) {
   const updatePointLight = useAppStore((s) => s.updatePointLight);
   return (
     <div className="inspector-section">
@@ -1022,6 +938,27 @@ function PointLightTabFields({ light }: { light: Extract<SceneObject, { type: 'p
       <RangeField label="Range" min={1} max={100} step={1} value={light.range} onChange={(v) => updatePointLight(light.id, { range: v })} />
       <label className="checkbox-row">
         <input type="checkbox" checked={light.castShadows} onChange={(e) => updatePointLight(light.id, { castShadows: e.target.checked })} />
+        Cast shadows
+      </label>
+    </div>
+  );
+}
+
+function DirectionalLightAppearanceFields({ light }: { light: Extract<SceneObject, { type: 'directional_light' }> }) {
+  const updateDirectionalLight = useAppStore((s) => s.updateDirectionalLight);
+  return (
+    <div className="inspector-section">
+      <label>
+        Color
+        <input
+          type="color"
+          value={light.color}
+          onChange={(e) => updateDirectionalLight(light.id, { color: e.target.value })}
+        />
+      </label>
+      <RangeField label="Intensity" min={0} max={4} step={0.01} value={light.intensity} onChange={(intensity) => updateDirectionalLight(light.id, { intensity })} />
+      <label className="checkbox-row">
+        <input type="checkbox" checked={light.castShadows} onChange={(e) => updateDirectionalLight(light.id, { castShadows: e.target.checked })} />
         Cast shadows
       </label>
     </div>

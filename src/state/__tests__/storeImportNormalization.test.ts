@@ -65,6 +65,7 @@ describe('project import normalization', () => {
     expect(state.objects[0].equation.source.rawText).toBe('z = cos(x) * sin(y)');
     expect(state.objects[0].material.ior).toBe(1.6);
     expect(state.objects[0].material.refractionEnabled).toBe(false);
+    expect(state.objects[0].material.emissionEnabled).toBe(true);
     expect(state.objects[0].material.emissionColor).toBe('#fedcba');
     expect(state.objects[0].material.emissionStrength).toBe(10);
     expect('legacyShaderModel' in state.objects[0].material).toBe(false);
@@ -100,6 +101,7 @@ describe('project import normalization', () => {
         bloomStrength: 12,
         bloomRadius: 0,
         bloomThreshold: -4,
+        showDiagnostics: true,
       },
     }) as never);
 
@@ -109,6 +111,7 @@ describe('project import normalization', () => {
       bloomRadius: 0.25,
       bloomThreshold: 0,
     });
+    expect(useAppStore.getState().render).not.toHaveProperty('showDiagnostics');
   });
 
   it('preserves imported parameter values for detected constants', () => {
@@ -187,7 +190,7 @@ describe('project import normalization', () => {
     expect(useAppStore.getState().scene.cameraProjection).toBe('perspective');
   });
 
-  it('imports ambient and directional enabled flags', () => {
+  it('imports ambient settings and migrates the legacy directional source to an object', () => {
     const project = baseProject({
       scene: {
         ambient: {
@@ -196,7 +199,7 @@ describe('project import normalization', () => {
           intensity: 0.4,
         },
         directional: {
-          enabled: false,
+          enabled: true,
           color: '#abcdef',
           intensity: 1.8,
           direction: { x: 0.5, y: -0.2, z: -1 },
@@ -212,10 +215,13 @@ describe('project import normalization', () => {
     expect(state.scene.ambient.color).toBe('#123456');
     expect(state.scene.ambient.intensity).toBe(0.4);
     expect(state.scene.directional.enabled).toBe(false);
-    expect(state.scene.directional.color).toBe('#abcdef');
-    expect(state.scene.directional.intensity).toBe(1.8);
-    expect(state.scene.directional.direction).toEqual({ x: 0.5, y: -0.2, z: -1 });
-    expect(state.scene.directional.castShadows).toBe(true);
+    const directional = state.objects.find((object) => object.type === 'directional_light');
+    expect(directional).toMatchObject({
+      color: '#abcdef',
+      intensity: 1.8,
+      direction: { x: 0.5, y: -0.2, z: -1 },
+      castShadows: true,
+    });
   });
 
   it('drops legacy implicit iso values during import', () => {

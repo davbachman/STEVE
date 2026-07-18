@@ -5,6 +5,7 @@ import type {
   MaterialParams,
   PlotObject,
   PointLightObject,
+  DirectionalLightObject,
   RenderSettings,
   SceneSettings,
   SceneObject,
@@ -260,7 +261,7 @@ export const defaultSceneSettings = (): SceneSettings => ({
   defaultGraphBounds: structuredClone(defaultBounds),
   ambient: { enabled: true, color: '#eef4ff', intensity: 0.22 },
   directional: {
-    enabled: true,
+    enabled: false,
     direction: { x: -0.6, y: -0.4, z: -1 },
     color: '#fff2df',
     intensity: 1.35,
@@ -280,7 +281,6 @@ export const defaultRenderSettings = (): RenderSettings => ({
   bloomRadius: 1.5,
   bloomThreshold: 1,
   interactiveQuality: 'balanced',
-  showDiagnostics: false,
 });
 
 function analyzedEquation(rawText: string) {
@@ -429,6 +429,23 @@ export function createPointLight(name = 'Point Light', position = { x: 3, y: -3,
   };
 }
 
+export function createDirectionalLight(
+  name = 'Directional Light',
+  position = { x: 3, y: -3, z: 5 },
+): DirectionalLightObject {
+  return {
+    id: uuidv4(),
+    name,
+    type: 'directional_light',
+    visible: true,
+    position,
+    direction: { x: -0.6, y: -0.4, z: -1 },
+    color: '#fff2df',
+    intensity: 1.35,
+    castShadows: true,
+  };
+}
+
 export function createDefaultObjects(): SceneObject[] {
-  return [];
+  return [createDirectionalLight('Directional Light 1')];
 }

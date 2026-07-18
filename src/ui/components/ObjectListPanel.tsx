@@ -3,6 +3,7 @@ import type { PlotJobStatus, SceneObject } from '../../types/contracts';
 
 function objectIcon(obj: SceneObject): string {
   if (obj.type === 'point_light') return '●';
+  if (obj.type === 'directional_light') return '➤';
   if (obj.type === 'intersection') return '⋂';
   switch (obj.equation.kind) {
     case 'parametric_curve':
@@ -18,6 +19,7 @@ function objectIcon(obj: SceneObject): string {
 
 function objectKindLabel(obj: SceneObject): string {
   if (obj.type === 'point_light') return 'Point light';
+  if (obj.type === 'directional_light') return 'Directional light';
   if (obj.type === 'intersection') return 'Surface intersection';
   switch (obj.equation.kind) {
     case 'parametric_curve':
@@ -32,7 +34,11 @@ function objectKindLabel(obj: SceneObject): string {
 }
 
 function objectSwatchColor(obj: SceneObject): string {
-  return obj.type === 'point_light' ? obj.color : obj.material.baseColor;
+  return obj.type === 'point_light' || obj.type === 'directional_light' ? obj.color : obj.material.baseColor;
+}
+
+function isLightObject(obj: SceneObject): boolean {
+  return obj.type === 'point_light' || obj.type === 'directional_light';
 }
 
 const BUSY_MESH_PHASES = new Set(['queued', 'parsing', 'mesh_preview', 'mesh_final']);
@@ -76,6 +82,7 @@ export function ObjectListPanel() {
   const addPlot = useAppStore((s) => s.addPlot);
   const addIntersection = useAppStore((s) => s.addIntersection);
   const addPointLight = useAppStore((s) => s.addPointLight);
+  const addDirectionalLight = useAppStore((s) => s.addDirectionalLight);
   const objects = useAppStore((s) => s.objects);
   const selectedId = useAppStore((s) => s.selectedId);
   const selectObject = useAppStore((s) => s.selectObject);
@@ -105,15 +112,16 @@ export function ObjectListPanel() {
           <section className="creator-group" aria-labelledby="creator-group-lights">
             <h3 id="creator-group-lights">Lights</h3>
             <div className="panel__actions panel__actions--stack">
-              <button onClick={() => addPointLight()}>+ Light</button>
+              <button onClick={() => addPointLight()}>+ Point</button>
+              <button onClick={() => addDirectionalLight()}>+ Directional</button>
             </div>
           </section>
         </div>
       </div>
       <div className="object-list object-list--compact">
         {objects.map((obj) => {
-          const activity = obj.type !== 'point_light' ? jobActivity(plotJobs[obj.id]) : 'idle';
-          const errorDetail = obj.type !== 'point_light' ? plotJobs[obj.id]?.lastError : undefined;
+          const activity = !isLightObject(obj) ? jobActivity(plotJobs[obj.id]) : 'idle';
+          const errorDetail = !isLightObject(obj) ? plotJobs[obj.id]?.lastError : undefined;
           return (
             <div
               key={obj.id}
@@ -122,9 +130,9 @@ export function ObjectListPanel() {
               <button className="object-card__select" onClick={() => selectObject(obj.id)} title={`${obj.name} — ${objectKindLabel(obj)}`}>
                 <ObjectCardSummary object={obj} activity={activity} errorDetail={errorDetail} />
               </button>
-              <label className="object-card__toggle" title={obj.type === 'point_light' ? 'Show light gizmo' : 'Show object'}>
+              <label className="object-card__toggle" title={isLightObject(obj) ? 'Show light gizmo' : 'Show object'}>
                 <input
-                  aria-label={obj.type === 'point_light' ? `Show gizmo for ${obj.name}` : `Show ${obj.name}`}
+                  aria-label={isLightObject(obj) ? `Show gizmo for ${obj.name}` : `Show ${obj.name}`}
                   type="checkbox"
                   checked={obj.visible}
                   onChange={(e) => setObjectVisibility(obj.id, e.target.checked)}

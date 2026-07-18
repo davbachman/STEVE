@@ -114,7 +114,6 @@ function createShadowRegressionScene(): ProjectFileV1 {
   render.toneMapping = 'aces';
   render.exposure = 1.05;
   render.interactiveQuality = 'quality';
-  render.showDiagnostics = false;
 
   const objects: SceneObject[] = [ribbon, sphere, key, fill];
 
@@ -144,7 +143,6 @@ function createPointShadowRegressionScene(): ProjectFileV1 {
   project.render = {
     ...project.render,
     interactiveQuality: 'quality',
-    showDiagnostics: false,
   };
 
   const pointLights = project.objects.filter((obj) => obj.type === 'point_light');
@@ -274,7 +272,6 @@ function createInteractiveRenderRegressionScene(): ProjectFileV1 {
   render.toneMapping = 'aces';
   render.exposure = 1.02;
   render.interactiveQuality = 'quality';
-  render.showDiagnostics = false;
 
   return {
     schemaVersion: 1,
@@ -381,7 +378,6 @@ function createPhase5BPathMixedGeometryScene(): ProjectFileV1 {
   render.interactiveQuality = 'quality';
   render.toneMapping = 'aces';
   render.exposure = 1.02;
-  render.showDiagnostics = true;
 
   const objects: SceneObject[] = [glassSheet, lineCurve, backdrop, key, rim];
 

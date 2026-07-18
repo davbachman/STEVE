@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useAppStore } from '../store';
-import type { PlotObject, PointLightObject } from '../../types/contracts';
+import type { DirectionalLightObject, PlotObject, PointLightObject } from '../../types/contracts';
 
 function plotsByName() {
   return useAppStore.getState().objects.filter((obj): obj is PlotObject => obj.type === 'plot').map((plot) => plot.name);
@@ -10,14 +10,21 @@ function lightsByName() {
   return useAppStore.getState().objects.filter((obj): obj is PointLightObject => obj.type === 'point_light').map((light) => light.name);
 }
 
+function directionalLightsByName() {
+  return useAppStore.getState().objects
+    .filter((obj): obj is DirectionalLightObject => obj.type === 'directional_light')
+    .map((light) => light.name);
+}
+
 describe('store object naming', () => {
   beforeEach(() => {
     useAppStore.getState().newProject();
   });
 
-  it('starts a new project with no objects', () => {
+  it('starts a new project with the default directional light', () => {
     expect(plotsByName()).toEqual([]);
     expect(lightsByName()).toEqual([]);
+    expect(directionalLightsByName()).toEqual(['Directional Light 1']);
   });
 
   it('increments names by object kind instead of by total object count', () => {
@@ -27,10 +34,12 @@ describe('store object naming', () => {
     store.addPlot('graph');
     store.addPlot('surface');
     store.addPointLight();
+    store.addDirectionalLight();
     store.addPlot('curve');
     store.addPlot('graph');
     store.addPlot('surface');
     store.addPointLight();
+    store.addDirectionalLight();
 
     expect(plotsByName()).toEqual([
       'Curve 1',
@@ -41,5 +50,10 @@ describe('store object naming', () => {
       'Parametric 2',
     ]);
     expect(lightsByName()).toEqual(['Point Light 1', 'Point Light 2']);
+    expect(directionalLightsByName()).toEqual([
+      'Directional Light 1',
+      'Directional Light 2',
+      'Directional Light 3',
+    ]);
   });
 });

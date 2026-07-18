@@ -251,7 +251,8 @@ input[type='color'] {
 }
 
 .settings-dialog {
-  width: min(28rem, 100%);
+  width: min(34rem, 100%);
+  max-height: min(44rem, calc(100vh - 2.5rem));
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 14px;
@@ -288,20 +289,42 @@ input[type='color'] {
 
 .settings-dialog__body {
   display: grid;
-  gap: 0.8rem;
+  gap: 1rem;
   padding: 1rem 0.9rem 1.1rem;
+  overflow-y: auto;
+  max-height: calc(100vh - 7rem);
 }
 
-.settings-dialog__body label {
+.settings-dialog__section {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 11rem;
+  gap: 0.8rem;
+}
+
+.settings-dialog__section + .settings-dialog__section {
+  padding-top: 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.settings-dialog__section h3 {
+  margin: 0;
+  color: #f1f5fb;
+  font-size: 0.9rem;
+}
+
+.settings-dialog__section > label {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18rem;
   align-items: center;
   gap: 1rem;
   color: #d5e1f2;
 }
 
-.settings-dialog__body select {
+.settings-dialog__section select {
   width: 100%;
+}
+
+.settings-dialog__section > .settings-dialog__checkbox {
+  display: flex !important;
 }
 
 .about-dialog {
@@ -1018,24 +1041,12 @@ input[type='color'] {
   max-width: 36rem;
 }
 
-.viewport-overlay--diagnostics {
-  top: 0.75rem;
-  left: auto;
-  right: 0.75rem;
-  width: min(23rem, calc(100% - 1.5rem));
-  display: grid;
-  gap: 0.12rem;
-  font-size: 0.78rem;
-  line-height: 1.25;
-  pointer-events: none;
-}
-
 .tabs {
   position: sticky;
   top: 0;
   z-index: 1;
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 0.25rem;
   padding: 0.55rem;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
@@ -1200,6 +1211,21 @@ input[type='color'] {
   display: grid;
   gap: 0.45rem;
   padding-left: 0.35rem;
+}
+
+.surface-decoration-group {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.surface-decoration-group + .surface-decoration-group {
+  padding-top: 0.2rem;
+  border-top: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.surface-decoration-group h4 {
+  margin: 0.1rem 0 0;
+  font-size: 0.85rem;
 }
 
 .contour-grid {
@@ -1411,7 +1437,7 @@ input[type='color'] {
 }
 
 @media (max-width: 560px) {
-  .settings-dialog__body label {
+  .settings-dialog__section > label {
     grid-template-columns: 1fr;
     gap: 0.35rem;
   }
