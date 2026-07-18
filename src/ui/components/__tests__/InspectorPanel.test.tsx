@@ -445,6 +445,7 @@ describe('RangeField numeric entry', () => {
     const tabLabels = Array.from(container.querySelectorAll('.tabs__tab')).map((button) => button.textContent);
     expect(tabLabels).toEqual([]);
     expect(container.querySelector('.tabs')).toBeNull();
+    expect(container.querySelector('.scene-settings-heading')?.textContent).toBe('Scene Settings');
     expect(Array.from(container.querySelectorAll('label')).some(
       (label) => label.textContent?.includes('Ambient light'),
     )).toBe(true);

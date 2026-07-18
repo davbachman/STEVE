@@ -1079,6 +1079,10 @@ input[type='color'] {
   font-size: 0.95rem;
 }
 
+.inspector-section .scene-settings-heading {
+  text-align: center;
+}
+
 .inspector-section label,
 .bounds-editor label {
   display: grid;

@@ -550,7 +550,7 @@ function SceneTab() {
   const updateScene = useAppStore((s) => s.updateScene);
   return (
     <div className="inspector-section">
-      <h3>Scene</h3>
+      <h3 className="scene-settings-heading">Scene Settings</h3>
       <h3>Ambient Light</h3>
       <label className="checkbox-row">
         <input
