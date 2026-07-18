@@ -576,6 +576,48 @@ function SceneTab({ viewportApi }: { viewportApi: ViewportApi | null }) {
   return (
     <fieldset className="inspector-section scene-settings-fieldset" disabled={recording}>
       <h3 className="scene-settings-heading">Scene Settings</h3>
+      <button
+        type="button"
+        className={scene.turntableEnabled ? 'turntable-toggle is-active' : 'turntable-toggle'}
+        aria-pressed={scene.turntableEnabled}
+        disabled={recording}
+        onClick={() => updateScene({ turntableEnabled: !scene.turntableEnabled })}
+      >
+        Turntable animation
+      </button>
+      {scene.turntableEnabled ? (
+        <>
+          <RangeField
+            label="Orbit speed (°/s)"
+            min={MIN_TURNTABLE_SPEED}
+            max={MAX_TURNTABLE_SPEED}
+            step={1}
+            value={scene.turntableSpeed}
+            disabled={recording}
+            onChange={(value) => updateScene({
+              turntableSpeed: Math.min(MAX_TURNTABLE_SPEED, Math.max(MIN_TURNTABLE_SPEED, value)),
+            })}
+          />
+          <button
+            type="button"
+            className="turntable-record-button"
+            disabled={!viewportApi || recording}
+            aria-live="polite"
+            onClick={recordLoop}
+          >
+            {recording ? `Recording ${Math.round((recordingProgress ?? 0) * 100)}%` : 'Record loop'}
+          </button>
+          {recording ? (
+            <progress
+              className="turntable-record-progress"
+              aria-label="Turntable GIF recording progress"
+              max={1}
+              value={recordingProgress ?? 0}
+            />
+          ) : null}
+          {recordingError ? <div className="inspector-note" role="alert">{recordingError}</div> : null}
+        </>
+      ) : null}
       <h3>Ambient Light</h3>
       <label className="checkbox-row">
         <input
@@ -629,48 +671,6 @@ function SceneTab({ viewportApi }: { viewportApi: ViewportApi | null }) {
           <option value="orthographic">Orthographic</option>
         </select>
       </label>
-      <button
-        type="button"
-        className={scene.turntableEnabled ? 'turntable-toggle is-active' : 'turntable-toggle'}
-        aria-pressed={scene.turntableEnabled}
-        disabled={recording}
-        onClick={() => updateScene({ turntableEnabled: !scene.turntableEnabled })}
-      >
-        Turntable animation
-      </button>
-      {scene.turntableEnabled ? (
-        <>
-          <RangeField
-            label="Orbit speed (°/s)"
-            min={MIN_TURNTABLE_SPEED}
-            max={MAX_TURNTABLE_SPEED}
-            step={1}
-            value={scene.turntableSpeed}
-            disabled={recording}
-            onChange={(value) => updateScene({
-              turntableSpeed: Math.min(MAX_TURNTABLE_SPEED, Math.max(MIN_TURNTABLE_SPEED, value)),
-            })}
-          />
-          <button
-            type="button"
-            className="turntable-record-button"
-            disabled={!viewportApi || recording}
-            aria-live="polite"
-            onClick={recordLoop}
-          >
-            {recording ? `Recording ${Math.round((recordingProgress ?? 0) * 100)}%` : 'Record loop'}
-          </button>
-          {recording ? (
-            <progress
-              className="turntable-record-progress"
-              aria-label="Turntable GIF recording progress"
-              max={1}
-              value={recordingProgress ?? 0}
-            />
-          ) : null}
-          {recordingError ? <div className="inspector-note" role="alert">{recordingError}</div> : null}
-        </>
-      ) : null}
       <label>
         Background Mode
         <select value={scene.backgroundMode} onChange={(e) => updateScene({ backgroundMode: e.target.value as 'solid' | 'gradient' })}>

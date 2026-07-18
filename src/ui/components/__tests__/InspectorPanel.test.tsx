@@ -197,6 +197,12 @@ describe('RangeField numeric entry', () => {
       (button) => button.textContent === 'Turntable animation',
     );
     expect(turntableButton).toBeInstanceOf(HTMLButtonElement);
+    const sceneSettings = container.querySelector('fieldset.scene-settings-fieldset');
+    expect(Array.from(sceneSettings?.children ?? []).slice(0, 3).map((element) => element.textContent)).toEqual([
+      'Scene Settings',
+      'Turntable animation',
+      'Ambient Light',
+    ]);
     expect(turntableButton?.getAttribute('aria-pressed')).toBe('false');
     expect(Array.from(container.querySelectorAll('.range-field')).some(
       (field) => field.firstElementChild?.textContent === 'Orbit speed (°/s)',
