@@ -82,6 +82,7 @@ interface AppActions {
   beginIntersectionSourcePick: (intersectionId: UUID, slot: 0 | 1) => void;
   cancelIntersectionSourcePick: () => void;
   setIntersectionSource: (intersectionId: UUID, slot: 0 | 1, surfaceId: UUID | null) => void;
+  updateIntersectionCurveStyle: (id: UUID, patch: Partial<IntersectionObject['curveStyle']>) => void;
   updatePlotEquationText: (id: UUID, rawText: string) => void;
   updatePlotSpec: (id: UUID, updater: (spec: EquationSpec) => EquationSpec) => void;
   updatePlotMaterial: (id: UUID, patch: Partial<RenderableObject['material']>) => void;
@@ -644,6 +645,29 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         ...next,
         ui: clearsActivePick ? { ...next.ui, intersectionSourcePick: null } : next.ui,
+        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyFuture: [],
+      };
+    }),
+
+  updateIntersectionCurveStyle: (id, patch) =>
+    set((state) => {
+      const idx = state.objects.findIndex((object) => object.id === id && object.type === 'intersection');
+      if (idx === -1) return state;
+      const intersection = state.objects[idx] as IntersectionObject;
+      const curveStyle = { ...intersection.curveStyle, ...patch };
+      if (
+        curveStyle.tubeRadius === intersection.curveStyle.tubeRadius
+        && curveStyle.renderAsTube === intersection.curveStyle.renderAsTube
+      ) {
+        return state;
+      }
+      const next = produce(state, (draft) => {
+        const draftIntersection = draft.objects[idx] as IntersectionObject;
+        draftIntersection.curveStyle = curveStyle;
+      });
+      return {
+        ...next,
         historyPast: [...state.historyPast, snapshotOf(state)],
         historyFuture: [],
       };

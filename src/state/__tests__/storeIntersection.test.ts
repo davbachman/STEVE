@@ -66,6 +66,20 @@ describe('intersection object state', () => {
     ]);
   });
 
+  it('updates intersection curve width with undo history', () => {
+    const store = useAppStore.getState();
+    store.addIntersection();
+    const intersection = intersections()[0];
+    const historyCount = useAppStore.getState().historyPast.length;
+
+    store.updateIntersectionCurveStyle(intersection.id, { tubeRadius: 0.1 });
+
+    expect(intersections()[0].curveStyle.tubeRadius).toBe(0.1);
+    expect(useAppStore.getState().historyPast).toHaveLength(historyCount + 1);
+    useAppStore.getState().undo();
+    expect(intersections()[0].curveStyle.tubeRadius).toBe(0.06);
+  });
+
   it('accepts only two distinct existing surface plots as sources', () => {
     const store = useAppStore.getState();
     store.addPlot('surface');

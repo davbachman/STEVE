@@ -12,6 +12,7 @@ import {
   type ParameterBoundEdge,
 } from '../../math/parameters';
 import { evaluateNumericInputExpression } from '../../math/numericInput';
+import type { ViewportApi } from '../../renderer/SceneController';
 import {
   MAX_TURNTABLE_SPEED,
   MIN_TURNTABLE_SPEED,
@@ -27,7 +28,7 @@ const tabs = [
   { id: 'material', label: 'Appearance' },
 ] as const;
 
-export function InspectorPanel() {
+export function InspectorPanel({ viewportApi = null }: { viewportApi?: ViewportApi | null }) {
   const storedTab = useAppStore((s) => s.ui.inspectorTab);
   const setTab = useAppStore((s) => s.setInspectorTab);
   const objects = useAppStore((s) => s.objects);
@@ -49,7 +50,7 @@ export function InspectorPanel() {
       <div className="inspector-content">
         {tab === 'object' ? <ObjectTab selected={selected} /> : null}
         {tab === 'material' ? <MaterialTab selected={selected} /> : null}
-        {tab === 'scene' ? <SceneTab /> : null}
+        {tab === 'scene' ? <SceneTab viewportApi={viewportApi} /> : null}
       </div>
     </aside>
   );
@@ -182,6 +183,7 @@ function IntersectionObjectFields({ intersection }: { intersection: Extract<Scen
   const objects = useAppStore((s) => s.objects);
   const activePick = useAppStore((s) => s.ui.intersectionSourcePick);
   const beginIntersectionSourcePick = useAppStore((s) => s.beginIntersectionSourcePick);
+  const updateIntersectionCurveStyle = useAppStore((s) => s.updateIntersectionCurveStyle);
 
   const sourceObjects = intersection.sourceSurfaceIds.map((sourceId) => {
     const source = sourceId ? objects.find((object) => object.id === sourceId) : null;
@@ -190,7 +192,7 @@ function IntersectionObjectFields({ intersection }: { intersection: Extract<Scen
 
   return (
     <div className="inspector-section intersection-source-picker">
-      <p className="intersection-source-picker__instructions">click the button below and then click the surface</p>
+      <p className="intersection-source-picker__instructions">Click the button below and then click the surface</p>
       {([0, 1] as const).map((slot) => {
         const source = sourceObjects[slot];
         const isActive = activePick?.intersectionId === intersection.id && activePick.slot === slot;
@@ -216,6 +218,14 @@ function IntersectionObjectFields({ intersection }: { intersection: Extract<Scen
           </button>
         );
       })}
+      <RangeField
+        label="Width"
+        min={0.005}
+        max={0.2}
+        step={0.001}
+        value={intersection.curveStyle.tubeRadius}
+        onChange={(tubeRadius) => updateIntersectionCurveStyle(intersection.id, { tubeRadius })}
+      />
     </div>
   );
 }
@@ -545,11 +555,26 @@ function SunAngleFields({
   );
 }
 
-function SceneTab() {
+function SceneTab({ viewportApi }: { viewportApi: ViewportApi | null }) {
   const scene = useAppStore((s) => s.scene);
   const updateScene = useAppStore((s) => s.updateScene);
+  const [recordingProgress, setRecordingProgress] = useState<number | null>(null);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
+  const recording = recordingProgress !== null;
+
+  const recordLoop = () => {
+    if (!viewportApi || recording) return;
+    setRecordingError(null);
+    setRecordingProgress(0);
+    void viewportApi.recordTurntableGif(setRecordingProgress)
+      .catch((error) => {
+        setRecordingError(error instanceof Error ? error.message : 'Failed to record turntable loop');
+      })
+      .finally(() => setRecordingProgress(null));
+  };
+
   return (
-    <div className="inspector-section">
+    <fieldset className="inspector-section scene-settings-fieldset" disabled={recording}>
       <h3 className="scene-settings-heading">Scene Settings</h3>
       <h3>Ambient Light</h3>
       <label className="checkbox-row">
@@ -608,21 +633,43 @@ function SceneTab() {
         type="button"
         className={scene.turntableEnabled ? 'turntable-toggle is-active' : 'turntable-toggle'}
         aria-pressed={scene.turntableEnabled}
+        disabled={recording}
         onClick={() => updateScene({ turntableEnabled: !scene.turntableEnabled })}
       >
         Turntable animation
       </button>
       {scene.turntableEnabled ? (
-        <RangeField
-          label="Orbit speed (°/s)"
-          min={MIN_TURNTABLE_SPEED}
-          max={MAX_TURNTABLE_SPEED}
-          step={1}
-          value={scene.turntableSpeed}
-          onChange={(value) => updateScene({
-            turntableSpeed: Math.min(MAX_TURNTABLE_SPEED, Math.max(MIN_TURNTABLE_SPEED, value)),
-          })}
-        />
+        <>
+          <RangeField
+            label="Orbit speed (°/s)"
+            min={MIN_TURNTABLE_SPEED}
+            max={MAX_TURNTABLE_SPEED}
+            step={1}
+            value={scene.turntableSpeed}
+            disabled={recording}
+            onChange={(value) => updateScene({
+              turntableSpeed: Math.min(MAX_TURNTABLE_SPEED, Math.max(MIN_TURNTABLE_SPEED, value)),
+            })}
+          />
+          <button
+            type="button"
+            className="turntable-record-button"
+            disabled={!viewportApi || recording}
+            aria-live="polite"
+            onClick={recordLoop}
+          >
+            {recording ? `Recording ${Math.round((recordingProgress ?? 0) * 100)}%` : 'Record loop'}
+          </button>
+          {recording ? (
+            <progress
+              className="turntable-record-progress"
+              aria-label="Turntable GIF recording progress"
+              max={1}
+              value={recordingProgress ?? 0}
+            />
+          ) : null}
+          {recordingError ? <div className="inspector-note" role="alert">{recordingError}</div> : null}
+        </>
       ) : null}
       <label>
         Background Mode
@@ -695,7 +742,7 @@ function SceneTab() {
         </>
       ) : null}
       <BoundsEditor />
-    </div>
+    </fieldset>
   );
 }
 
@@ -1080,6 +1127,7 @@ export function RangeField({
   onDragStart,
   onDragEnd,
   onSetBound,
+  disabled,
 }: {
   label: string;
   min: number;
@@ -1090,6 +1138,7 @@ export function RangeField({
   onDragStart?: () => void;
   onDragEnd?: () => void;
   onSetBound?: (edge: ParameterBoundEdge, value: number) => void;
+  disabled?: boolean;
 }) {
   // Typed values may exceed the nominal slider bounds; the slider range grows
   // to include the current value so it never snaps the value back.
@@ -1105,6 +1154,7 @@ export function RangeField({
           max={sliderMax}
           step={step}
           value={value}
+          disabled={disabled}
           onChange={(e) => {
             onDragStart?.();
             onChange(Number(e.target.value));
@@ -1120,6 +1170,7 @@ export function RangeField({
           step={step}
           onChange={onChange}
           onSetBound={onSetBound}
+          disabled={disabled}
         />
       </div>
     </label>
@@ -1139,6 +1190,7 @@ function BoundEditingNumberInput({
   step,
   onChange,
   onSetBound,
+  disabled,
 }: {
   value: number;
   min: number;
@@ -1146,6 +1198,7 @@ function BoundEditingNumberInput({
   step: number;
   onChange: (value: number) => void;
   onSetBound?: (edge: ParameterBoundEdge, value: number) => void;
+  disabled?: boolean;
 }) {
   const tolerance = Math.max(Math.abs(max - min), 1) * 1e-12;
   const parkedEdge: ParameterBoundEdge | null = onSetBound
@@ -1171,6 +1224,7 @@ function BoundEditingNumberInput({
       <NumericExpressionInput
         step={step}
         value={Number.isFinite(value) ? value : 0}
+        disabled={disabled}
         onChange={commit}
         title={
           parkedEdge

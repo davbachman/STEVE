@@ -127,7 +127,7 @@ export default function App() {
         <main className="viewport-panel">
           <Viewport3D onApiReady={setViewportApi} />
         </main>
-        {rightSidebarVisible ? <InspectorPanel /> : null}
+        {rightSidebarVisible ? <InspectorPanel viewportApi={viewportApi} /> : null}
       </div>
     </div>
   );

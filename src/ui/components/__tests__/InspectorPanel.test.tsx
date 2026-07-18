@@ -1,6 +1,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { ViewportApi } from '../../../renderer/SceneController';
 import { useAppStore } from '../../../state/store';
 import { InspectorPanel, RangeField } from '../InspectorPanel';
 
@@ -210,6 +211,63 @@ describe('RangeField numeric entry', () => {
     expect(Array.from(container.querySelectorAll('.range-field')).some(
       (field) => field.firstElementChild?.textContent === 'Orbit speed (°/s)',
     )).toBe(true);
+    const recordButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Record loop',
+    );
+    expect(recordButton).toBeInstanceOf(HTMLButtonElement);
+    expect(recordButton?.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('records a turntable loop with progress and locks its controls until completion', async () => {
+    act(() => {
+      const store = useAppStore.getState();
+      store.newProject();
+      store.setInspectorTab('scene');
+      store.updateScene({ turntableEnabled: true });
+    });
+    let finishRecording: (() => void) | null = null;
+    const recordTurntableGif = vi.fn((onProgress?: (progress: number) => void) => {
+      onProgress?.(0.5);
+      return new Promise<void>((resolve) => {
+        finishRecording = resolve;
+      });
+    });
+    const viewportApi: ViewportApi = {
+      exportPng: vi.fn(async () => undefined),
+      recordTurntableGif,
+      setViewPreset: vi.fn(),
+      frameObject: vi.fn(),
+    };
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => root?.render(<InspectorPanel viewportApi={viewportApi} />));
+
+    const recordButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Record loop',
+    );
+    expect(recordButton).toBeInstanceOf(HTMLButtonElement);
+    act(() => recordButton?.click());
+
+    expect(recordTurntableGif).toHaveBeenCalledOnce();
+    expect(container.textContent).toContain('Recording 50%');
+    expect(container.querySelector('progress[aria-label="Turntable GIF recording progress"]')).toBeInstanceOf(HTMLProgressElement);
+    const orbitField = Array.from(container.querySelectorAll('.range-field')).find(
+      (field) => field.firstElementChild?.textContent === 'Orbit speed (°/s)',
+    );
+    expect(Array.from(orbitField?.querySelectorAll('input') ?? []).every((input) => input.disabled)).toBe(true);
+    expect(container.querySelector('fieldset.scene-settings-fieldset')?.hasAttribute('disabled')).toBe(true);
+    expect(Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Turntable animation',
+    )?.hasAttribute('disabled')).toBe(true);
+
+    await act(async () => {
+      finishRecording?.();
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain('Record loop');
+    expect(container.textContent).not.toContain('Recording 50%');
   });
 
   it('shows only the color controls relevant to the selected background mode', () => {
@@ -368,7 +426,7 @@ describe('RangeField numeric entry', () => {
 
     const inspectorContent = container.querySelector('.inspector-content');
     expect(inspectorContent?.querySelector('.intersection-source-picker__instructions')?.textContent).toBe(
-      'click the button below and then click the surface',
+      'Click the button below and then click the surface',
     );
     let buttons = Array.from(container.querySelectorAll<HTMLButtonElement>('.intersection-source-button'));
     expect(buttons).toHaveLength(2);
@@ -377,7 +435,21 @@ describe('RangeField numeric entry', () => {
       'Surface 2',
     ]);
     expect(container.querySelectorAll('.intersection-source-button__placeholder')).toHaveLength(2);
-    expect(inspectorContent?.querySelector('input, select')).toBeNull();
+    const widthField = Array.from(container.querySelectorAll('.range-field')).find(
+      (field) => field.firstElementChild?.textContent === 'Width',
+    );
+    expect(widthField).toBeInstanceOf(HTMLLabelElement);
+    const widthInput = widthField?.querySelector('.numeric-expression-input');
+    expect(widthInput).toBeInstanceOf(HTMLInputElement);
+    if (!(widthInput instanceof HTMLInputElement)) throw new Error('Expected intersection width input');
+    act(() => widthInput.focus());
+    act(() => {
+      setNativeInputValue(widthInput, '0.1');
+      widthInput.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => widthInput.blur());
+    const styledIntersection = useAppStore.getState().objects.find((object) => object.id === intersectionId);
+    expect(styledIntersection?.type === 'intersection' ? styledIntersection.curveStyle.tubeRadius : null).toBe(0.1);
 
     act(() => buttons[0]?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     expect(useAppStore.getState().ui.intersectionSourcePick).toEqual({ intersectionId, slot: 0 });

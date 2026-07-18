@@ -1178,10 +1178,27 @@ input[type='color'] {
   width: 100%;
 }
 
+.scene-settings-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
 .turntable-toggle.is-active {
   border-color: rgba(97, 185, 255, 0.55);
   background: linear-gradient(180deg, #24456a, #183454);
   box-shadow: 0 0 0 1px rgba(97, 185, 255, 0.16) inset;
+}
+
+.turntable-record-button {
+  width: 100%;
+}
+
+.turntable-record-progress {
+  width: 100%;
+  height: 0.45rem;
+  accent-color: #61b9ff;
 }
 
 .range-field {

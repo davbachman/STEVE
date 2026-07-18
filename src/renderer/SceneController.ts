@@ -1,4 +1,5 @@
 import { mat3, mat4, vec3, vec4 } from 'gl-matrix';
+import { downloadBlobFile } from '../persistence/projectFile';
 import type { AppState } from '../state/store';
 import { useAppStore } from '../state/store';
 import type {
@@ -25,11 +26,15 @@ import {
   intersectRayWithPlotGeometry,
   type PlotGeometry,
 } from './plotGeometry';
+import { setTurntableGifRecording } from './animationRecordingState';
+import { GifEncoderWorkerClient } from './GifEncoderWorkerClient';
+import { resolveTurntableGifDimensions, resolveTurntableGifTiming } from './turntableGif';
 
 export type ViewPreset = 'top' | 'front' | 'side' | 'default';
 
 export interface ViewportApi {
   exportPng: (filename?: string, scale?: number) => Promise<void>;
+  recordTurntableGif: (onProgress?: (progress: number) => void) => Promise<void>;
   setViewPreset: (preset: ViewPreset) => void;
   frameObject: (objectId?: string | null) => void;
 }
@@ -55,6 +60,7 @@ interface PlotVisual {
   geometry: PlotGeometry;
   buffers: GpuMeshBuffers;
   meshVersion: number;
+  geometryStyleKey: string;
 }
 
 interface PointLightVisual {
@@ -242,6 +248,16 @@ export function advanceTurntableAlpha(alpha: number, speedDegreesPerSecond: numb
   return ((next + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
 }
 
+function curveGeometryStyleKey(plot: RenderableObject): string {
+  if (plot.type === 'intersection') {
+    return `${plot.curveStyle.renderAsTube ? 'tube' : 'line'}:${plot.curveStyle.tubeRadius}`;
+  }
+  if (plot.equation.kind === 'parametric_curve') {
+    return `${plot.equation.renderAsTube ? 'tube' : 'line'}:${plot.equation.tubeRadius}`;
+  }
+  return '';
+}
+
 export function resolveViewPresetOrientation(preset: ViewPreset): {
   alpha: number;
   beta: number;
@@ -304,6 +320,7 @@ export class SceneController {
   private dragState: DragState | null = null;
   private cameraDrag: { mode: 'orbit' | 'pan'; pointerId: number; lastX: number; lastY: number } | null = null;
   private turntableTarget: vec3 | null = null;
+  private recordingTurntableGif = false;
   private lastFrameTime = 0;
   private frameTimeMs = 16.67;
   private fps = 60;
@@ -476,9 +493,79 @@ export class SceneController {
           }
         }
       },
+      recordTurntableGif: (onProgress) => this.recordTurntableLoop(onProgress),
       setViewPreset: (preset) => this.setViewPreset(preset),
       frameObject: (objectId) => this.frameObject(objectId ?? null),
     };
+  }
+
+  private async recordTurntableLoop(onProgress?: (progress: number) => void): Promise<void> {
+    if (this.recordingTurntableGif) {
+      throw new Error('A turntable loop is already being recorded');
+    }
+    const gl = this.gl;
+    const scene = this.latestSnapshot?.scene;
+    if (!gl || !scene) {
+      throw new Error('Viewport not ready');
+    }
+    if (!scene.turntableEnabled) {
+      throw new Error('Start the turntable animation before recording a loop');
+    }
+
+    const baseWidth = this.canvas.width;
+    const baseHeight = this.canvas.height;
+    const dimensions = resolveTurntableGifDimensions(baseWidth, baseHeight);
+    const timing = resolveTurntableGifTiming(scene.turntableSpeed);
+    const savedCamera = {
+      alpha: this.camera.alpha,
+      beta: this.camera.beta,
+      radius: this.camera.radius,
+      target: vec3.clone(this.camera.target),
+      upVector: vec3.clone(this.camera.upVector),
+    };
+    const encoder = new GifEncoderWorkerClient();
+    this.recordingTurntableGif = true;
+    setTurntableGifRecording(true);
+    onProgress?.(0);
+
+    try {
+      this.canvas.width = dimensions.width;
+      this.canvas.height = dimensions.height;
+      gl.viewport(0, 0, dimensions.width, dimensions.height);
+      const captureSurface = createCanvasFrameCaptureSurface(dimensions.width, dimensions.height);
+      await encoder.start(dimensions.width, dimensions.height, timing.frameDelayMs);
+
+      for (let frame = 0; frame < timing.frameCount; frame += 1) {
+        this.camera.alpha = savedCamera.alpha + timing.angleStepRadians * frame;
+        this.camera.beta = savedCamera.beta;
+        this.camera.radius = savedCamera.radius;
+        vec3.copy(this.camera.target, savedCamera.target);
+        vec3.set(this.camera.upVector, ...resolveOrbitUpVector(this.camera.alpha, this.camera.beta));
+        this.updateCameraMatrices();
+        this.renderScene();
+        const pixels = captureCanvasRgba(gl, scene, captureSurface);
+        await encoder.addFrame(pixels);
+        onProgress?.(((frame + 1) / timing.frameCount) * 0.98);
+      }
+
+      const bytes = await encoder.finish();
+      downloadBlobFile(new Blob([bytes], { type: 'image/gif' }), buildGifFileName());
+      onProgress?.(1);
+    } finally {
+      encoder.terminate();
+      this.camera.alpha = savedCamera.alpha;
+      this.camera.beta = savedCamera.beta;
+      this.camera.radius = savedCamera.radius;
+      vec3.copy(this.camera.target, savedCamera.target);
+      vec3.copy(this.camera.upVector, savedCamera.upVector);
+      this.canvas.width = baseWidth;
+      this.canvas.height = baseHeight;
+      gl.viewport(0, 0, baseWidth, baseHeight);
+      this.recordingTurntableGif = false;
+      setTurntableGifRecording(false);
+      this.updateCameraMatrices();
+      this.renderScene();
+    }
   }
 
   setViewPreset(preset: ViewPreset): void {
@@ -620,7 +707,7 @@ export class SceneController {
 
   private updateTurntableCamera(elapsedMs: number): void {
     const scene = this.latestSnapshot?.scene;
-    if (!scene?.turntableEnabled) {
+    if (!scene?.turntableEnabled || this.recordingTurntableGif) {
       this.turntableTarget = null;
       return;
     }
@@ -842,9 +929,10 @@ export class SceneController {
     const seen = new Set<string>();
     for (const plotSnapshot of snapshot.plots) {
       const { plot, meshVersion } = plotSnapshot;
+      const geometryStyleKey = curveGeometryStyleKey(plot);
       seen.add(plot.id);
       const existing = this.plotVisuals.get(plot.id);
-      if (!existing || existing.meshVersion !== meshVersion) {
+      if (!existing || existing.meshVersion !== meshVersion || existing.geometryStyleKey !== geometryStyleKey) {
         if (existing) {
           this.disposePlotBuffers(existing.buffers);
         }
@@ -855,6 +943,7 @@ export class SceneController {
           geometry,
           buffers,
           meshVersion,
+          geometryStyleKey,
         });
       }
     }
@@ -2536,6 +2625,7 @@ export class SceneController {
   private attachInputHandlers(): void {
     this.canvas.addEventListener('contextmenu', (event) => event.preventDefault());
     this.canvas.addEventListener('dblclick', (event) => {
+      if (this.recordingTurntableGif) return;
       const hit = this.pickSceneObject(event.clientX, event.clientY);
       this.frameObject(hit?.id ?? null);
     });
@@ -2544,6 +2634,7 @@ export class SceneController {
     this.pointerUpListener = (event) => this.handlePointerUp(event);
     this.wheelListener = (event) => {
       event.preventDefault();
+      if (this.recordingTurntableGif) return;
       this.camera.radius *= Math.exp(event.deltaY * 0.0015);
       this.camera.radius = clamp(this.camera.radius, this.camera.lowerRadiusLimit, this.camera.upperRadiusLimit);
     };
@@ -2573,6 +2664,7 @@ export class SceneController {
   }
 
   private handlePointerDown(event: PointerEvent): void {
+    if (this.recordingTurntableGif) return;
     if (event.button === 2) {
       this.cameraDrag = {
         mode: event.shiftKey ? 'pan' : 'orbit',
@@ -4632,8 +4724,16 @@ function clearDefaultFramebuffer(gl: WebGL2RenderingContext, clearColor: [number
 }
 
 function buildPngFileName(): string {
+  return `plot-${buildExportTimestamp()}.png`;
+}
+
+function buildGifFileName(): string {
+  return `turntable-${buildExportTimestamp()}.gif`;
+}
+
+function buildExportTimestamp(): string {
   const now = new Date();
-  const stamp = [
+  return [
     now.getFullYear(),
     String(now.getMonth() + 1).padStart(2, '0'),
     String(now.getDate()).padStart(2, '0'),
@@ -4642,7 +4742,63 @@ function buildPngFileName(): string {
     String(now.getMinutes()).padStart(2, '0'),
     String(now.getSeconds()).padStart(2, '0'),
   ].join('');
-  return `plot-${stamp}.png`;
+}
+
+interface CanvasFrameCaptureSurface {
+  width: number;
+  height: number;
+  readPixels: Uint8Array;
+  imageData: ImageData;
+  imageContext: CanvasRenderingContext2D;
+  outputCanvas: HTMLCanvasElement;
+  outputContext: CanvasRenderingContext2D;
+}
+
+function createCanvasFrameCaptureSurface(width: number, height: number): CanvasFrameCaptureSurface {
+  const outputCanvas = document.createElement('canvas');
+  outputCanvas.width = width;
+  outputCanvas.height = height;
+  const outputContext = outputCanvas.getContext('2d', { willReadFrequently: true });
+  if (!outputContext) {
+    throw new Error('Failed to create image export surface');
+  }
+  const imageCanvas = document.createElement('canvas');
+  imageCanvas.width = width;
+  imageCanvas.height = height;
+  const imageContext = imageCanvas.getContext('2d');
+  if (!imageContext) {
+    throw new Error('Failed to create image export pixel surface');
+  }
+  return {
+    width,
+    height,
+    readPixels: new Uint8Array(width * height * 4),
+    imageData: imageContext.createImageData(width, height),
+    imageContext,
+    outputCanvas,
+    outputContext,
+  };
+}
+
+function captureCanvasRgba(
+  gl: WebGL2RenderingContext,
+  scene: AppState['scene'],
+  surface: CanvasFrameCaptureSurface,
+): Uint8ClampedArray {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.finish();
+  gl.readPixels(0, 0, surface.width, surface.height, gl.RGBA, gl.UNSIGNED_BYTE, surface.readPixels);
+
+  const rowSize = surface.width * 4;
+  for (let y = 0; y < surface.height; y += 1) {
+    const srcOffset = (surface.height - 1 - y) * rowSize;
+    const dstOffset = y * rowSize;
+    surface.imageData.data.set(surface.readPixels.subarray(srcOffset, srcOffset + rowSize), dstOffset);
+  }
+  surface.imageContext.putImageData(surface.imageData, 0, 0);
+  paintExportBackground(surface.outputContext, scene, surface.width, surface.height);
+  surface.outputContext.drawImage(surface.imageContext.canvas, 0, 0);
+  return surface.outputContext.getImageData(0, 0, surface.width, surface.height).data;
 }
 
 async function exportCanvasPng(
@@ -4651,42 +4807,11 @@ async function exportCanvasPng(
   scene: AppState['scene'],
   filename: string,
 ): Promise<void> {
-  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-  gl.finish();
-
   const width = Math.max(1, canvas.width);
   const height = Math.max(1, canvas.height);
-  const pixelCount = width * height * 4;
-  const pixels = new Uint8Array(pixelCount);
-  gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
-
-  const exportCanvas = document.createElement('canvas');
-  exportCanvas.width = width;
-  exportCanvas.height = height;
-  const ctx = exportCanvas.getContext('2d');
-  if (!ctx) {
-    throw new Error('Failed to create PNG export surface');
-  }
-  paintExportBackground(ctx, scene, width, height);
-
-  const imageCanvas = document.createElement('canvas');
-  imageCanvas.width = width;
-  imageCanvas.height = height;
-  const imageCtx = imageCanvas.getContext('2d');
-  if (!imageCtx) {
-    throw new Error('Failed to create PNG export image surface');
-  }
-  const imageData = imageCtx.createImageData(width, height);
-  const rowSize = width * 4;
-  for (let y = 0; y < height; y += 1) {
-    const srcOffset = (height - 1 - y) * rowSize;
-    const dstOffset = y * rowSize;
-    imageData.data.set(pixels.subarray(srcOffset, srcOffset + rowSize), dstOffset);
-  }
-  imageCtx.putImageData(imageData, 0, 0);
-  ctx.drawImage(imageCanvas, 0, 0);
-
-  const blob = await new Promise<Blob | null>((resolve) => exportCanvas.toBlob(resolve, 'image/png'));
+  const surface = createCanvasFrameCaptureSurface(width, height);
+  captureCanvasRgba(gl, scene, surface);
+  const blob = await new Promise<Blob | null>((resolve) => surface.outputCanvas.toBlob(resolve, 'image/png'));
   if (!blob) {
     throw new Error('Failed to export PNG');
   }

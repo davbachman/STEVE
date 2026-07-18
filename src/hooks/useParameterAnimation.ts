@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { advanceAnimatedParameter } from '../math/parameters';
+import { isTurntableGifRecording } from '../renderer/animationRecordingState';
 import { useAppStore } from '../state/store';
 
 const MAX_FRAME_DT_SECONDS = 0.1;
@@ -30,6 +31,10 @@ export function useParameterAnimation(): void {
     const tick = (timestamp: number) => {
       const dt = Math.min(MAX_FRAME_DT_SECONDS, Math.max(0, (timestamp - lastTimestamp) / 1000));
       lastTimestamp = timestamp;
+      if (isTurntableGifRecording()) {
+        frame = window.requestAnimationFrame(tick);
+        return;
+      }
       const state = useAppStore.getState();
       const updates: Array<{ plotId: string; parameterName: string; value: number }> = [];
       for (const object of state.objects) {
