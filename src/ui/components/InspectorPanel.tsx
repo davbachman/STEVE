@@ -25,7 +25,6 @@ import { ObjectCardSummary } from './ObjectListPanel';
 const tabs = [
   { id: 'object', label: 'Object' },
   { id: 'material', label: 'Appearance' },
-  { id: 'scene', label: 'Scene' },
 ] as const;
 
 export function InspectorPanel() {
@@ -34,18 +33,19 @@ export function InspectorPanel() {
   const objects = useAppStore((s) => s.objects);
   const selectedId = useAppStore((s) => s.selectedId);
   const selected = objects.find((o) => o.id === selectedId) ?? null;
-  const visibleTabs = selected ? tabs.filter((tab) => tab.id !== 'scene') : tabs.filter((tab) => tab.id === 'scene');
   const tab = selected ? (storedTab === 'material' ? 'material' : 'object') : 'scene';
 
   return (
     <aside className="panel panel--right">
-      <div className="tabs" style={{ gridTemplateColumns: `repeat(${visibleTabs.length}, 1fr)` }}>
-        {visibleTabs.map((t) => (
-          <button key={t.id} className={tab === t.id ? 'tabs__tab tabs__tab--active' : 'tabs__tab'} onClick={() => setTab(t.id)}>
-            {t.label}
-          </button>
-        ))}
-      </div>
+      {selected ? (
+        <div className="tabs" style={{ gridTemplateColumns: `repeat(${tabs.length}, 1fr)` }}>
+          {tabs.map((t) => (
+            <button key={t.id} className={tab === t.id ? 'tabs__tab tabs__tab--active' : 'tabs__tab'} onClick={() => setTab(t.id)}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <div className="inspector-content">
         {tab === 'object' ? <ObjectTab selected={selected} /> : null}
         {tab === 'material' ? <MaterialTab selected={selected} /> : null}

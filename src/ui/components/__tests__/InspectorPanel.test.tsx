@@ -443,7 +443,8 @@ describe('RangeField numeric entry', () => {
     act(() => root?.render(<InspectorPanel />));
 
     const tabLabels = Array.from(container.querySelectorAll('.tabs__tab')).map((button) => button.textContent);
-    expect(tabLabels).toEqual(['Scene']);
+    expect(tabLabels).toEqual([]);
+    expect(container.querySelector('.tabs')).toBeNull();
     expect(Array.from(container.querySelectorAll('label')).some(
       (label) => label.textContent?.includes('Ambient light'),
     )).toBe(true);
@@ -471,8 +472,8 @@ describe('RangeField numeric entry', () => {
     expect(container.textContent).not.toContain('Ambient light');
 
     act(() => useAppStore.getState().selectObject(null));
-    expect(tabLabels()).toEqual(['Scene']);
-    expect(container.querySelector('.tabs__tab--active')?.textContent).toBe('Scene');
+    expect(tabLabels()).toEqual([]);
+    expect(container.querySelector('.tabs')).toBeNull();
     expect(container.textContent).toContain('Ambient light');
   });
 
