@@ -977,7 +977,7 @@ function EquationParameterEditor({ plot, viewportApi }: { plot: PlotObject; view
                 >
                   {recordingParameterName === parameter.name
                     ? `Exporting loop ${Math.round(recordingProgress * 100)}%`
-                    : 'Export loop GIF'}
+                    : 'Record loop'}
                 </button>
                 {recordingParameterName === parameter.name ? (
                   <progress

@@ -316,7 +316,7 @@ describe('RangeField numeric entry', () => {
     act(() => root?.render(<InspectorPanel viewportApi={viewportApi} />));
 
     const exportButton = Array.from(container.querySelectorAll('button')).find(
-      (button) => button.textContent === 'Export loop GIF',
+      (button) => button.textContent === 'Record loop',
     );
     expect(exportButton).toBeInstanceOf(HTMLButtonElement);
     act(() => exportButton?.click());
@@ -329,7 +329,7 @@ describe('RangeField numeric entry', () => {
       finishExport?.();
       await Promise.resolve();
     });
-    expect(container.textContent).toContain('Export loop GIF');
+    expect(container.textContent).toContain('Record loop');
     expect(container.textContent).not.toContain('Exporting loop 25%');
   });
 
