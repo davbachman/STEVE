@@ -48,7 +48,7 @@ export function InspectorPanel({ viewportApi = null }: { viewportApi?: ViewportA
         </div>
       ) : null}
       <div className="inspector-content">
-        {tab === 'object' ? <ObjectTab selected={selected} /> : null}
+        {tab === 'object' ? <ObjectTab selected={selected} viewportApi={viewportApi} /> : null}
         {tab === 'material' ? <MaterialTab selected={selected} /> : null}
         {tab === 'scene' ? <SceneTab viewportApi={viewportApi} /> : null}
       </div>
@@ -56,7 +56,7 @@ export function InspectorPanel({ viewportApi = null }: { viewportApi?: ViewportA
   );
 }
 
-function ObjectTab({ selected }: { selected: SceneObject | null }) {
+function ObjectTab({ selected, viewportApi }: { selected: SceneObject | null; viewportApi: ViewportApi | null }) {
   const updatePlotSpec = useAppStore((s) => s.updatePlotSpec);
   const setObjectName = useAppStore((s) => s.setObjectName);
   const setObjectPosition = useAppStore((s) => s.setObjectPosition);
@@ -173,7 +173,7 @@ function ObjectTab({ selected }: { selected: SceneObject | null }) {
         <SurfaceDomainEditor plot={selected} />
       ) : null}
       {selected.type === 'plot' && selected.equation.kind === 'implicit_surface' ? <ImplicitEditor plot={selected} /> : null}
-      {selected.type === 'plot' ? <EquationParameterEditor plot={selected} /> : null}
+      {selected.type === 'plot' ? <EquationParameterEditor plot={selected} viewportApi={viewportApi} /> : null}
       {selected.type === 'directional_light' ? <DirectionalLightObjectFields light={selected} /> : null}
     </div>
   );
@@ -817,14 +817,33 @@ function ImplicitEditor({ plot }: { plot: PlotObject }) {
   );
 }
 
-function EquationParameterEditor({ plot }: { plot: PlotObject }) {
+function EquationParameterEditor({ plot, viewportApi }: { plot: PlotObject; viewportApi: ViewportApi | null }) {
   const updatePlotSpec = useAppStore((s) => s.updatePlotSpec);
   const beginEquationParameterDrag = useAppStore((s) => s.beginEquationParameterDrag);
   const commitEquationParameterDrag = useAppStore((s) => s.commitEquationParameterDrag);
   const setParameterAnimation = useAppStore((s) => s.setParameterAnimation);
+  const [recordingParameterName, setRecordingParameterName] = useState<string | null>(null);
+  const [recordingProgress, setRecordingProgress] = useState(0);
+  const [recordingError, setRecordingError] = useState<{ parameterName: string; message: string } | null>(null);
+  const recording = recordingParameterName !== null;
   if (plot.equation.parameters.length === 0) {
     return null;
   }
+
+  const exportParameterLoop = (parameterName: string) => {
+    if (!viewportApi || recording) return;
+    setRecordingError(null);
+    setRecordingParameterName(parameterName);
+    setRecordingProgress(0);
+    void viewportApi.recordParameterGif(plot.id, parameterName, setRecordingProgress)
+      .catch((error) => {
+        setRecordingError({
+          parameterName,
+          message: error instanceof Error ? error.message : 'Failed to export parameter loop',
+        });
+      })
+      .finally(() => setRecordingParameterName(null));
+  };
 
   return (
     <div className="inspector-section">
@@ -842,6 +861,7 @@ function EquationParameterEditor({ plot }: { plot: PlotObject }) {
                 <button
                   type="button"
                   className={parameter.samplingMode === 'discrete' ? 'equation-parameter__mode equation-parameter__mode--active' : 'equation-parameter__mode'}
+                  disabled={recording}
                   onClick={() => {
                     updatePlotSpec(plot.id, (spec) => ({
                       ...spec,
@@ -882,6 +902,7 @@ function EquationParameterEditor({ plot }: { plot: PlotObject }) {
                         : `Animate ${parameter.name}`
                   }
                   aria-pressed={Boolean(parameter.animating)}
+                  disabled={recording}
                   onClick={() => setParameterAnimation(plot.id, parameter.name, { animating: !parameter.animating })}
                 >
                   {parameter.animating ? '⏸' : '▶'}
@@ -896,6 +917,7 @@ function EquationParameterEditor({ plot }: { plot: PlotObject }) {
                 ? discreteParameterStep(parameter.min, parameter.max, parameter.discreteCount)
                 : parameter.step}
               value={parameter.value}
+              disabled={recording}
               onDragStart={() => beginEquationParameterDrag(plot.id, parameter.name)}
               onDragEnd={() => commitEquationParameterDrag(plot.id, parameter.name)}
               onChange={(value) =>
@@ -921,6 +943,7 @@ function EquationParameterEditor({ plot }: { plot: PlotObject }) {
                 max={64}
                 step={1}
                 value={parameter.discreteCount}
+                disabled={recording}
                 onDragStart={() => beginEquationParameterDrag(plot.id, `${parameter.name}:discreteCount`)}
                 onDragEnd={() => commitEquationParameterDrag(plot.id, `${parameter.name}:discreteCount`)}
                 onChange={(value) =>
@@ -934,15 +957,40 @@ function EquationParameterEditor({ plot }: { plot: PlotObject }) {
                   }))
                 }
               />
-            ) : parameter.animating ? (
-              <RangeField
-                label={`${parameter.name} speed`}
-                min={MIN_PARAMETER_ANIMATION_SPEED}
-                max={MAX_PARAMETER_ANIMATION_SPEED}
-                step={0.01}
-                value={parameter.animationSpeed ?? DEFAULT_PARAMETER_ANIMATION_SPEED}
-                onChange={(value) => setParameterAnimation(plot.id, parameter.name, { animationSpeed: value })}
-              />
+            ) : parameter.animating || recordingParameterName === parameter.name ? (
+              <>
+                <RangeField
+                  label={`${parameter.name} speed`}
+                  min={MIN_PARAMETER_ANIMATION_SPEED}
+                  max={MAX_PARAMETER_ANIMATION_SPEED}
+                  step={0.01}
+                  value={parameter.animationSpeed ?? DEFAULT_PARAMETER_ANIMATION_SPEED}
+                  disabled={recording}
+                  onChange={(value) => setParameterAnimation(plot.id, parameter.name, { animationSpeed: value })}
+                />
+                <button
+                  type="button"
+                  className="parameter-gif-export"
+                  disabled={!viewportApi || recording}
+                  aria-live="polite"
+                  onClick={() => exportParameterLoop(parameter.name)}
+                >
+                  {recordingParameterName === parameter.name
+                    ? `Exporting loop ${Math.round(recordingProgress * 100)}%`
+                    : 'Export loop GIF'}
+                </button>
+                {recordingParameterName === parameter.name ? (
+                  <progress
+                    className="parameter-gif-export__progress"
+                    aria-label={`${parameter.name} GIF export progress`}
+                    max={1}
+                    value={recordingProgress}
+                  />
+                ) : null}
+                {recordingError?.parameterName === parameter.name ? (
+                  <div className="inspector-note" role="alert">{recordingError.message}</div>
+                ) : null}
+              </>
             ) : null}
           </div>
         );

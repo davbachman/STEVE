@@ -26,6 +26,7 @@ describe('TopBar menus', () => {
     const viewportApi: ViewportApi = {
       exportPng,
       recordTurntableGif: vi.fn(async () => undefined),
+      recordParameterGif: vi.fn(async () => undefined),
       setViewPreset: vi.fn(),
       frameObject: vi.fn(),
     };

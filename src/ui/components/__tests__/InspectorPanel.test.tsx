@@ -241,6 +241,7 @@ describe('RangeField numeric entry', () => {
     const viewportApi: ViewportApi = {
       exportPng: vi.fn(async () => undefined),
       recordTurntableGif,
+      recordParameterGif: vi.fn(async () => undefined),
       setViewPreset: vi.fn(),
       frameObject: vi.fn(),
     };
@@ -274,6 +275,62 @@ describe('RangeField numeric entry', () => {
     });
     expect(container.textContent).toContain('Record loop');
     expect(container.textContent).not.toContain('Recording 50%');
+  });
+
+  it('exports a full continuous-parameter bounce with progress while animation is playing', async () => {
+    let plotId = '';
+    act(() => {
+      const store = useAppStore.getState();
+      store.newProject();
+      store.addPlot('surface');
+      const plot = useAppStore.getState().objects.find((object) => object.type === 'plot');
+      if (!plot) throw new Error('Expected plot');
+      plotId = plot.id;
+      store.updatePlotEquationText(plot.id, 'z = a*x');
+      store.setParameterAnimation(plot.id, 'a', { animating: true });
+      store.setInspectorTab('object');
+    });
+
+    let finishExport: (() => void) | null = null;
+    const recordParameterGif = vi.fn((
+      _plotId: string,
+      _parameterName: string,
+      onProgress?: (progress: number) => void,
+    ) => {
+      onProgress?.(0.25);
+      return new Promise<void>((resolve) => {
+        finishExport = resolve;
+      });
+    });
+    const viewportApi: ViewportApi = {
+      exportPng: vi.fn(async () => undefined),
+      recordTurntableGif: vi.fn(async () => undefined),
+      recordParameterGif,
+      setViewPreset: vi.fn(),
+      frameObject: vi.fn(),
+    };
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => root?.render(<InspectorPanel viewportApi={viewportApi} />));
+
+    const exportButton = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent === 'Export loop GIF',
+    );
+    expect(exportButton).toBeInstanceOf(HTMLButtonElement);
+    act(() => exportButton?.click());
+
+    expect(recordParameterGif).toHaveBeenCalledWith(plotId, 'a', expect.any(Function));
+    expect(container.textContent).toContain('Exporting loop 25%');
+    expect(container.querySelector('progress[aria-label="a GIF export progress"]')).toBeInstanceOf(HTMLProgressElement);
+
+    await act(async () => {
+      finishExport?.();
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain('Export loop GIF');
+    expect(container.textContent).not.toContain('Exporting loop 25%');
   });
 
   it('shows only the color controls relevant to the selected background mode', () => {

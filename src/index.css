@@ -1201,6 +1201,16 @@ input[type='color'] {
   accent-color: #61b9ff;
 }
 
+.parameter-gif-export,
+.parameter-gif-export__progress {
+  width: 100%;
+}
+
+.parameter-gif-export__progress {
+  height: 0.45rem;
+  accent-color: #61b9ff;
+}
+
 .range-field {
   display: grid;
   gap: 0.25rem;

@@ -4,6 +4,7 @@ import type { AppState } from '../state/store';
 import { useAppStore } from '../state/store';
 import type {
   DirectionalLightObject,
+  PlotObject,
   PointLightObject,
   RenderableObject,
   SceneObject,
@@ -26,8 +27,9 @@ import {
   intersectRayWithPlotGeometry,
   type PlotGeometry,
 } from './plotGeometry';
-import { setTurntableGifRecording } from './animationRecordingState';
+import { setAnimationGifRecording } from './animationRecordingState';
 import { GifEncoderWorkerClient } from './GifEncoderWorkerClient';
+import { parameterValueForGifFrame, resolveParameterGifTiming } from './parameterGif';
 import { resolveTurntableGifDimensions, resolveTurntableGifTiming } from './turntableGif';
 
 export type ViewPreset = 'top' | 'front' | 'side' | 'default';
@@ -35,6 +37,11 @@ export type ViewPreset = 'top' | 'front' | 'side' | 'default';
 export interface ViewportApi {
   exportPng: (filename?: string, scale?: number) => Promise<void>;
   recordTurntableGif: (onProgress?: (progress: number) => void) => Promise<void>;
+  recordParameterGif: (
+    plotId: string,
+    parameterName: string,
+    onProgress?: (progress: number) => void,
+  ) => Promise<void>;
   setViewPreset: (preset: ViewPreset) => void;
   frameObject: (objectId?: string | null) => void;
 }
@@ -320,7 +327,7 @@ export class SceneController {
   private dragState: DragState | null = null;
   private cameraDrag: { mode: 'orbit' | 'pan'; pointerId: number; lastX: number; lastY: number } | null = null;
   private turntableTarget: vec3 | null = null;
-  private recordingTurntableGif = false;
+  private recordingGif = false;
   private lastFrameTime = 0;
   private frameTimeMs = 16.67;
   private fps = 60;
@@ -494,14 +501,17 @@ export class SceneController {
         }
       },
       recordTurntableGif: (onProgress) => this.recordTurntableLoop(onProgress),
+      recordParameterGif: (plotId, parameterName, onProgress) => (
+        this.recordParameterLoop(plotId, parameterName, onProgress)
+      ),
       setViewPreset: (preset) => this.setViewPreset(preset),
       frameObject: (objectId) => this.frameObject(objectId ?? null),
     };
   }
 
   private async recordTurntableLoop(onProgress?: (progress: number) => void): Promise<void> {
-    if (this.recordingTurntableGif) {
-      throw new Error('A turntable loop is already being recorded');
+    if (this.recordingGif) {
+      throw new Error('An animation loop is already being recorded');
     }
     const gl = this.gl;
     const scene = this.latestSnapshot?.scene;
@@ -524,8 +534,8 @@ export class SceneController {
       upVector: vec3.clone(this.camera.upVector),
     };
     const encoder = new GifEncoderWorkerClient();
-    this.recordingTurntableGif = true;
-    setTurntableGifRecording(true);
+    this.recordingGif = true;
+    setAnimationGifRecording(true);
     onProgress?.(0);
 
     try {
@@ -561,8 +571,124 @@ export class SceneController {
       this.canvas.width = baseWidth;
       this.canvas.height = baseHeight;
       gl.viewport(0, 0, baseWidth, baseHeight);
-      this.recordingTurntableGif = false;
-      setTurntableGifRecording(false);
+      this.recordingGif = false;
+      setAnimationGifRecording(false);
+      this.updateCameraMatrices();
+      this.renderScene();
+    }
+  }
+
+  private async recordParameterLoop(
+    plotId: string,
+    parameterName: string,
+    onProgress?: (progress: number) => void,
+  ): Promise<void> {
+    if (this.recordingGif) {
+      throw new Error('An animation loop is already being recorded');
+    }
+    const gl = this.gl;
+    const initialState = useAppStore.getState();
+    const plot = initialState.objects.find(
+      (object): object is PlotObject => object.id === plotId && object.type === 'plot',
+    );
+    const parameter = plot?.equation.parameters.find((candidate) => candidate.name === parameterName);
+    if (!gl || !this.latestSnapshot) {
+      throw new Error('Viewport not ready');
+    }
+    if (!plot || !parameter || parameter.samplingMode !== 'continuous' || !parameter.animating) {
+      throw new Error('Start the continuous parameter animation before exporting its loop');
+    }
+    if (plot.equation.source.parseStatus !== 'ok') {
+      throw new Error('The animated equation must be valid before exporting its loop');
+    }
+    if (!Number.isFinite(parameter.min) || !Number.isFinite(parameter.max) || parameter.max <= parameter.min) {
+      throw new Error('The animated parameter needs a valid min and max range');
+    }
+
+    const baseWidth = this.canvas.width;
+    const baseHeight = this.canvas.height;
+    const dimensions = resolveTurntableGifDimensions(baseWidth, baseHeight);
+    const timing = resolveParameterGifTiming(parameter.animationSpeed);
+    const savedValue = parameter.value;
+    const animatedParameters = collectAnimatingContinuousParameters(initialState);
+    const encoder = new GifEncoderWorkerClient();
+    this.recordingGif = true;
+    setAnimationGifRecording(true);
+    onProgress?.(0);
+
+    try {
+      for (const entry of animatedParameters) {
+        useAppStore.getState().setParameterAnimation(entry.plotId, entry.parameterName, { animating: false });
+      }
+
+      this.canvas.width = dimensions.width;
+      this.canvas.height = dimensions.height;
+      gl.viewport(0, 0, dimensions.width, dimensions.height);
+      const captureSurface = createCanvasFrameCaptureSurface(dimensions.width, dimensions.height);
+      await encoder.start(dimensions.width, dimensions.height, timing.frameDelayMs);
+      await yieldForWorkerPipeline();
+      await waitForFullDetailMeshes(new Map());
+
+      for (let frame = 0; frame < timing.frameCount; frame += 1) {
+        const stateBeforeUpdate = useAppStore.getState();
+        const value = parameterValueForGifFrame(parameter.min, parameter.max, frame, timing.frameCount);
+        const currentPlot = stateBeforeUpdate.objects.find(
+          (object): object is PlotObject => object.id === plotId && object.type === 'plot',
+        );
+        const currentValue = currentPlot?.equation.parameters.find(
+          (candidate) => candidate.name === parameterName,
+        )?.value;
+        if (currentValue !== value) {
+          const affectedIds = affectedFullDetailIds(stateBeforeUpdate, new Set([plotId]));
+          const baselines = captureMeshVersionBaselines(stateBeforeUpdate, affectedIds);
+          stateBeforeUpdate.applyParameterAnimationValues([{ plotId, parameterName, value }]);
+          await waitForFullDetailMeshScheduling(baselines);
+          await waitForFullDetailMeshes(baselines);
+        }
+        if (this.disposed || !this.gl) {
+          throw new Error('Viewport was closed while exporting the parameter loop');
+        }
+
+        const frameState = useAppStore.getState();
+        this.sync({
+          scene: frameState.scene,
+          render: frameState.render,
+          objects: frameState.objects,
+          selectedId: frameState.selectedId,
+          plotJobs: frameState.plotJobs,
+        });
+        this.updateCameraMatrices();
+        this.renderScene();
+        const pixels = captureCanvasRgba(gl, frameState.scene, captureSurface);
+        await encoder.addFrame(pixels);
+        onProgress?.(((frame + 1) / timing.frameCount) * 0.98);
+      }
+
+      const bytes = await encoder.finish();
+      downloadBlobFile(
+        new Blob([bytes], { type: 'image/gif' }),
+        buildParameterGifFileName(parameterName),
+      );
+      onProgress?.(1);
+    } finally {
+      encoder.terminate();
+      useAppStore.getState().applyParameterAnimationValues([{ plotId, parameterName, value: savedValue }]);
+      for (const entry of animatedParameters) {
+        useAppStore.getState().setParameterAnimation(entry.plotId, entry.parameterName, { animating: true });
+      }
+      this.canvas.width = baseWidth;
+      this.canvas.height = baseHeight;
+      gl.viewport(0, 0, baseWidth, baseHeight);
+      this.recordingGif = false;
+      setAnimationGifRecording(false);
+      const restoredState = useAppStore.getState();
+      this.sync({
+        scene: restoredState.scene,
+        render: restoredState.render,
+        objects: restoredState.objects,
+        selectedId: restoredState.selectedId,
+        plotJobs: restoredState.plotJobs,
+      });
       this.updateCameraMatrices();
       this.renderScene();
     }
@@ -707,7 +833,7 @@ export class SceneController {
 
   private updateTurntableCamera(elapsedMs: number): void {
     const scene = this.latestSnapshot?.scene;
-    if (!scene?.turntableEnabled || this.recordingTurntableGif) {
+    if (!scene?.turntableEnabled || this.recordingGif) {
       this.turntableTarget = null;
       return;
     }
@@ -2625,7 +2751,7 @@ export class SceneController {
   private attachInputHandlers(): void {
     this.canvas.addEventListener('contextmenu', (event) => event.preventDefault());
     this.canvas.addEventListener('dblclick', (event) => {
-      if (this.recordingTurntableGif) return;
+      if (this.recordingGif) return;
       const hit = this.pickSceneObject(event.clientX, event.clientY);
       this.frameObject(hit?.id ?? null);
     });
@@ -2634,7 +2760,7 @@ export class SceneController {
     this.pointerUpListener = (event) => this.handlePointerUp(event);
     this.wheelListener = (event) => {
       event.preventDefault();
-      if (this.recordingTurntableGif) return;
+      if (this.recordingGif) return;
       this.camera.radius *= Math.exp(event.deltaY * 0.0015);
       this.camera.radius = clamp(this.camera.radius, this.camera.lowerRadiusLimit, this.camera.upperRadiusLimit);
     };
@@ -2664,7 +2790,7 @@ export class SceneController {
   }
 
   private handlePointerDown(event: PointerEvent): void {
-    if (this.recordingTurntableGif) return;
+    if (this.recordingGif) return;
     if (event.button === 2) {
       this.cameraDrag = {
         mode: event.shiftKey ? 'pan' : 'orbit',
@@ -4731,6 +4857,11 @@ function buildGifFileName(): string {
   return `turntable-${buildExportTimestamp()}.gif`;
 }
 
+function buildParameterGifFileName(parameterName: string): string {
+  const safeName = parameterName.trim().replace(/[^a-zA-Z0-9_-]+/g, '-') || 'parameter';
+  return `${safeName}-bounce-${buildExportTimestamp()}.gif`;
+}
+
 function buildExportTimestamp(): string {
   const now = new Date();
   return [
@@ -4742,6 +4873,162 @@ function buildExportTimestamp(): string {
     String(now.getMinutes()).padStart(2, '0'),
     String(now.getSeconds()).padStart(2, '0'),
   ].join('');
+}
+
+const FULL_DETAIL_FRAME_TIMEOUT_MS = 120_000;
+
+function collectAnimatingContinuousParameters(
+  state: AppState,
+): Array<{ plotId: string; parameterName: string }> {
+  const result: Array<{ plotId: string; parameterName: string }> = [];
+  for (const object of state.objects) {
+    if (object.type !== 'plot') continue;
+    for (const parameter of object.equation.parameters) {
+      if (parameter.samplingMode === 'continuous' && parameter.animating) {
+        result.push({ plotId: object.id, parameterName: parameter.name });
+      }
+    }
+  }
+  return result;
+}
+
+function fullDetailRenderableIds(state: AppState): Set<string> {
+  const ids = new Set<string>();
+  for (const object of state.objects) {
+    if (object.type === 'plot') {
+      if (object.equation.source.parseStatus === 'ok') ids.add(object.id);
+      continue;
+    }
+    if (object.type !== 'intersection') continue;
+    const sourceA = state.objects.find((candidate) => candidate.id === object.sourceSurfaceIds[0]);
+    const sourceB = state.objects.find((candidate) => candidate.id === object.sourceSurfaceIds[1]);
+    if (
+      isSurfacePlot(sourceA)
+      && isSurfacePlot(sourceB)
+      && sourceA.id !== sourceB.id
+      && sourceA.equation.source.parseStatus === 'ok'
+      && sourceB.equation.source.parseStatus === 'ok'
+    ) {
+      ids.add(object.id);
+    }
+  }
+  return ids;
+}
+
+function affectedFullDetailIds(state: AppState, changedPlotIds: Set<string>): Set<string> {
+  const fullDetailIds = fullDetailRenderableIds(state);
+  const affected = new Set<string>();
+  for (const plotId of changedPlotIds) {
+    if (fullDetailIds.has(plotId)) affected.add(plotId);
+  }
+  for (const object of state.objects) {
+    if (
+      object.type === 'intersection'
+      && fullDetailIds.has(object.id)
+      && object.sourceSurfaceIds.some((sourceId) => sourceId !== null && changedPlotIds.has(sourceId))
+    ) {
+      affected.add(object.id);
+    }
+  }
+  return affected;
+}
+
+function captureMeshVersionBaselines(state: AppState, objectIds: Set<string>): Map<string, number> {
+  const versions = new Map<string, number>();
+  for (const objectId of objectIds) {
+    versions.set(objectId, state.plotJobs[objectId]?.meshVersion ?? 0);
+  }
+  return versions;
+}
+
+function yieldForWorkerPipeline(): Promise<void> {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => window.setTimeout(resolve, 0));
+  });
+}
+
+function waitForFullDetailMeshScheduling(requiredVersions: Map<string, number>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let unsubscribe: () => void = () => {};
+    const timeout = window.setTimeout(() => {
+      finish(new Error('Timed out scheduling full-detail meshes'));
+    }, FULL_DETAIL_FRAME_TIMEOUT_MS);
+
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      unsubscribe();
+      if (error) reject(error);
+      else resolve();
+    };
+
+    const check = () => {
+      const state = useAppStore.getState();
+      const fullDetailIds = fullDetailRenderableIds(state);
+      for (const [objectId, baseline] of requiredVersions) {
+        if (!fullDetailIds.has(objectId)) {
+          finish(new Error('An animated object became unavailable during GIF export'));
+          return;
+        }
+        const job = state.plotJobs[objectId];
+        if (job?.meshPhase === 'error') {
+          finish(new Error(job.lastError || `Failed to build full-detail mesh for ${objectId}`));
+          return;
+        }
+        if (job?.meshPhase === 'ready' && job.meshVersion <= baseline) return;
+      }
+      finish();
+    };
+
+    unsubscribe = useAppStore.subscribe(check);
+    queueMicrotask(check);
+  });
+}
+
+function waitForFullDetailMeshes(requiredVersions: Map<string, number>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let unsubscribe: () => void = () => {};
+    const timeout = window.setTimeout(() => {
+      finish(new Error('Timed out waiting for full-detail meshes'));
+    }, FULL_DETAIL_FRAME_TIMEOUT_MS);
+
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      unsubscribe();
+      if (error) reject(error);
+      else resolve();
+    };
+
+    const check = () => {
+      const state = useAppStore.getState();
+      const fullDetailIds = fullDetailRenderableIds(state);
+      for (const objectId of fullDetailIds) {
+        const job = state.plotJobs[objectId];
+        if (job?.meshPhase === 'error') {
+          finish(new Error(job.lastError || `Failed to build full-detail mesh for ${objectId}`));
+          return;
+        }
+        if (job?.meshPhase !== 'ready') return;
+      }
+      for (const [objectId, baseline] of requiredVersions) {
+        if (!fullDetailIds.has(objectId)) {
+          finish(new Error('An animated object became unavailable during GIF export'));
+          return;
+        }
+        const job = state.plotJobs[objectId];
+        if (!job || job.meshVersion <= baseline || job.meshPhase !== 'ready') return;
+      }
+      finish();
+    };
+
+    unsubscribe = useAppStore.subscribe(check);
+    queueMicrotask(check);
+  });
 }
 
 interface CanvasFrameCaptureSurface {

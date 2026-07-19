@@ -1,9 +1,9 @@
-let turntableGifRecording = false;
+let animationGifRecording = false;
 
-export function isTurntableGifRecording(): boolean {
-  return turntableGifRecording;
+export function isAnimationGifRecording(): boolean {
+  return animationGifRecording;
 }
 
-export function setTurntableGifRecording(recording: boolean): void {
-  turntableGifRecording = recording;
+export function setAnimationGifRecording(recording: boolean): void {
+  animationGifRecording = recording;
 }
