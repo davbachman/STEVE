@@ -10,6 +10,7 @@ import { EquationEditor } from './ui/components/EquationEditor';
 import { ObjectListPanel } from './ui/components/ObjectListPanel';
 import { InspectorPanel } from './ui/components/InspectorPanel';
 import { TopBar } from './ui/components/TopBar';
+import { handleEscapeShortcut } from './ui/keyboardShortcuts';
 
 export default function App() {
   const [viewportApi, setViewportApi] = useState<ViewportApi | null>(null);
@@ -50,7 +51,7 @@ export default function App() {
       const metaOrCtrl = event.metaKey || event.ctrlKey;
 
       if (event.key === 'Escape') {
-        selectObject(null);
+        handleEscapeShortcut(viewportApi, () => selectObject(null), () => event.preventDefault());
         return;
       }
 
@@ -90,7 +91,7 @@ export default function App() {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [copySelected, deleteSelected, pasteClipboard, redo, selectObject, undo]);
+  }, [copySelected, deleteSelected, pasteClipboard, redo, selectObject, undo, viewportApi]);
 
   const selectedObject = selectedId ? objects.find((obj) => obj.id === selectedId) ?? null : null;
   const selectedEquationPlot = selectedObject?.type === 'plot' ? selectedObject : null;

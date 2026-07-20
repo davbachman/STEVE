@@ -53,6 +53,7 @@ export interface ViewportApi {
     lightId: string,
     onProgress?: (progress: number) => void,
   ) => Promise<void>;
+  cancelGifRecording: () => boolean;
   setViewPreset: (preset: ViewPreset) => void;
   frameObject: (objectId?: string | null) => void;
 }
@@ -340,6 +341,8 @@ export class SceneController {
   private cameraDrag: { mode: 'orbit' | 'pan'; pointerId: number; lastX: number; lastY: number } | null = null;
   private turntableTarget: vec3 | null = null;
   private recordingGif = false;
+  private gifAbortController: AbortController | null = null;
+  private gifEncoder: GifEncoderWorkerClient | null = null;
   private lastFrameTime = 0;
   private frameTimeMs = 16.67;
   private fps = 60;
@@ -519,9 +522,34 @@ export class SceneController {
         this.recordParameterLoop(plotId, parameterName, onProgress)
       ),
       recordLightCurveGif: (lightId, onProgress) => this.recordLightCurveLoop(lightId, onProgress),
+      cancelGifRecording: () => this.cancelGifRecording(),
       setViewPreset: (preset) => this.setViewPreset(preset),
       frameObject: (objectId) => this.frameObject(objectId ?? null),
     };
+  }
+
+  private cancelGifRecording(): boolean {
+    if (!this.recordingGif) return false;
+    this.gifAbortController?.abort();
+    this.gifEncoder?.terminate();
+    return true;
+  }
+
+  private beginGifRecording(encoder: GifEncoderWorkerClient): AbortController {
+    const abortController = new AbortController();
+    this.recordingGif = true;
+    this.gifAbortController = abortController;
+    this.gifEncoder = encoder;
+    setAnimationGifRecording(true);
+    return abortController;
+  }
+
+  private endGifRecording(abortController: AbortController): void {
+    if (this.gifAbortController !== abortController) return;
+    this.gifAbortController = null;
+    this.gifEncoder = null;
+    this.recordingGif = false;
+    setAnimationGifRecording(false);
   }
 
   private async recordTurntableLoop(onProgress?: (progress: number) => void): Promise<void> {
@@ -550,11 +578,12 @@ export class SceneController {
       upVector: vec3.clone(this.camera.upVector),
     };
     const encoder = new GifEncoderWorkerClient();
-    this.recordingGif = true;
-    setAnimationGifRecording(true);
+    const abortController = this.beginGifRecording(encoder);
+    const { signal } = abortController;
     onProgress?.(0);
 
     try {
+      throwIfGifRecordingCancelled(signal);
       this.canvas.width = dimensions.width;
       this.canvas.height = dimensions.height;
       gl.viewport(0, 0, dimensions.width, dimensions.height);
@@ -562,6 +591,7 @@ export class SceneController {
       await encoder.start(dimensions.width, dimensions.height, timing.frameDelayMs);
 
       for (let frame = 0; frame < timing.frameCount; frame += 1) {
+        throwIfGifRecordingCancelled(signal);
         this.camera.alpha = savedCamera.alpha + timing.angleStepRadians * frame;
         this.camera.beta = savedCamera.beta;
         this.camera.radius = savedCamera.radius;
@@ -571,12 +601,16 @@ export class SceneController {
         this.renderScene();
         const pixels = captureCanvasRgba(gl, scene, captureSurface);
         await encoder.addFrame(pixels);
+        throwIfGifRecordingCancelled(signal);
         onProgress?.(((frame + 1) / timing.frameCount) * 0.98);
       }
 
       const bytes = await encoder.finish();
+      throwIfGifRecordingCancelled(signal);
       downloadBlobFile(new Blob([bytes], { type: 'image/gif' }), buildGifFileName());
       onProgress?.(1);
+    } catch (error) {
+      if (!signal.aborted) throw error;
     } finally {
       encoder.terminate();
       this.camera.alpha = savedCamera.alpha;
@@ -587,8 +621,7 @@ export class SceneController {
       this.canvas.width = baseWidth;
       this.canvas.height = baseHeight;
       gl.viewport(0, 0, baseWidth, baseHeight);
-      this.recordingGif = false;
-      setAnimationGifRecording(false);
+      this.endGifRecording(abortController);
       this.updateCameraMatrices();
       this.renderScene();
     }
@@ -635,8 +668,8 @@ export class SceneController {
     const savedValue = parameter.value;
     const animatedParameters = collectAnimatingContinuousParameters(initialState);
     const encoder = new GifEncoderWorkerClient();
-    this.recordingGif = true;
-    setAnimationGifRecording(true);
+    const abortController = this.beginGifRecording(encoder);
+    const { signal } = abortController;
     onProgress?.(0);
 
     try {
@@ -650,9 +683,11 @@ export class SceneController {
       const captureSurface = createCanvasFrameCaptureSurface(dimensions.width, dimensions.height);
       await encoder.start(dimensions.width, dimensions.height, timing.frameDelayMs);
       await yieldForWorkerPipeline();
-      await waitForFullDetailMeshes(new Map());
+      throwIfGifRecordingCancelled(signal);
+      await waitForFullDetailMeshes(new Map(), signal);
 
       for (let frame = 0; frame < timing.frameCount; frame += 1) {
+        throwIfGifRecordingCancelled(signal);
         const stateBeforeUpdate = useAppStore.getState();
         const value = parameterValueForGifFrame(parameter.min, parameter.max, frame, timing.frameCount);
         const currentPlot = stateBeforeUpdate.objects.find(
@@ -665,9 +700,10 @@ export class SceneController {
           const affectedIds = affectedFullDetailIds(stateBeforeUpdate, new Set([plotId]));
           const baselines = captureMeshVersionBaselines(stateBeforeUpdate, affectedIds);
           stateBeforeUpdate.applyParameterAnimationValues([{ plotId, parameterName, value }]);
-          await waitForFullDetailMeshScheduling(baselines);
-          await waitForFullDetailMeshes(baselines);
+          await waitForFullDetailMeshScheduling(baselines, signal);
+          await waitForFullDetailMeshes(baselines, signal);
         }
+        throwIfGifRecordingCancelled(signal);
         if (this.disposed || !this.gl) {
           throw new Error('Viewport was closed while exporting the parameter loop');
         }
@@ -684,15 +720,19 @@ export class SceneController {
         this.renderScene();
         const pixels = captureCanvasRgba(gl, frameState.scene, captureSurface);
         await encoder.addFrame(pixels);
+        throwIfGifRecordingCancelled(signal);
         onProgress?.(((frame + 1) / timing.frameCount) * 0.98);
       }
 
       const bytes = await encoder.finish();
+      throwIfGifRecordingCancelled(signal);
       downloadBlobFile(
         new Blob([bytes], { type: 'image/gif' }),
         buildParameterGifFileName(parameterName),
       );
       onProgress?.(1);
+    } catch (error) {
+      if (!signal.aborted) throw error;
     } finally {
       encoder.terminate();
       useAppStore.getState().applyParameterAnimationValues([{ plotId, parameterName, value: savedValue }]);
@@ -702,8 +742,7 @@ export class SceneController {
       this.canvas.width = baseWidth;
       this.canvas.height = baseHeight;
       gl.viewport(0, 0, baseWidth, baseHeight);
-      this.recordingGif = false;
-      setAnimationGifRecording(false);
+      this.endGifRecording(abortController);
       const restoredState = useAppStore.getState();
       this.sync({
         scene: restoredState.scene,
@@ -757,8 +796,8 @@ export class SceneController {
       initialState.render.gifMaxDimension,
     );
     const encoder = new GifEncoderWorkerClient();
-    this.recordingGif = true;
-    setAnimationGifRecording(true);
+    const abortController = this.beginGifRecording(encoder);
+    const { signal } = abortController;
     onProgress?.(0);
 
     try {
@@ -768,9 +807,11 @@ export class SceneController {
       const captureSurface = createCanvasFrameCaptureSurface(dimensions.width, dimensions.height);
       await encoder.start(dimensions.width, dimensions.height, timing.frameDelayMs);
       await yieldForWorkerPipeline();
-      await waitForFullDetailMeshes(new Map());
+      throwIfGifRecordingCancelled(signal);
+      await waitForFullDetailMeshes(new Map(), signal);
 
       for (let frame = 0; frame < timing.frameCount; frame += 1) {
+        throwIfGifRecordingCancelled(signal);
         const parameterValue = rangeValueForGifFrame(
           bounds.min,
           bounds.max,
@@ -798,23 +839,26 @@ export class SceneController {
         this.renderScene();
         const pixels = captureCanvasRgba(gl, frameState.scene, captureSurface);
         await encoder.addFrame(pixels);
+        throwIfGifRecordingCancelled(signal);
         onProgress?.(((frame + 1) / timing.frameCount) * 0.98);
       }
 
       const bytes = await encoder.finish();
+      throwIfGifRecordingCancelled(signal);
       downloadBlobFile(
         new Blob([bytes], { type: 'image/gif' }),
         buildLightCurveGifFileName(light.name),
       );
       onProgress?.(1);
+    } catch (error) {
+      if (!signal.aborted) throw error;
     } finally {
       encoder.terminate();
       useAppStore.getState().applyLightCurveAnimationValues([{ lightId, parameterValue: savedValue }]);
       this.canvas.width = baseWidth;
       this.canvas.height = baseHeight;
       gl.viewport(0, 0, baseWidth, baseHeight);
-      this.recordingGif = false;
-      setAnimationGifRecording(false);
+      this.endGifRecording(abortController);
       const restoredState = useAppStore.getState();
       this.sync({
         scene: restoredState.scene,
@@ -5240,22 +5284,45 @@ function yieldForWorkerPipeline(): Promise<void> {
   });
 }
 
-function waitForFullDetailMeshScheduling(requiredVersions: Map<string, number>): Promise<void> {
+function gifRecordingCancellationError(): Error {
+  const error = new Error('GIF recording was cancelled');
+  error.name = 'AbortError';
+  return error;
+}
+
+function throwIfGifRecordingCancelled(signal: AbortSignal): void {
+  if (signal.aborted) throw gifRecordingCancellationError();
+}
+
+function waitForFullDetailMeshScheduling(
+  requiredVersions: Map<string, number>,
+  signal?: AbortSignal,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false;
     let unsubscribe: () => void = () => {};
-    const timeout = window.setTimeout(() => {
-      finish(new Error('Timed out scheduling full-detail meshes'));
-    }, FULL_DETAIL_FRAME_TIMEOUT_MS);
+    let timeout = 0;
+    let abortListener: (() => void) | null = null;
 
     const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
       window.clearTimeout(timeout);
       unsubscribe();
+      if (abortListener) signal?.removeEventListener('abort', abortListener);
       if (error) reject(error);
       else resolve();
     };
+
+    timeout = window.setTimeout(() => {
+      finish(new Error('Timed out scheduling full-detail meshes'));
+    }, FULL_DETAIL_FRAME_TIMEOUT_MS);
+    abortListener = () => finish(gifRecordingCancellationError());
+    signal?.addEventListener('abort', abortListener, { once: true });
+    if (signal?.aborted) {
+      abortListener();
+      return;
+    }
 
     const check = () => {
       const state = useAppStore.getState();
@@ -5280,22 +5347,35 @@ function waitForFullDetailMeshScheduling(requiredVersions: Map<string, number>):
   });
 }
 
-function waitForFullDetailMeshes(requiredVersions: Map<string, number>): Promise<void> {
+function waitForFullDetailMeshes(
+  requiredVersions: Map<string, number>,
+  signal?: AbortSignal,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false;
     let unsubscribe: () => void = () => {};
-    const timeout = window.setTimeout(() => {
-      finish(new Error('Timed out waiting for full-detail meshes'));
-    }, FULL_DETAIL_FRAME_TIMEOUT_MS);
+    let timeout = 0;
+    let abortListener: (() => void) | null = null;
 
     const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
       window.clearTimeout(timeout);
       unsubscribe();
+      if (abortListener) signal?.removeEventListener('abort', abortListener);
       if (error) reject(error);
       else resolve();
     };
+
+    timeout = window.setTimeout(() => {
+      finish(new Error('Timed out waiting for full-detail meshes'));
+    }, FULL_DETAIL_FRAME_TIMEOUT_MS);
+    abortListener = () => finish(gifRecordingCancellationError());
+    signal?.addEventListener('abort', abortListener, { once: true });
+    if (signal?.aborted) {
+      abortListener();
+      return;
+    }
 
     const check = () => {
       const state = useAppStore.getState();

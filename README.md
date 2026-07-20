@@ -126,7 +126,7 @@ Except for `Esc`, shortcuts apply when focus is not inside a text or number fiel
 
 | Shortcut | Action |
 | --- | --- |
-| `Esc` | Clear the selection or cancel intersection-surface/light-curve picking |
+| `Esc` | Cancel an in-progress GIF recording, cancel intersection-surface/light-curve picking, or clear the selection |
 | `Delete` or `Backspace` | Delete the selected object |
 | `Command/Ctrl` + `C` | Copy the selected object and all of its settings |
 | `Command/Ctrl` + `V` | Paste an object; pasting a full tuple or equality creates a new classified plot |

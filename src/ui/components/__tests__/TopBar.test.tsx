@@ -28,6 +28,7 @@ describe('TopBar menus', () => {
       recordTurntableGif: vi.fn(async () => undefined),
       recordParameterGif: vi.fn(async () => undefined),
       recordLightCurveGif: vi.fn(async () => undefined),
+      cancelGifRecording: vi.fn(() => false),
       setViewPreset: vi.fn(),
       frameObject: vi.fn(),
     };
