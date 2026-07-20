@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PlotObject } from '../../types/contracts';
+import type { DirectionalLightObject, PlotObject } from '../../types/contracts';
 import { useAppStore } from '../store';
 
 describe('store object row actions', () => {
   beforeEach(() => {
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: undefined });
     useAppStore.getState().newProject();
-    // Add a plot and point light alongside the default directional source.
+    // Exercise row actions with each object kind present.
+    useAppStore.getState().addDirectionalLight();
     useAppStore.getState().addPlot('surface');
     useAppStore.getState().addPointLight();
   });
@@ -46,6 +47,44 @@ describe('store object row actions', () => {
     useAppStore.getState().selectObject(second.id);
     useAppStore.getState().deleteObject(first.id);
     expect(useAppStore.getState().selectedId).toBe(second.id);
+  });
+
+  it('aims a moved directional light from its handle toward world origin', () => {
+    const light = useAppStore.getState().objects.find(
+      (object): object is DirectionalLightObject => object.type === 'directional_light',
+    );
+    if (!light) throw new Error('Expected directional light');
+
+    useAppStore.getState().setObjectPosition(light.id, { x: 4, y: 0, z: 3 });
+    let moved = useAppStore.getState().objects.find(
+      (object): object is DirectionalLightObject => object.id === light.id && object.type === 'directional_light',
+    );
+    expect(moved?.direction).toEqual({ x: -0.8, y: -0, z: -0.6 });
+
+    useAppStore.getState().updateDirectionalLight(light.id, { direction: { x: 1, y: 0, z: 0 } });
+    moved = useAppStore.getState().objects.find(
+      (object): object is DirectionalLightObject => object.id === light.id && object.type === 'directional_light',
+    );
+    expect(moved?.direction).toEqual({ x: -0.8, y: -0, z: -0.6 });
+  });
+
+  it('re-aims a duplicated directional light after applying its position offset', () => {
+    const original = useAppStore.getState().objects.find(
+      (object): object is DirectionalLightObject => object.type === 'directional_light',
+    );
+    if (!original) throw new Error('Expected directional light');
+
+    useAppStore.getState().duplicateObject(original.id);
+    const duplicate = useAppStore.getState().objects.find(
+      (object): object is DirectionalLightObject => (
+        object.type === 'directional_light' && object.id !== original.id
+      ),
+    );
+    if (!duplicate) throw new Error('Expected duplicated directional light');
+    const length = Math.hypot(duplicate.position.x, duplicate.position.y, duplicate.position.z);
+    expect(duplicate.direction.x).toBeCloseTo(-duplicate.position.x / length);
+    expect(duplicate.direction.y).toBeCloseTo(-duplicate.position.y / length);
+    expect(duplicate.direction.z).toBeCloseTo(-duplicate.position.z / length);
   });
 
   it('copy-pastes every plot property through the plain-text clipboard fallback', async () => {

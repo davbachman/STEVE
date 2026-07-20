@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { curveParameterBounds, curveTraversalMode } from '../../math/curvePinning';
 import {
   DEFAULT_PARAMETER_ANIMATION_SPEED,
   MAX_PARAMETER_ANIMATION_SPEED,
@@ -19,8 +20,8 @@ import {
   materialPresets,
 } from '../../state/defaults';
 import { useAppStore } from '../../state/store';
-import type { MaterialParams, PlotObject, SceneObject } from '../../types/contracts';
-import { isSurfacePlot } from '../../types/guards';
+import type { LightObject, MaterialParams, PlotObject, SceneObject } from '../../types/contracts';
+import { isParametricCurvePlot, isSurfacePlot } from '../../types/guards';
 import { ObjectCardSummary } from './ObjectListPanel';
 
 const tabs = [
@@ -60,6 +61,7 @@ function ObjectTab({ selected, viewportApi }: { selected: SceneObject | null; vi
   const updatePlotSpec = useAppStore((s) => s.updatePlotSpec);
   const setObjectName = useAppStore((s) => s.setObjectName);
   const setObjectPosition = useAppStore((s) => s.setObjectPosition);
+  const objects = useAppStore((s) => s.objects);
   const [nameDraftState, setNameDraftState] = useState<{ objectId: string | null; value: string }>({
     objectId: null,
     value: '',
@@ -69,6 +71,10 @@ function ObjectTab({ selected, viewportApi }: { selected: SceneObject | null; vi
   if (selected.type === 'intersection') return <IntersectionObjectFields intersection={selected} />;
 
   const position = selected.type === 'plot' ? selected.transform.position : selected.position;
+  const light = selected.type === 'point_light' || selected.type === 'directional_light' ? selected : null;
+  const pinnedCurve = light?.curvePin.enabled && light.curvePin.curveId
+    ? objects.find((object) => object.id === light.curvePin.curveId && isParametricCurvePlot(object))
+    : null;
   const nameDraft = nameDraftState.objectId === selected.id ? nameDraftState.value : selected.name;
   const commitName = () => {
     const next = nameDraft.trim();
@@ -103,11 +109,14 @@ function ObjectTab({ selected, viewportApi }: { selected: SceneObject | null; vi
           }}
         />
       </label>
-      <NumberTriplet
-        label="Position"
-        value={position}
-        onChange={(next) => setObjectPosition(selected.id, next)}
-      />
+      {light ? <LightCurvePinFields light={light} viewportApi={viewportApi} /> : null}
+      {!pinnedCurve ? (
+        <NumberTriplet
+          label="Position"
+          value={position}
+          onChange={(next) => setObjectPosition(selected.id, next)}
+        />
+      ) : null}
       {selected.type === 'plot' && selected.equation.kind === 'parametric_curve' ? (
         <>
           <div className="domain-editor">
@@ -174,7 +183,142 @@ function ObjectTab({ selected, viewportApi }: { selected: SceneObject | null; vi
       ) : null}
       {selected.type === 'plot' && selected.equation.kind === 'implicit_surface' ? <ImplicitEditor plot={selected} /> : null}
       {selected.type === 'plot' ? <EquationParameterEditor plot={selected} viewportApi={viewportApi} /> : null}
-      {selected.type === 'directional_light' ? <DirectionalLightObjectFields light={selected} /> : null}
+      {selected.type === 'directional_light' ? (
+        <div className="inspector-note">The viewport arrow and light rays always aim from this position toward world origin.</div>
+      ) : null}
+    </div>
+  );
+}
+
+function LightCurvePinFields({ light, viewportApi }: { light: LightObject; viewportApi: ViewportApi | null }) {
+  const objects = useAppStore((state) => state.objects);
+  const activePick = useAppStore((state) => state.ui.lightCurveSourcePick);
+  const setPinEnabled = useAppStore((state) => state.setLightCurvePinEnabled);
+  const beginSourcePick = useAppStore((state) => state.beginLightCurveSourcePick);
+  const beginParameterDrag = useAppStore((state) => state.beginLightCurveParameterDrag);
+  const commitParameterDrag = useAppStore((state) => state.commitLightCurveParameterDrag);
+  const setParameter = useAppStore((state) => state.setLightCurveParameter);
+  const setAnimation = useAppStore((state) => state.setLightCurveAnimation);
+  const [recording, setRecording] = useState(false);
+  const [recordingProgress, setRecordingProgress] = useState(0);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
+  const curve = light.curvePin.curveId
+    ? objects.find(
+        (object): object is PlotObject => object.id === light.curvePin.curveId && isParametricCurvePlot(object),
+      )
+    : null;
+  const bounds = curve ? curveParameterBounds(curve) : null;
+  const isActive = activePick?.lightId === light.id;
+  const canAnimate = !!curve && !!bounds && curve.equation.source.parseStatus === 'ok';
+
+  const recordLoop = () => {
+    if (!viewportApi || recording) return;
+    setRecordingError(null);
+    setRecording(true);
+    setRecordingProgress(0);
+    void viewportApi.recordLightCurveGif(light.id, setRecordingProgress)
+      .catch((error) => {
+        setRecordingError(error instanceof Error ? error.message : 'Failed to export light loop');
+      })
+      .finally(() => setRecording(false));
+  };
+
+  return (
+    <div className="light-curve-pin">
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={light.curvePin.enabled}
+          disabled={recording}
+          onChange={(event) => setPinEnabled(light.id, event.target.checked)}
+        />
+        Pin to curve
+      </label>
+      {light.curvePin.enabled ? (
+        <>
+          <button
+            type="button"
+            className={`intersection-source-button${curve ? ' intersection-source-button--filled' : ''}${isActive ? ' intersection-source-button--active' : ''}`}
+            aria-label="Choose parameterized curve"
+            aria-pressed={isActive}
+            disabled={recording}
+            onClick={() => beginSourcePick(light.id)}
+          >
+            {curve ? (
+              <div className="object-card object-card--source-summary">
+                <ObjectCardSummary object={curve} />
+              </div>
+            ) : (
+              <span className="intersection-source-button__placeholder">
+                Click here, and then click parameterized curve to pin light to
+              </span>
+            )}
+          </button>
+          {curve && bounds ? (
+            <div className="equation-parameter light-curve-pin__parameter">
+              <div className="equation-parameter__header">
+                <span>t</span>
+                <span>{curveTraversalMode(curve) === 'wrap' ? 'Loop' : 'Bounce'}</span>
+              </div>
+              <div className="parameter-editor__value">
+                <RangeField
+                  label="Value"
+                  min={bounds.min}
+                  max={bounds.max}
+                  step={Math.max((bounds.max - bounds.min) / 200, Number.EPSILON)}
+                  value={light.curvePin.parameterValue}
+                  disabled={recording}
+                  onDragStart={() => beginParameterDrag(light.id)}
+                  onDragEnd={() => commitParameterDrag(light.id)}
+                  onChange={(value) => setParameter(light.id, value)}
+                />
+                <button
+                  type="button"
+                  className="parameter-editor__play"
+                  title={light.curvePin.animating ? 'Pause pinned light' : 'Animate pinned light along curve'}
+                  aria-label={light.curvePin.animating ? 'Pause pinned light' : 'Animate pinned light'}
+                  aria-pressed={light.curvePin.animating}
+                  disabled={recording || (!light.curvePin.animating && !canAnimate)}
+                  onClick={() => setAnimation(light.id, { animating: !light.curvePin.animating })}
+                >
+                  {light.curvePin.animating ? '⏸' : '▶'}
+                </button>
+              </div>
+              {light.curvePin.animating || recording ? (
+                <>
+                  <RangeField
+                    label="t speed"
+                    min={MIN_PARAMETER_ANIMATION_SPEED}
+                    max={MAX_PARAMETER_ANIMATION_SPEED}
+                    step={0.01}
+                    value={light.curvePin.animationSpeed ?? DEFAULT_PARAMETER_ANIMATION_SPEED}
+                    disabled={recording}
+                    onChange={(animationSpeed) => setAnimation(light.id, { animationSpeed })}
+                  />
+                  <button
+                    type="button"
+                    className="parameter-gif-export"
+                    disabled={!viewportApi || recording || !canAnimate}
+                    aria-live="polite"
+                    onClick={recordLoop}
+                  >
+                    {recording ? `Exporting loop ${Math.round(recordingProgress * 100)}%` : 'Record loop'}
+                  </button>
+                  {recording ? (
+                    <progress
+                      className="parameter-gif-export__progress"
+                      aria-label={`${light.name} GIF export progress`}
+                      max={1}
+                      value={recordingProgress}
+                    />
+                  ) : null}
+                  {recordingError ? <div className="inspector-note" role="alert">{recordingError}</div> : null}
+                </>
+              ) : null}
+            </div>
+          ) : null}
+        </>
+      ) : null}
     </div>
   );
 }
@@ -503,55 +647,6 @@ function CollapsibleSection({
       </button>
       {open ? <div className="collapsible__body">{children}</div> : null}
     </div>
-  );
-}
-
-function SunAngleFields({
-  direction,
-  onChange,
-}: {
-  direction: { x: number; y: number; z: number };
-  onChange: (direction: { x: number; y: number; z: number }) => void;
-}) {
-  // The sliders describe where the light comes FROM (like a sun position);
-  // the stored vector is the travel direction, i.e. its negation.
-  const length = Math.hypot(direction.x, direction.y, direction.z) || 1;
-  const sourceX = -direction.x / length;
-  const sourceY = -direction.y / length;
-  const sourceZ = -direction.z / length;
-  const elevationDeg = (Math.asin(Math.min(1, Math.max(-1, sourceZ))) * 180) / Math.PI;
-  const azimuthDeg = ((Math.atan2(sourceY, sourceX) * 180) / Math.PI + 360) % 360;
-
-  const applyAngles = (nextAzimuthDeg: number, nextElevationDeg: number) => {
-    const azimuth = (nextAzimuthDeg * Math.PI) / 180;
-    const elevation = (Math.min(89, Math.max(-89, nextElevationDeg)) * Math.PI) / 180;
-    const cosElevation = Math.cos(elevation);
-    onChange({
-      x: -(cosElevation * Math.cos(azimuth)),
-      y: -(cosElevation * Math.sin(azimuth)),
-      z: -Math.sin(elevation),
-    });
-  };
-
-  return (
-    <>
-      <RangeField
-        label="Sun azimuth (°)"
-        min={0}
-        max={360}
-        step={1}
-        value={Math.round(azimuthDeg)}
-        onChange={(v) => applyAngles(v, elevationDeg)}
-      />
-      <RangeField
-        label="Sun elevation (°)"
-        min={-89}
-        max={89}
-        step={1}
-        value={Math.round(elevationDeg)}
-        onChange={(v) => applyAngles(azimuthDeg, v)}
-      />
-    </>
   );
 }
 
@@ -996,24 +1091,6 @@ function EquationParameterEditor({ plot, viewportApi }: { plot: PlotObject; view
         );
       })}
     </div>
-  );
-}
-
-function DirectionalLightObjectFields({ light }: { light: Extract<SceneObject, { type: 'directional_light' }> }) {
-  const updateDirectionalLight = useAppStore((s) => s.updateDirectionalLight);
-  return (
-    <>
-      <SunAngleFields
-        direction={light.direction}
-        onChange={(direction) => updateDirectionalLight(light.id, { direction })}
-      />
-      <NumberTriplet
-        label="Direction (points toward scene)"
-        value={light.direction}
-        onChange={(direction) => updateDirectionalLight(light.id, { direction })}
-      />
-      <div className="inspector-note">Directional vector uses “light rays travel in this direction” semantics (points toward the scene).</div>
-    </>
   );
 }
 

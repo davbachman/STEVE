@@ -6,6 +6,7 @@ import {
   MIN_PARAMETER_ANIMATION_SPEED,
   adaptStepForSpan,
   advanceAnimatedParameter,
+  advanceLoopingParameter,
   clampAnimationSpeed,
   discreteParameterStep,
   equationParameterValueContexts,
@@ -72,6 +73,17 @@ describe('advanceAnimatedParameter', () => {
       expect(value).toBeGreaterThanOrEqual(-10);
       expect(value).toBeLessThanOrEqual(10);
     }
+  });
+});
+
+describe('advanceLoopingParameter', () => {
+  it('always advances and wraps while preserving overshoot', () => {
+    expect(advanceLoopingParameter(parameter({ value: 0, min: 0, max: 10, animationSpeed: 0.5 }), 1)).toBe(5);
+    expect(advanceLoopingParameter(parameter({ value: 9, min: 0, max: 10, animationSpeed: 0.5 }), 0.5)).toBe(1.5);
+  });
+
+  it('leaves invalid ranges untouched', () => {
+    expect(advanceLoopingParameter(parameter({ value: 3, min: 3, max: 3 }), 1)).toBe(3);
   });
 });
 

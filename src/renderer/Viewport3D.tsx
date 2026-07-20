@@ -33,6 +33,8 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
   const plotJobs = useAppStore((s) => s.plotJobs);
   const intersectionSourcePick = useAppStore((s) => s.ui.intersectionSourcePick);
   const cancelIntersectionSourcePick = useAppStore((s) => s.cancelIntersectionSourcePick);
+  const lightCurveSourcePick = useAppStore((s) => s.ui.lightCurveSourcePick);
+  const cancelLightCurveSourcePick = useAppStore((s) => s.cancelLightCurveSourcePick);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -44,7 +46,6 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
       controller = new SceneController(canvas, setObjectDragging);
     } catch (err) {
       // The controller is created only after the canvas mounts, so initialization failures surface here.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setError(err instanceof Error ? err.message : 'Failed to initialize viewport');
       onApiReady?.(null);
       return;
@@ -109,13 +110,20 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
   }, [controllerReady]);
 
   useEffect(() => {
-    if (!intersectionSourcePick) return;
+    if (!intersectionSourcePick && !lightCurveSourcePick) return;
     const cancelOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') cancelIntersectionSourcePick();
+      if (event.key !== 'Escape') return;
+      cancelIntersectionSourcePick();
+      cancelLightCurveSourcePick();
     };
     window.addEventListener('keydown', cancelOnEscape);
     return () => window.removeEventListener('keydown', cancelOnEscape);
-  }, [cancelIntersectionSourcePick, intersectionSourcePick]);
+  }, [
+    cancelIntersectionSourcePick,
+    cancelLightCurveSourcePick,
+    intersectionSourcePick,
+    lightCurveSourcePick,
+  ]);
 
   const applyViewPreset = (preset: ViewPreset) => {
     controllerRef.current?.setViewPreset(preset);
@@ -133,12 +141,17 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
   return (
     <div
       ref={shellRef}
-      className={`viewport-shell${intersectionSourcePick ? ' viewport-shell--surface-pick' : ''}`}
+      className={`viewport-shell${intersectionSourcePick || lightCurveSourcePick ? ' viewport-shell--surface-pick' : ''}`}
     >
       <canvas ref={canvasRef} className="viewport-canvas" />
       {!error && controllerReady && intersectionSourcePick ? (
         <div className="viewport-pick-prompt" role="status" aria-live="polite">
           Click a surface for Surface {intersectionSourcePick.slot + 1} · Esc to cancel
+        </div>
+      ) : null}
+      {!error && controllerReady && lightCurveSourcePick ? (
+        <div className="viewport-pick-prompt" role="status" aria-live="polite">
+          Click a parameterized curve to pin the light · Esc to cancel
         </div>
       ) : null}
       {!error && controllerReady && objectDragging ? (

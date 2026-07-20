@@ -6,6 +6,7 @@ import type {
   DirectionalLightObject,
   HistorySnapshot,
   IntersectionObject,
+  LightObject,
   PlotObject,
   PointLightObject,
   PlotJobStatus,
@@ -18,7 +19,13 @@ import type {
   UUID,
 } from '../types/contracts';
 import { analyzeEquationText, analyzeGraphExpression } from '../math/classifier';
-import { isRenderableObject, isSurfacePlot } from '../types/guards';
+import {
+  clampCurveParameter,
+  curveParameterBounds,
+  pinnedCurveForLight,
+  resolvePinnedLightPosition,
+} from '../math/curvePinning';
+import { isParametricCurvePlot, isRenderableObject, isSurfacePlot } from '../types/guards';
 import {
   DEFAULT_DISCRETE_PARAMETER_COUNT,
   clampAnimationSpeed,
@@ -37,6 +44,7 @@ import {
   createDefaultSurface,
   createDirectionalLight,
   createPointLight,
+  directionTowardOrigin,
   MAX_TURNTABLE_SPEED,
   MIN_TURNTABLE_SPEED,
   defaultBounds,
@@ -54,6 +62,7 @@ interface AppStateShape {
   ui: {
     inspectorTab: 'object' | 'material' | 'scene';
     intersectionSourcePick: { intersectionId: UUID; slot: 0 | 1 } | null;
+    lightCurveSourcePick: { lightId: UUID } | null;
   };
   renderDiagnostics: RenderDiagnostics;
   plotJobs: Record<UUID, PlotJobStatus>;
@@ -70,6 +79,11 @@ interface AppStateShape {
     startValue: number;
     before: HistorySnapshot;
   } | null;
+  activeLightCurveParameterDrag: {
+    lightId: UUID;
+    startValue: number;
+    before: HistorySnapshot;
+  } | null;
 }
 
 interface AppActions {
@@ -82,6 +96,21 @@ interface AppActions {
   beginIntersectionSourcePick: (intersectionId: UUID, slot: 0 | 1) => void;
   cancelIntersectionSourcePick: () => void;
   setIntersectionSource: (intersectionId: UUID, slot: 0 | 1, surfaceId: UUID | null) => void;
+  setLightCurvePinEnabled: (lightId: UUID, enabled: boolean) => void;
+  beginLightCurveSourcePick: (lightId: UUID) => void;
+  cancelLightCurveSourcePick: () => void;
+  setLightCurveSource: (lightId: UUID, curveId: UUID | null) => void;
+  beginLightCurveParameterDrag: (lightId: UUID) => void;
+  commitLightCurveParameterDrag: (lightId: UUID) => void;
+  cancelLightCurveParameterDrag: () => void;
+  setLightCurveParameter: (lightId: UUID, value: number) => void;
+  setLightCurveAnimation: (
+    lightId: UUID,
+    patch: { animating?: boolean; animationSpeed?: number },
+  ) => void;
+  applyLightCurveAnimationValues: (
+    updates: ReadonlyArray<{ lightId: UUID; parameterValue: number }>,
+  ) => void;
   updateIntersectionCurveStyle: (id: UUID, patch: Partial<IntersectionObject['curveStyle']>) => void;
   updatePlotEquationText: (id: UUID, rawText: string) => void;
   updatePlotSpec: (id: UUID, updater: (spec: EquationSpec) => EquationSpec) => void;
@@ -164,6 +193,7 @@ function initialState(): AppStateShape {
     ui: {
       inspectorTab: 'object',
       intersectionSourcePick: null,
+      lightCurveSourcePick: null,
     },
     renderDiagnostics: defaultRenderDiagnostics(),
     plotJobs: {},
@@ -171,6 +201,7 @@ function initialState(): AppStateShape {
     historyFuture: [],
     activeObjectDragHistory: null,
     activeEquationParameterDrag: null,
+    activeLightCurveParameterDrag: null,
   };
 }
 
@@ -307,9 +338,60 @@ function coerceEquationSpec(existing: EquationSpec, rawText: string, forcedKind?
   return { ...existing, source, parameters: nextParameters };
 }
 
-function clearInvalidIntersectionSources(objects: SceneObject[]): SceneObject[] {
+function clearInvalidIntersectionSources(
+  objects: SceneObject[],
+  previousObjects: ReadonlyArray<SceneObject> = objects,
+): SceneObject[] {
   const surfacesById = new Set(objects.filter(isSurfacePlot).map((surface) => surface.id));
+  const curvesById = new Map(
+    objects.filter(isParametricCurvePlot).map((curve) => [curve.id, curve] as const),
+  );
   return objects.map((object) => {
+    if (isLightObject(object)) {
+      const curve = object.curvePin.curveId ? curvesById.get(object.curvePin.curveId) : null;
+      const bounds = curve ? curveParameterBounds(curve) : null;
+      const parameterValue = curve && bounds
+        ? clampCurveParameter(curve, object.curvePin.parameterValue) ?? object.curvePin.parameterValue
+        : object.curvePin.parameterValue;
+      const curveId = curve?.id ?? null;
+      const canAnimate = !!curve
+        && !!bounds
+        && curve.equation.source.parseStatus === 'ok';
+      const animating = object.curvePin.enabled && canAnimate ? object.curvePin.animating : false;
+      const sourceBecameInvalid = object.curvePin.enabled
+        && !!object.curvePin.curveId
+        && !canAnimate;
+      const previousLight = sourceBecameInvalid
+        ? previousObjects.find((candidate) => candidate.id === object.id)
+        : null;
+      const lastPinnedPosition = isLightObject(previousLight)
+        ? resolvePinnedLightPosition(previousLight, previousObjects)
+        : null;
+      if (
+        curveId === object.curvePin.curveId
+        && parameterValue === object.curvePin.parameterValue
+        && animating === object.curvePin.animating
+        && !lastPinnedPosition
+      ) {
+        return object;
+      }
+      const nextLight: LightObject = {
+        ...object,
+        curvePin: {
+          ...object.curvePin,
+          curveId,
+          parameterValue,
+          animating,
+        },
+      };
+      if (lastPinnedPosition) {
+        nextLight.position = lastPinnedPosition;
+        if (nextLight.type === 'directional_light') {
+          nextLight.direction = directionTowardOrigin(lastPinnedPosition);
+        }
+      }
+      return nextLight;
+    }
     if (object.type !== 'intersection') {
       return object;
     }
@@ -355,6 +437,12 @@ function ensureUniqueObjectIds(objects: SceneObject[]): SceneObject[] {
   });
 
   return uniqueObjects.map((object) => {
+    if (isLightObject(object)) {
+      const curveId = object.curvePin.curveId;
+      return curveId && ambiguousIds.has(curveId)
+        ? { ...object, curvePin: { ...object.curvePin, curveId: null, animating: false } }
+        : object;
+    }
     if (object.type !== 'intersection') return object;
     const [first, second] = object.sourceSurfaceIds;
     return {
@@ -365,6 +453,10 @@ function ensureUniqueObjectIds(objects: SceneObject[]): SceneObject[] {
       ],
     };
   });
+}
+
+function isLightObject(object: SceneObject | undefined | null): object is LightObject {
+  return object?.type === 'point_light' || object?.type === 'directional_light';
 }
 
 function cloneWithNewId(object: SceneObject, offsetPosition = true): SceneObject {
@@ -378,6 +470,9 @@ function cloneWithNewId(object: SceneObject, offsetPosition = true): SceneObject
     } else if (cloned.type === 'point_light' || cloned.type === 'directional_light') {
       cloned.position.x += 0.4;
       cloned.position.y += 0.4;
+      if (cloned.type === 'directional_light') {
+        cloned.direction = directionTowardOrigin(cloned.position);
+      }
     }
   }
   return cloned;
@@ -491,7 +586,6 @@ function normalizeImportedProject(project: ProjectFileV1): ProjectFileV1 {
     .map((result) => result.object)));
   if (!normalizedObjects.some((object) => object.type === 'directional_light') && normalizedScene.directional.enabled) {
     const migrated = createDirectionalLight(`Directional Light ${countDirectionalLights(normalizedObjects) + 1}`);
-    migrated.direction = { ...normalizedScene.directional.direction };
     migrated.color = normalizedScene.directional.color;
     migrated.intensity = Math.max(0, normalizedScene.directional.intensity);
     migrated.castShadows = normalizedScene.directional.castShadows;
@@ -518,6 +612,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       ...state.ui,
       inspectorTab: tab,
       intersectionSourcePick: tab === 'object' ? state.ui.intersectionSourcePick : null,
+      lightCurveSourcePick: tab === 'object' ? state.ui.lightCurveSourcePick : null,
     },
   })),
 
@@ -528,6 +623,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       ...state.ui,
       intersectionSourcePick: state.ui.intersectionSourcePick?.intersectionId === id
         ? state.ui.intersectionSourcePick
+        : null,
+      lightCurveSourcePick: state.ui.lightCurveSourcePick?.lightId === id
+        ? state.ui.lightCurveSourcePick
         : null,
     },
   })),
@@ -549,7 +647,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...state,
         objects: [...state.objects, actualPlot],
         selectedId: actualPlot.id,
-        ui: { ...state.ui, intersectionSourcePick: null },
+        ui: { ...state.ui, intersectionSourcePick: null, lightCurveSourcePick: null },
         historyPast: past,
         historyFuture: [],
       };
@@ -562,7 +660,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...state,
         objects: [...state.objects, intersection],
         selectedId: intersection.id,
-        ui: { ...state.ui, inspectorTab: 'object', intersectionSourcePick: null },
+        ui: { ...state.ui, inspectorTab: 'object', intersectionSourcePick: null, lightCurveSourcePick: null },
         historyPast: [...state.historyPast, snapshotOf(state)],
         historyFuture: [],
       };
@@ -575,7 +673,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...state,
         objects: [...state.objects, light],
         selectedId: light.id,
-        ui: { ...state.ui, intersectionSourcePick: null },
+        ui: { ...state.ui, intersectionSourcePick: null, lightCurveSourcePick: null },
         historyPast: [...state.historyPast, snapshotOf(state)],
         historyFuture: [],
       };
@@ -588,7 +686,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...state,
         objects: [...state.objects, light],
         selectedId: light.id,
-        ui: { ...state.ui, inspectorTab: 'object', intersectionSourcePick: null },
+        ui: { ...state.ui, inspectorTab: 'object', intersectionSourcePick: null, lightCurveSourcePick: null },
         historyPast: [...state.historyPast, snapshotOf(state)],
         historyFuture: [],
       };
@@ -608,7 +706,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         ...state,
         selectedId: intersectionId,
-        ui: { ...state.ui, inspectorTab: 'object', intersectionSourcePick: nextPick },
+        ui: {
+          ...state.ui,
+          inspectorTab: 'object',
+          intersectionSourcePick: nextPick,
+          lightCurveSourcePick: null,
+        },
       };
     }),
 
@@ -650,6 +753,184 @@ export const useAppStore = create<AppState>((set, get) => ({
       };
     }),
 
+  setLightCurvePinEnabled: (lightId, enabled) =>
+    set((state) => {
+      const idx = state.objects.findIndex((object) => object.id === lightId && isLightObject(object));
+      if (idx === -1) return state;
+      const light = state.objects[idx] as LightObject;
+      if (light.curvePin.enabled === enabled) return state;
+      const pinnedPosition = !enabled ? resolvePinnedLightPosition(light, state.objects) : null;
+      const next = produce(state, (draft) => {
+        const draftLight = draft.objects[idx] as LightObject;
+        draftLight.curvePin.enabled = enabled;
+        if (!enabled) draftLight.curvePin.animating = false;
+        if (pinnedPosition) {
+          draftLight.position = pinnedPosition;
+          if (draftLight.type === 'directional_light') {
+            draftLight.direction = directionTowardOrigin(pinnedPosition);
+          }
+        }
+      });
+      return {
+        ...next,
+        ui: {
+          ...next.ui,
+          lightCurveSourcePick: enabled ? next.ui.lightCurveSourcePick : null,
+        },
+        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyFuture: [],
+      };
+    }),
+
+  beginLightCurveSourcePick: (lightId) =>
+    set((state) => {
+      const light = state.objects.find((object) => object.id === lightId && isLightObject(object));
+      if (!isLightObject(light) || !light.curvePin.enabled) return state;
+      const nextPick = state.ui.lightCurveSourcePick?.lightId === lightId ? null : { lightId };
+      return {
+        ...state,
+        selectedId: lightId,
+        ui: {
+          ...state.ui,
+          inspectorTab: 'object',
+          intersectionSourcePick: null,
+          lightCurveSourcePick: nextPick,
+        },
+      };
+    }),
+
+  cancelLightCurveSourcePick: () =>
+    set((state) => state.ui.lightCurveSourcePick
+      ? { ...state, ui: { ...state.ui, lightCurveSourcePick: null } }
+      : state),
+
+  setLightCurveSource: (lightId, curveId) =>
+    set((state) => {
+      const idx = state.objects.findIndex((object) => object.id === lightId && isLightObject(object));
+      if (idx === -1) return state;
+      const light = state.objects[idx] as LightObject;
+      const clearsActivePick = state.ui.lightCurveSourcePick?.lightId === lightId;
+      if (light.curvePin.curveId === curveId) {
+        return clearsActivePick
+          ? { ...state, ui: { ...state.ui, lightCurveSourcePick: null } }
+          : state;
+      }
+      const curve = curveId
+        ? state.objects.find(
+            (object): object is PlotObject => object.id === curveId && isParametricCurvePlot(object),
+          )
+        : null;
+      if (curveId && !isParametricCurvePlot(curve)) return state;
+      const nextValue = curve?.equation.kind === 'parametric_curve'
+        ? curve.equation.tDomain.min
+        : light.curvePin.parameterValue;
+      const next = produce(state, (draft) => {
+        const draftLight = draft.objects[idx] as LightObject;
+        draftLight.curvePin.curveId = curve?.id ?? null;
+        draftLight.curvePin.parameterValue = nextValue;
+        draftLight.curvePin.animating = false;
+      });
+      return {
+        ...next,
+        ui: clearsActivePick ? { ...next.ui, lightCurveSourcePick: null } : next.ui,
+        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyFuture: [],
+      };
+    }),
+
+  beginLightCurveParameterDrag: (lightId) =>
+    set((state) => {
+      const light = state.objects.find((object) => object.id === lightId && isLightObject(object));
+      if (!isLightObject(light)) return state;
+      if (state.activeLightCurveParameterDrag?.lightId === lightId) return state;
+      return {
+        ...state,
+        activeLightCurveParameterDrag: {
+          lightId,
+          startValue: light.curvePin.parameterValue,
+          before: snapshotOf(state),
+        },
+      };
+    }),
+
+  commitLightCurveParameterDrag: (lightId) =>
+    set((state) => {
+      const active = state.activeLightCurveParameterDrag;
+      if (!active) return state;
+      if (active.lightId !== lightId) return { ...state, activeLightCurveParameterDrag: null };
+      const light = state.objects.find((object) => object.id === lightId && isLightObject(object));
+      if (!isLightObject(light) || light.curvePin.parameterValue === active.startValue) {
+        return { ...state, activeLightCurveParameterDrag: null };
+      }
+      return {
+        ...state,
+        activeLightCurveParameterDrag: null,
+        historyPast: [...state.historyPast, active.before],
+        historyFuture: [],
+      };
+    }),
+
+  cancelLightCurveParameterDrag: () =>
+    set((state) => state.activeLightCurveParameterDrag
+      ? { ...state, activeLightCurveParameterDrag: null }
+      : state),
+
+  setLightCurveParameter: (lightId, value) =>
+    set((state) => {
+      const idx = state.objects.findIndex((object) => object.id === lightId && isLightObject(object));
+      if (idx === -1) return state;
+      const light = state.objects[idx] as LightObject;
+      const curve = pinnedCurveForLight(light, state.objects);
+      const nextValue = curve ? clampCurveParameter(curve, value) : null;
+      if (nextValue === null || nextValue === light.curvePin.parameterValue) return state;
+      const next = produce(state, (draft) => {
+        (draft.objects[idx] as LightObject).curvePin.parameterValue = nextValue;
+      });
+      if (state.activeLightCurveParameterDrag?.lightId === lightId) return next;
+      return {
+        ...next,
+        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyFuture: [],
+      };
+    }),
+
+  setLightCurveAnimation: (lightId, patch) =>
+    set((state) => {
+      const idx = state.objects.findIndex((object) => object.id === lightId && isLightObject(object));
+      if (idx === -1) return state;
+      const light = state.objects[idx] as LightObject;
+      const curve = pinnedCurveForLight(light, state.objects);
+      if (
+        patch.animating === true
+        && (!curve || !curveParameterBounds(curve) || curve.equation.source.parseStatus !== 'ok')
+      ) {
+        return state;
+      }
+      if (!curve && patch.animating !== false) return state;
+      return produce(state, (draft) => {
+        const pin = (draft.objects[idx] as LightObject).curvePin;
+        if (patch.animating !== undefined) pin.animating = patch.animating;
+        if (patch.animationSpeed !== undefined) pin.animationSpeed = clampAnimationSpeed(patch.animationSpeed);
+      });
+    }),
+
+  applyLightCurveAnimationValues: (updates) =>
+    set((state) => {
+      if (updates.length === 0) return state;
+      return produce(state, (draft) => {
+        for (const update of updates) {
+          const light = draft.objects.find(
+            (object): object is LightObject => object.id === update.lightId && isLightObject(object),
+          );
+          if (!light) continue;
+          const source = state.objects.find((object) => object.id === light.curvePin.curveId);
+          if (!isParametricCurvePlot(source)) continue;
+          const value = clampCurveParameter(source, update.parameterValue);
+          if (value !== null) light.curvePin.parameterValue = value;
+        }
+      });
+    }),
+
   updateIntersectionCurveStyle: (id, patch) =>
     set((state) => {
       const idx = state.objects.findIndex((object) => object.id === id && object.type === 'intersection');
@@ -683,7 +964,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       return {
         ...next,
-        objects: clearInvalidIntersectionSources(next.objects),
+        objects: clearInvalidIntersectionSources(next.objects, state.objects),
         historyPast: [...state.historyPast, snapshotOf(state)],
         historyFuture: [],
       };
@@ -699,7 +980,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       const nextWithValidReferences = {
         ...next,
-        objects: clearInvalidIntersectionSources(next.objects),
+        objects: clearInvalidIntersectionSources(next.objects, state.objects),
       };
       if (state.activeEquationParameterDrag?.plotId === id) {
         return nextWithValidReferences;
@@ -768,6 +1049,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const next = produce(state, (draft) => {
         const light = draft.objects[idx] as DirectionalLightObject;
         Object.assign(light, patch);
+        light.direction = directionTowardOrigin(light.position);
       });
       return {
         ...next,
@@ -830,14 +1112,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       const idx = state.objects.findIndex((obj) => obj.id === id);
       if (idx === -1) return state;
       if (state.objects[idx].type === 'intersection') return state;
+      if (isLightObject(state.objects[idx]) && pinnedCurveForLight(state.objects[idx], state.objects)) return state;
       const currentPos = getObjectPosition(state.objects[idx]);
       if (positionsEqual(currentPos, pos)) return state;
       const next = produce(state, (draft) => {
         const obj = draft.objects[idx];
         if (obj.type === 'plot') {
           obj.transform.position = { ...pos };
-        } else if (obj.type === 'point_light' || obj.type === 'directional_light') {
+        } else if (obj.type === 'point_light') {
           obj.position = { ...pos };
+        } else if (obj.type === 'directional_light') {
+          obj.position = { ...pos };
+          obj.direction = directionTowardOrigin(pos);
         }
       });
       return next;
@@ -847,6 +1133,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => {
       const obj = state.objects.find((candidate) => candidate.id === id);
       if (!obj || obj.type === 'intersection') return state;
+      if (isLightObject(obj) && pinnedCurveForLight(obj, state.objects)) return state;
       const startPosition = getObjectPosition(obj);
       if (
         state.activeObjectDragHistory &&
@@ -973,12 +1260,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!state.selectedId) return state;
       const objects = clearInvalidIntersectionSources(
         state.objects.filter((obj) => obj.id !== state.selectedId),
+        state.objects,
       );
       return {
         ...state,
         objects,
         selectedId: null,
-        ui: { ...state.ui, intersectionSourcePick: null },
+        ui: { ...state.ui, intersectionSourcePick: null, lightCurveSourcePick: null },
         historyPast: [...state.historyPast, snapshotOf(state)],
         historyFuture: [],
       };
@@ -987,7 +1275,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   deleteObject: (id) =>
     set((state) => {
       if (!state.objects.some((obj) => obj.id === id)) return state;
-      const objects = clearInvalidIntersectionSources(state.objects.filter((obj) => obj.id !== id));
+      const objects = clearInvalidIntersectionSources(
+        state.objects.filter((obj) => obj.id !== id),
+        state.objects,
+      );
       return {
         ...state,
         objects,
@@ -997,6 +1288,9 @@ export const useAppStore = create<AppState>((set, get) => ({
           intersectionSourcePick: state.ui.intersectionSourcePick?.intersectionId === id
             ? null
             : state.ui.intersectionSourcePick,
+          lightCurveSourcePick: state.ui.lightCurveSourcePick?.lightId === id
+            ? null
+            : state.ui.lightCurveSourcePick,
         },
         historyPast: [...state.historyPast, snapshotOf(state)],
         historyFuture: [],
@@ -1101,7 +1395,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       historyFuture: [],
       activeObjectDragHistory: null,
       activeEquationParameterDrag: null,
-      ui: { ...state.ui, intersectionSourcePick: null },
+      activeLightCurveParameterDrag: null,
+      ui: { ...state.ui, intersectionSourcePick: null, lightCurveSourcePick: null },
     }));
   },
 
@@ -1115,11 +1410,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         ...base,
         clipboardObject: state.clipboardObject,
-        ui: { ...state.ui, intersectionSourcePick: null },
+        ui: { ...state.ui, intersectionSourcePick: null, lightCurveSourcePick: null },
         historyPast: state.historyPast.slice(0, -1),
         historyFuture: [snapshotOf(state), ...state.historyFuture],
         activeObjectDragHistory: null,
         activeEquationParameterDrag: null,
+        activeLightCurveParameterDrag: null,
       };
     }),
 
@@ -1131,11 +1427,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         ...base,
         clipboardObject: state.clipboardObject,
-        ui: { ...state.ui, intersectionSourcePick: null },
+        ui: { ...state.ui, intersectionSourcePick: null, lightCurveSourcePick: null },
         historyPast: [...state.historyPast, snapshotOf(state)],
         historyFuture: state.historyFuture.slice(1),
         activeObjectDragHistory: null,
         activeEquationParameterDrag: null,
+        activeLightCurveParameterDrag: null,
       };
     }),
 
@@ -1404,21 +1701,38 @@ function normalizePointLightObjectImport(record: Record<string, unknown>, index:
     intensity: Math.max(0, asFiniteNumber(record.intensity) ?? fallback.intensity),
     range: Math.max(0, asFiniteNumber(record.range) ?? fallback.range),
     castShadows: asBoolean(record.castShadows) ?? fallback.castShadows,
+    curvePin: normalizeLightCurvePin(asRecord(record.curvePin), fallback.curvePin),
   };
 }
 
 function normalizeDirectionalLightObjectImport(record: Record<string, unknown>, index: number): DirectionalLightObject {
   const fallback = createDirectionalLight(`Imported Directional Light ${index + 1}`);
+  const position = normalizeVec3(record.position, fallback.position);
   return {
     ...fallback,
     id: asNonEmptyString(record.id) ?? fallback.id,
     name: asNonEmptyString(record.name) ?? fallback.name,
     visible: asBoolean(record.visible) ?? fallback.visible,
-    position: normalizeVec3(record.position, fallback.position),
-    direction: normalizeVec3(record.direction, fallback.direction),
+    position,
+    direction: directionTowardOrigin(position),
     color: asNonEmptyString(record.color) ?? fallback.color,
     intensity: Math.max(0, asFiniteNumber(record.intensity) ?? fallback.intensity),
     castShadows: asBoolean(record.castShadows) ?? fallback.castShadows,
+    curvePin: normalizeLightCurvePin(asRecord(record.curvePin), fallback.curvePin),
+  };
+}
+
+function normalizeLightCurvePin(
+  input: Record<string, unknown> | null,
+  fallback: LightObject['curvePin'],
+): LightObject['curvePin'] {
+  if (!input) return { ...fallback };
+  return {
+    enabled: asBoolean(input.enabled) ?? fallback.enabled,
+    curveId: asNonEmptyString(input.curveId),
+    parameterValue: asFiniteNumber(input.parameterValue) ?? fallback.parameterValue,
+    animating: asBoolean(input.animating) ?? fallback.animating,
+    animationSpeed: clampAnimationSpeed(asFiniteNumber(input.animationSpeed) ?? fallback.animationSpeed),
   };
 }
 

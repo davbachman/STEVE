@@ -1168,6 +1168,22 @@ input[type='color'] {
   padding: 0.42rem 0.5rem;
 }
 
+.light-curve-pin {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.light-curve-pin__parameter {
+  margin-top: 0.1rem;
+}
+
+.light-curve-pin__parameter .equation-parameter__header > :last-child {
+  color: #8fa4bf;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
 .checkbox-row {
   display: flex !important;
   align-items: center;

@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  createDefaultCurve,
+  createDirectionalLight,
   createDefaultGraph,
   createDefaultImplicit,
   createDefaultIntersection,
   createDefaultSurface,
+  createPointLight,
   defaultRenderSettings,
   defaultSceneSettings,
 } from '../../state/defaults';
@@ -31,6 +34,34 @@ function idlePlotJob(meshVersion = 0): PlotJobStatus {
 }
 
 describe('renderSnapshot helpers', () => {
+  it('resolves pinned light positions and directional aim from the source curve', () => {
+    const curve = createDefaultCurve('Path');
+    if (curve.equation.kind !== 'parametric_curve') throw new Error('Expected a parametric curve');
+    curve.equation.tDomain = { min: 0, max: 2, samples: 20 };
+    curve.equation.source.rawText = '(t, 2*t, 3*t)';
+    curve.transform.position = { x: 1, y: -1, z: 0.5 };
+    const point = createPointLight('Point');
+    const directional = createDirectionalLight('Directional');
+    for (const light of [point, directional]) {
+      light.curvePin = { ...light.curvePin, enabled: true, curveId: curve.id, parameterValue: 1 };
+    }
+
+    const snapshot = createRendererSceneSnapshot({
+      scene: defaultSceneSettings(),
+      render: defaultRenderSettings(),
+      objects: [curve, point, directional],
+      selectedId: null,
+      plotJobs: {},
+    }, null);
+
+    expect(snapshot.pointLights[0].light.position).toEqual({ x: 2, y: 1, z: 3.5 });
+    expect(snapshot.directionalLights[0].light.position).toEqual({ x: 2, y: 1, z: 3.5 });
+    const direction = snapshot.directionalLights[0].light.direction;
+    expect(direction.x).toBeCloseTo(-2 / Math.sqrt(17.25));
+    expect(direction.y).toBeCloseTo(-1 / Math.sqrt(17.25));
+    expect(direction.z).toBeCloseTo(-3.5 / Math.sqrt(17.25));
+  });
+
   it('classifies opacity into hidden, transparent, and opaque bands', () => {
     expect(classifyPlotOpacity(0)).toBe('hidden');
     expect(classifyPlotOpacity(INTERACTIVE_RENDERABLE_OPACITY_EPSILON)).toBe('hidden');

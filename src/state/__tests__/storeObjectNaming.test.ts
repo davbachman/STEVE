@@ -21,10 +21,11 @@ describe('store object naming', () => {
     useAppStore.getState().newProject();
   });
 
-  it('starts a new project with the default directional light', () => {
+  it('starts a new project with ambient light only', () => {
     expect(plotsByName()).toEqual([]);
     expect(lightsByName()).toEqual([]);
-    expect(directionalLightsByName()).toEqual(['Directional Light 1']);
+    expect(directionalLightsByName()).toEqual([]);
+    expect(useAppStore.getState().scene.ambient.enabled).toBe(true);
   });
 
   it('increments names by object kind instead of by total object count', () => {
@@ -53,7 +54,6 @@ describe('store object naming', () => {
     expect(directionalLightsByName()).toEqual([
       'Directional Light 1',
       'Directional Light 2',
-      'Directional Light 3',
     ]);
   });
 });

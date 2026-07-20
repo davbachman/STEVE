@@ -242,6 +242,7 @@ describe('RangeField numeric entry', () => {
       exportPng: vi.fn(async () => undefined),
       recordTurntableGif,
       recordParameterGif: vi.fn(async () => undefined),
+      recordLightCurveGif: vi.fn(async () => undefined),
       setViewPreset: vi.fn(),
       frameObject: vi.fn(),
     };
@@ -306,6 +307,7 @@ describe('RangeField numeric entry', () => {
       exportPng: vi.fn(async () => undefined),
       recordTurntableGif: vi.fn(async () => undefined),
       recordParameterGif,
+      recordLightCurveGif: vi.fn(async () => undefined),
       setViewPreset: vi.fn(),
       frameObject: vi.fn(),
     };
@@ -639,12 +641,13 @@ describe('RangeField numeric entry', () => {
     expect(content?.textContent).not.toContain('Position');
   });
 
-  it('splits directional position and direction from directional appearance', () => {
+  it('splits directional placement from directional appearance', () => {
     act(() => {
       const store = useAppStore.getState();
       store.newProject();
+      store.addDirectionalLight();
       const light = useAppStore.getState().objects.find((object) => object.type === 'directional_light');
-      if (!light) throw new Error('Expected default directional light');
+      if (!light) throw new Error('Expected directional light');
       store.selectObject(light.id);
       store.setInspectorTab('object');
     });
@@ -655,9 +658,10 @@ describe('RangeField numeric entry', () => {
 
     let content = container.querySelector('.inspector-content');
     expect(content?.textContent).toContain('Position');
-    expect(content?.textContent).toContain('Sun azimuth');
-    expect(content?.textContent).toContain('Sun elevation');
-    expect(content?.textContent).toContain('Direction (points toward scene)');
+    expect(content?.textContent).toContain('always aim from this position toward world origin');
+    expect(content?.textContent).not.toContain('Sun azimuth');
+    expect(content?.textContent).not.toContain('Sun elevation');
+    expect(content?.textContent).not.toContain('Direction (points toward scene)');
     expect(content?.textContent).not.toContain('Intensity');
     expect(content?.textContent).not.toContain('Cast shadows');
 
@@ -668,6 +672,106 @@ describe('RangeField numeric entry', () => {
     expect(content?.textContent).toContain('Cast shadows');
     expect(content?.textContent).not.toContain('Position');
     expect(content?.textContent).not.toContain('Direction (points toward scene)');
+  });
+
+  it('offers Pin to curve in both point and directional light object menus', () => {
+    act(() => {
+      const store = useAppStore.getState();
+      store.newProject();
+      store.addPointLight();
+      store.setInspectorTab('object');
+    });
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => root?.render(<InspectorPanel />));
+
+    const pinCheckbox = () => Array.from(container?.querySelectorAll('label.checkbox-row') ?? []).find(
+      (label) => label.textContent?.includes('Pin to curve'),
+    )?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(pinCheckbox()).toBeInstanceOf(HTMLInputElement);
+
+    act(() => {
+      const store = useAppStore.getState();
+      store.newProject();
+      store.addDirectionalLight();
+      store.setInspectorTab('object');
+    });
+    expect(pinCheckbox()).toBeInstanceOf(HTMLInputElement);
+  });
+
+  it('selects a curve, animates the pinned value, and records its loop', async () => {
+    let curveId = '';
+    let lightId = '';
+    act(() => {
+      const store = useAppStore.getState();
+      store.newProject();
+      store.addPlot('curve');
+      curveId = useAppStore.getState().selectedId ?? '';
+      store.addPointLight();
+      lightId = useAppStore.getState().selectedId ?? '';
+      store.setInspectorTab('object');
+    });
+    let finishRecording: (() => void) | null = null;
+    const recordLightCurveGif = vi.fn((
+      _lightId: string,
+      onProgress?: (progress: number) => void,
+    ) => {
+      onProgress?.(0.5);
+      return new Promise<void>((resolve) => {
+        finishRecording = resolve;
+      });
+    });
+    const viewportApi: ViewportApi = {
+      exportPng: vi.fn(async () => undefined),
+      recordTurntableGif: vi.fn(async () => undefined),
+      recordParameterGif: vi.fn(async () => undefined),
+      recordLightCurveGif,
+      setViewPreset: vi.fn(),
+      frameObject: vi.fn(),
+    };
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => root?.render(<InspectorPanel viewportApi={viewportApi} />));
+
+    const pinCheckbox = Array.from(container.querySelectorAll('label.checkbox-row')).find(
+      (label) => label.textContent?.includes('Pin to curve'),
+    )?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    act(() => pinCheckbox?.click());
+    const chooseButton = container.querySelector<HTMLButtonElement>('[aria-label="Choose parameterized curve"]');
+    expect(chooseButton?.textContent).toContain('Click here, and then click parameterized curve to pin light to');
+    act(() => chooseButton?.click());
+    expect(useAppStore.getState().ui.lightCurveSourcePick).toEqual({ lightId });
+
+    act(() => useAppStore.getState().setLightCurveSource(lightId, curveId));
+    expect(container.querySelector('.light-curve-pin .object-card__name')?.textContent).toBe('Curve 1');
+    expect(container.textContent).not.toContain('Position');
+    const valueSlider = container.querySelector<HTMLInputElement>('.light-curve-pin__parameter input[type="range"]');
+    expect(valueSlider?.min).toBe('-12');
+    expect(valueSlider?.max).toBe('12');
+    const playButton = container.querySelector<HTMLButtonElement>('[aria-label="Animate pinned light"]');
+    act(() => playButton?.click());
+    const animatedLight = useAppStore.getState().objects.find((object) => object.id === lightId);
+    expect(animatedLight?.type === 'point_light' ? animatedLight.curvePin.animating : false).toBe(true);
+    expect(Array.from(container.querySelectorAll('.range-field')).some(
+      (field) => field.firstElementChild?.textContent === 't speed',
+    )).toBe(true);
+
+    const recordButton = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
+      (button) => button.textContent === 'Record loop',
+    );
+    act(() => recordButton?.click());
+    expect(recordLightCurveGif).toHaveBeenCalledWith(lightId, expect.any(Function));
+    expect(container.textContent).toContain('Exporting loop 50%');
+    expect(container.querySelector(`progress[aria-label="Point Light 1 GIF export progress"]`)).toBeInstanceOf(HTMLProgressElement);
+
+    await act(async () => {
+      finishRecording?.();
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain('Record loop');
   });
 });
 

@@ -1,4 +1,5 @@
 import type { AppState } from '../state/store';
+import { resolvePinnedLight } from '../math/curvePinning';
 import type {
   DirectionalLightObject,
   PlotJobStatus,
@@ -134,10 +135,15 @@ export function createRendererSceneSnapshot(
   state: Pick<AppState, 'scene' | 'render' | 'objects' | 'selectedId' | 'plotJobs'>,
   camera: RendererCameraLike | null,
 ): RendererSceneSnapshot {
+  const resolvedObjects = state.objects.map((object) => (
+    object.type === 'point_light' || object.type === 'directional_light'
+      ? resolvePinnedLight(object, state.objects)
+      : object
+  ));
   return {
     scene: state.scene,
     render: state.render,
-    objects: state.objects,
+    objects: resolvedObjects,
     selectedId: state.selectedId,
     plotJobs: state.plotJobs,
     plots: state.objects
@@ -157,10 +163,10 @@ export function createRendererSceneSnapshot(
           showsWireframe: shouldShowPlotWireframe(plot),
         };
       }),
-    pointLights: state.objects
+    pointLights: resolvedObjects
       .filter((object): object is PointLightObject => object.type === 'point_light')
       .map((light) => ({ light })),
-    directionalLights: state.objects
+    directionalLights: resolvedObjects
       .filter((object): object is DirectionalLightObject => object.type === 'directional_light')
       .map((light) => ({ light })),
     camera: camera

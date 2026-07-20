@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createBlankPlot, createDefaultGraph } from '../defaults';
+import {
+  createBlankPlot,
+  createDefaultCurve,
+  createDefaultGraph,
+  createDirectionalLight,
+  createPointLight,
+} from '../defaults';
 import { useAppStore } from '../store';
 
 function baseProject(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -219,9 +225,11 @@ describe('project import normalization', () => {
     expect(directional).toMatchObject({
       color: '#abcdef',
       intensity: 1.8,
-      direction: { x: 0.5, y: -0.2, z: -1 },
       castShadows: true,
     });
+    expect(directional?.direction.x).toBeCloseTo(-3 / Math.sqrt(43));
+    expect(directional?.direction.y).toBeCloseTo(3 / Math.sqrt(43));
+    expect(directional?.direction.z).toBeCloseTo(-5 / Math.sqrt(43));
   });
 
   it('drops legacy implicit iso values during import', () => {
@@ -262,5 +270,82 @@ describe('project import normalization', () => {
     expect(graph.equation.graphExpression).toBe(true);
     expect(graph.equation.source.rawText).toBe('x^2 - y^2');
     expect(graph.equation.source.classification?.label).toBe('Graph');
+  });
+
+  it('adds unpinned curve settings to legacy imported lights', () => {
+    const legacyLight = createPointLight('Legacy Light') as unknown as Record<string, unknown>;
+    delete legacyLight.curvePin;
+
+    useAppStore.getState().replaceProject(baseProject({ objects: [legacyLight] }) as never);
+    const light = useAppStore.getState().objects[0];
+    if (light?.type !== 'point_light') throw new Error('Expected imported point light');
+    expect(light.curvePin).toEqual({
+      enabled: false,
+      curveId: null,
+      parameterValue: 0,
+      animating: false,
+      animationSpeed: 0.25,
+    });
+  });
+
+  it('normalizes curve pin values and clears unusable imported animation states', () => {
+    const curve = createDefaultCurve('Imported Curve');
+    if (curve.equation.kind !== 'parametric_curve') throw new Error('Expected parametric curve');
+    curve.equation.tDomain = { min: -2, max: 3, samples: 40 };
+
+    const valid = createPointLight('Valid Pin');
+    valid.curvePin = {
+      enabled: true,
+      curveId: curve.id,
+      parameterValue: 99,
+      animating: true,
+      animationSpeed: 99,
+    };
+    const disabled = createDirectionalLight('Disabled Pin');
+    disabled.curvePin = {
+      enabled: false,
+      curveId: curve.id,
+      parameterValue: -99,
+      animating: true,
+      animationSpeed: -99,
+    };
+    const missing = createPointLight('Missing Pin');
+    missing.curvePin = {
+      enabled: true,
+      curveId: 'missing-curve',
+      parameterValue: 1,
+      animating: true,
+      animationSpeed: 0.5,
+    };
+
+    useAppStore.getState().replaceProject(baseProject({
+      objects: [curve, valid, disabled, missing],
+    }) as never);
+    const importedLights = useAppStore.getState().objects.filter(
+      (object) => object.type === 'point_light' || object.type === 'directional_light',
+    );
+    const validPin = importedLights.find((light) => light.name === 'Valid Pin')?.curvePin;
+    const disabledPin = importedLights.find((light) => light.name === 'Disabled Pin')?.curvePin;
+    const missingPin = importedLights.find((light) => light.name === 'Missing Pin')?.curvePin;
+
+    expect(validPin).toMatchObject({
+      enabled: true,
+      curveId: curve.id,
+      parameterValue: 3,
+      animating: true,
+      animationSpeed: 2,
+    });
+    expect(disabledPin).toMatchObject({
+      enabled: false,
+      curveId: curve.id,
+      parameterValue: -2,
+      animating: false,
+      animationSpeed: 0.02,
+    });
+    expect(missingPin).toMatchObject({
+      enabled: true,
+      curveId: null,
+      animating: false,
+    });
   });
 });

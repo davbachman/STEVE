@@ -27,6 +27,7 @@ describe('TopBar menus', () => {
       exportPng,
       recordTurntableGif: vi.fn(async () => undefined),
       recordParameterGif: vi.fn(async () => undefined),
+      recordLightCurveGif: vi.fn(async () => undefined),
       setViewPreset: vi.fn(),
       frameObject: vi.fn(),
     };

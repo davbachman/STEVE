@@ -1,15 +1,17 @@
 import { mat3, mat4, vec3, vec4 } from 'gl-matrix';
+import { curveParameterBounds, curveTraversalMode, pinnedCurveForLight } from '../math/curvePinning';
 import { downloadBlobFile } from '../persistence/projectFile';
 import type { AppState } from '../state/store';
 import { useAppStore } from '../state/store';
 import type {
   DirectionalLightObject,
+  LightObject,
   PlotObject,
   PointLightObject,
   RenderableObject,
   SceneObject,
 } from '../types/contracts';
-import { isRenderableObject, isSurfacePlot } from '../types/guards';
+import { isParametricCurvePlot, isRenderableObject, isSurfacePlot } from '../types/guards';
 import {
   classifyInteractiveShadowMode,
   createRendererSceneSnapshot,
@@ -29,7 +31,12 @@ import {
 } from './plotGeometry';
 import { setAnimationGifRecording } from './animationRecordingState';
 import { GifEncoderWorkerClient } from './GifEncoderWorkerClient';
-import { parameterValueForGifFrame, resolveParameterGifTiming } from './parameterGif';
+import {
+  parameterValueForGifFrame,
+  rangeValueForGifFrame,
+  resolveParameterGifTiming,
+  resolveRangeGifTiming,
+} from './parameterGif';
 import { resolveTurntableGifDimensions, resolveTurntableGifTiming } from './turntableGif';
 
 export type ViewPreset = 'top' | 'front' | 'side' | 'default';
@@ -40,6 +47,10 @@ export interface ViewportApi {
   recordParameterGif: (
     plotId: string,
     parameterName: string,
+    onProgress?: (progress: number) => void,
+  ) => Promise<void>;
+  recordLightCurveGif: (
+    lightId: string,
     onProgress?: (progress: number) => void,
   ) => Promise<void>;
   setViewPreset: (preset: ViewPreset) => void;
@@ -311,6 +322,7 @@ export class SceneController {
   private axesLineBuffer: { key: string; buffer: GpuLineBuffer } | null = null;
   private gridLineBuffer: { key: string; buffer: GpuLineBuffer } | null = null;
   private gizmoPointBuffer: GpuLineBuffer | null = null;
+  private directionalGizmoLineBuffer: GpuLineBuffer | null = null;
   private axisLabels: AxisLabelResources | null = null;
   private environmentCubemap: WebGLTexture | null = null;
   private environmentKey = '';
@@ -446,6 +458,8 @@ export class SceneController {
       }
       deleteLineBuffer(gl, this.gizmoPointBuffer);
       this.gizmoPointBuffer = null;
+      deleteLineBuffer(gl, this.directionalGizmoLineBuffer);
+      this.directionalGizmoLineBuffer = null;
       this.deleteAxisLabelResources(gl);
       deleteBuffer(gl, this.fullscreenBuffer);
       deleteVertexArray(gl, this.fullscreenVao);
@@ -504,6 +518,7 @@ export class SceneController {
       recordParameterGif: (plotId, parameterName, onProgress) => (
         this.recordParameterLoop(plotId, parameterName, onProgress)
       ),
+      recordLightCurveGif: (lightId, onProgress) => this.recordLightCurveLoop(lightId, onProgress),
       setViewPreset: (preset) => this.setViewPreset(preset),
       frameObject: (objectId) => this.frameObject(objectId ?? null),
     };
@@ -694,6 +709,109 @@ export class SceneController {
     }
   }
 
+  private async recordLightCurveLoop(
+    lightId: string,
+    onProgress?: (progress: number) => void,
+  ): Promise<void> {
+    if (this.recordingGif) {
+      throw new Error('An animation loop is already being recorded');
+    }
+    const gl = this.gl;
+    const initialState = useAppStore.getState();
+    const light = initialState.objects.find(
+      (object): object is LightObject => object.id === lightId
+        && (object.type === 'point_light' || object.type === 'directional_light'),
+    );
+    const curve = light ? pinnedCurveForLight(light, initialState.objects) : null;
+    const bounds = curve ? curveParameterBounds(curve) : null;
+    if (!gl || !this.latestSnapshot) {
+      throw new Error('Viewport not ready');
+    }
+    if (!light || !curve || !bounds || !light.curvePin.animating) {
+      throw new Error('Start the pinned light animation before exporting its loop');
+    }
+    if (curve.equation.source.parseStatus !== 'ok') {
+      throw new Error('The pinned parameterized curve must be valid before exporting its loop');
+    }
+
+    const mode = curveTraversalMode(curve);
+    const timing = resolveRangeGifTiming(light.curvePin.animationSpeed, mode);
+    const savedValue = light.curvePin.parameterValue;
+    const baseWidth = this.canvas.width;
+    const baseHeight = this.canvas.height;
+    const dimensions = resolveTurntableGifDimensions(baseWidth, baseHeight);
+    const encoder = new GifEncoderWorkerClient();
+    this.recordingGif = true;
+    setAnimationGifRecording(true);
+    onProgress?.(0);
+
+    try {
+      this.canvas.width = dimensions.width;
+      this.canvas.height = dimensions.height;
+      gl.viewport(0, 0, dimensions.width, dimensions.height);
+      const captureSurface = createCanvasFrameCaptureSurface(dimensions.width, dimensions.height);
+      await encoder.start(dimensions.width, dimensions.height, timing.frameDelayMs);
+      await yieldForWorkerPipeline();
+      await waitForFullDetailMeshes(new Map());
+
+      for (let frame = 0; frame < timing.frameCount; frame += 1) {
+        const parameterValue = rangeValueForGifFrame(
+          bounds.min,
+          bounds.max,
+          frame,
+          timing.frameCount,
+          mode,
+        );
+        useAppStore.getState().applyLightCurveAnimationValues([{ lightId, parameterValue }]);
+        if (this.disposed || !this.gl) {
+          throw new Error('Viewport was closed while exporting the light loop');
+        }
+        const frameState = useAppStore.getState();
+        const currentLight = frameState.objects.find((object) => object.id === lightId);
+        if (!currentLight || (currentLight.type !== 'point_light' && currentLight.type !== 'directional_light')) {
+          throw new Error('The pinned light became unavailable while exporting its loop');
+        }
+        this.sync({
+          scene: frameState.scene,
+          render: frameState.render,
+          objects: frameState.objects,
+          selectedId: frameState.selectedId,
+          plotJobs: frameState.plotJobs,
+        });
+        this.updateCameraMatrices();
+        this.renderScene();
+        const pixels = captureCanvasRgba(gl, frameState.scene, captureSurface);
+        await encoder.addFrame(pixels);
+        onProgress?.(((frame + 1) / timing.frameCount) * 0.98);
+      }
+
+      const bytes = await encoder.finish();
+      downloadBlobFile(
+        new Blob([bytes], { type: 'image/gif' }),
+        buildLightCurveGifFileName(light.name),
+      );
+      onProgress?.(1);
+    } finally {
+      encoder.terminate();
+      useAppStore.getState().applyLightCurveAnimationValues([{ lightId, parameterValue: savedValue }]);
+      this.canvas.width = baseWidth;
+      this.canvas.height = baseHeight;
+      gl.viewport(0, 0, baseWidth, baseHeight);
+      this.recordingGif = false;
+      setAnimationGifRecording(false);
+      const restoredState = useAppStore.getState();
+      this.sync({
+        scene: restoredState.scene,
+        render: restoredState.render,
+        objects: restoredState.objects,
+        selectedId: restoredState.selectedId,
+        plotJobs: restoredState.plotJobs,
+      });
+      this.updateCameraMatrices();
+      this.renderScene();
+    }
+  }
+
   setViewPreset(preset: ViewPreset): void {
     const orientation = resolveViewPresetOrientation(preset);
     this.camera.alpha = orientation.alpha;
@@ -731,10 +849,17 @@ export class SceneController {
     if (!object) {
       return null;
     }
-    if (object.type === 'point_light' || object.type === 'directional_light') {
+    if (object.type === 'point_light') {
       return {
         center: vec3.fromValues(object.position.x, object.position.y, object.position.z),
         radius: 2,
+      };
+    }
+    if (object.type === 'directional_light') {
+      const { tail, tip, length } = directionalLightGizmoEndpoints(object, this.camera.radius);
+      return {
+        center: vec3.lerp(vec3.create(), tail, tip, 0.5),
+        radius: Math.max(1, length * 0.65),
       };
     }
     const visual = this.plotVisuals.get(objectId);
@@ -2019,6 +2144,7 @@ export class SceneController {
 
   private renderLightGizmos(snapshot: RendererSceneSnapshot, program: ProgramBundle): void {
     const gl = this.gl!;
+    this.renderDirectionalLightArrows(snapshot);
     this.gizmoPointBuffer ??= createPointBuffer(gl);
     const pointBuffer = this.gizmoPointBuffer;
     if (!pointBuffer) {
@@ -2033,24 +2159,80 @@ export class SceneController {
     gl.disable(gl.CULL_FACE);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    const lights = [
-      ...snapshot.pointLights.map(({ light }) => light),
-      ...snapshot.directionalLights.map(({ light }) => light),
-    ];
-    for (const light of lights) {
-      if (light.type === 'point_light' ? !shouldRenderPointLightGizmo(light) : !light.visible) {
+    const drawHandle = (
+      position: vec3,
+      color: Float32Array,
+      size: number,
+      selected: boolean,
+    ) => {
+      const model = mat4.fromTranslation(mat4.create(), position);
+      gl.uniformMatrix4fv(program.uniforms.u_model, false, model);
+      gl.uniform1f(program.uniforms.u_size, size);
+      gl.uniform3fv(program.uniforms.u_color, color);
+      gl.uniform1f(program.uniforms.u_selected, selected ? 1 : 0);
+      drawLineBuffer(gl, pointBuffer);
+    };
+    for (const { light } of snapshot.pointLights) {
+      if (!shouldRenderPointLightGizmo(light)) {
         continue;
       }
       const selected = snapshot.selectedId === light.id;
-      const model = mat4.fromTranslation(
-        mat4.create(),
+      drawHandle(
         vec3.fromValues(light.position.x, light.position.y, light.position.z),
+        pointLightGizmoColor(light.color, selected),
+        selected ? 360 : 300,
+        selected,
       );
+    }
+    for (const { light } of snapshot.directionalLights) {
+      if (!light.visible) {
+        continue;
+      }
+      const selected = snapshot.selectedId === light.id;
+      const { tail } = directionalLightGizmoEndpoints(light, this.camera.radius);
+      const color = directionalLightGizmoColor(light.color, selected);
+      drawHandle(tail, color, selected ? 345 : 300, selected);
+    }
+    gl.depthMask(true);
+    gl.depthFunc(gl.LESS);
+    gl.disable(gl.BLEND);
+  }
+
+  private renderDirectionalLightArrows(snapshot: RendererSceneSnapshot): void {
+    const visibleLights = snapshot.directionalLights.filter(({ light }) => light.visible);
+    if (visibleLights.length === 0) {
+      return;
+    }
+    const gl = this.gl!;
+    this.directionalGizmoLineBuffer ??= createDirectionalLightArrowBuffer(gl);
+    const buffer = this.directionalGizmoLineBuffer;
+    if (!buffer) {
+      return;
+    }
+    const program = this.renderPrograms!.line;
+    gl.useProgram(program.program);
+    this.setLineProgramFrameUniforms();
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.depthMask(false);
+    gl.disable(gl.CULL_FACE);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    for (const { light } of visibleLights) {
+      const selected = snapshot.selectedId === light.id;
+      const { tail, direction, length } = directionalLightGizmoEndpoints(light, this.camera.radius);
+      const model = directionalLightGizmoModel(tail, direction, length);
+      const color = directionalLightGizmoColor(light.color, selected);
       gl.uniformMatrix4fv(program.uniforms.u_model, false, model);
-      gl.uniform1f(program.uniforms.u_size, selected ? 360 : 300);
-      gl.uniform3fv(program.uniforms.u_color, pointLightGizmoColor(light.color, selected));
-      gl.uniform1f(program.uniforms.u_selected, selected ? 1 : 0);
-      drawLineBuffer(gl, pointBuffer);
+      gl.uniform4f(program.uniforms.u_color, color[0], color[1], color[2], selected ? 0.98 : 0.86);
+      if (selected) {
+        for (const [offsetX, offsetY] of [[-0.7, 0], [0.7, 0], [0, -0.7], [0, 0.7]] as const) {
+          this.setLineScreenOffset(offsetX, offsetY);
+          drawLineBuffer(gl, buffer);
+        }
+      }
+      this.setLineScreenOffset(0, 0);
+      drawLineBuffer(gl, buffer);
     }
     gl.depthMask(true);
     gl.depthFunc(gl.LESS);
@@ -2805,6 +2987,14 @@ export class SceneController {
       return;
     }
     const appState = useAppStore.getState();
+    const lightCurvePick = appState.ui.lightCurveSourcePick;
+    if (lightCurvePick) {
+      const hit = this.pickParametricCurve(event.clientX, event.clientY);
+      if (hit) {
+        appState.setLightCurveSource(lightCurvePick.lightId, hit.id);
+      }
+      return;
+    }
     const sourcePick = appState.ui.intersectionSourcePick;
     if (sourcePick) {
       const hit = this.pickSurfacePlot(event.clientX, event.clientY);
@@ -2823,6 +3013,12 @@ export class SceneController {
       return;
     }
     if (selected.type === 'intersection') {
+      return;
+    }
+    if (
+      (selected.type === 'point_light' || selected.type === 'directional_light')
+      && pinnedCurveForLight(selected, useAppStore.getState().objects)
+    ) {
       return;
     }
     const startPosition = selected.type === 'plot'
@@ -2944,7 +3140,9 @@ export class SceneController {
       if (!light.visible) {
         continue;
       }
-      const distance = intersectSphere(ray.origin, ray.direction, light.position, Math.max(0.16, this.camera.radius * 0.02));
+      const { tail } = directionalLightGizmoEndpoints(light, this.camera.radius);
+      const handleRadius = Math.max(0.16, this.camera.radius * 0.02);
+      const distance = intersectSphere(ray.origin, ray.direction, tail, handleRadius);
       if (distance !== null && distance < bestDistance) {
         bestId = light.id;
         bestDistance = distance;
@@ -2978,6 +3176,29 @@ export class SceneController {
     for (const [plotId, visual] of this.plotVisuals.entries()) {
       const plot = this.latestSnapshot?.objects.find(
         (object): object is Extract<SceneObject, { type: 'plot' }> => object.id === plotId && isSurfacePlot(object),
+      );
+      if (!plot?.visible) continue;
+      const hit = intersectRayWithPlotGeometry(
+        ray.origin,
+        ray.direction,
+        visual.geometry,
+        plot.transform.position,
+      );
+      if (hit && hit.distance < bestDistance) {
+        bestId = plotId;
+        bestDistance = hit.distance;
+      }
+    }
+    return bestId ? { id: bestId, distance: bestDistance } : null;
+  }
+
+  private pickParametricCurve(clientX: number, clientY: number): { id: string; distance: number } | null {
+    const ray = this.computePickingRay(clientX, clientY);
+    let bestId: string | null = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (const [plotId, visual] of this.plotVisuals.entries()) {
+      const plot = this.latestSnapshot?.objects.find(
+        (object): object is PlotObject => object.id === plotId && isParametricCurvePlot(object),
       );
       if (!plot?.visible) continue;
       const hit = intersectRayWithPlotGeometry(
@@ -4210,6 +4431,16 @@ function createPointBuffer(gl: WebGL2RenderingContext): GpuLineBuffer | null {
   return { vao, vertexBuffer, vertexCount: 1, primitive: gl.POINTS };
 }
 
+function createDirectionalLightArrowBuffer(gl: WebGL2RenderingContext): GpuLineBuffer | null {
+  return createLineBuffer(gl, new Float32Array([
+    0, 0, 0, 1, 0, 0,
+    1, 0, 0, 0.76, 0.13, 0,
+    1, 0, 0, 0.76, -0.13, 0,
+    1, 0, 0, 0.76, 0, 0.13,
+    1, 0, 0, 0.76, 0, -0.13,
+  ]), gl.LINES);
+}
+
 function drawLineBuffer(gl: WebGL2RenderingContext, buffer: GpuLineBuffer): void {
   gl.bindVertexArray(buffer.vao);
   gl.drawArrays(buffer.primitive, 0, buffer.vertexCount);
@@ -4757,6 +4988,47 @@ function pointLightGizmoColor(hex: string, selected: boolean): Float32Array {
   ]);
 }
 
+function directionalLightGizmoColor(hex: string, selected: boolean): Float32Array {
+  const sunlight = [1.0, 0.68, 0.16];
+  const light = hexToRgb(hex);
+  const color = mixRgb(sunlight, light, selected ? 0.28 : 0.2);
+  return new Float32Array([
+    clamp01(color[0] + (selected ? 0.06 : 0)),
+    clamp01(color[1] + (selected ? 0.04 : 0)),
+    clamp01(color[2]),
+  ]);
+}
+
+function directionalLightGizmoEndpoints(
+  light: DirectionalLightObject,
+  cameraRadius: number,
+): { tail: vec3; tip: vec3; direction: vec3; length: number } {
+  const normalized = normalizeVec3({
+    x: -light.position.x,
+    y: -light.position.y,
+    z: -light.position.z,
+  }, { x: 0, y: 0, z: -1 });
+  const direction = vec3.fromValues(normalized.x, normalized.y, normalized.z);
+  const tail = vec3.fromValues(light.position.x, light.position.y, light.position.z);
+  const length = clamp(cameraRadius * 0.13, 1, 12);
+  const tip = vec3.scaleAndAdd(vec3.create(), tail, direction, length);
+  return { tail, tip, direction, length };
+}
+
+function directionalLightGizmoModel(tail: vec3, direction: vec3, length: number): mat4 {
+  const reference = Math.abs(direction[2]) < 0.92
+    ? vec3.fromValues(0, 0, 1)
+    : vec3.fromValues(0, 1, 0);
+  const side = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), reference, direction));
+  const up = vec3.normalize(vec3.create(), vec3.cross(vec3.create(), direction, side));
+  return mat4.fromValues(
+    direction[0] * length, direction[1] * length, direction[2] * length, 0,
+    side[0] * length, side[1] * length, side[2] * length, 0,
+    up[0] * length, up[1] * length, up[2] * length, 0,
+    tail[0], tail[1], tail[2], 1,
+  );
+}
+
 function createGroundMesh(gl: WebGL2RenderingContext): SimpleMeshBuffer {
   const vao = gl.createVertexArray();
   const vertexBuffer = gl.createBuffer();
@@ -4860,6 +5132,11 @@ function buildGifFileName(): string {
 function buildParameterGifFileName(parameterName: string): string {
   const safeName = parameterName.trim().replace(/[^a-zA-Z0-9_-]+/g, '-') || 'parameter';
   return `${safeName}-bounce-${buildExportTimestamp()}.gif`;
+}
+
+function buildLightCurveGifFileName(lightName: string): string {
+  const safeName = lightName.trim().replace(/[^a-zA-Z0-9_-]+/g, '-') || 'light';
+  return `${safeName}-loop-${buildExportTimestamp()}.gif`;
 }
 
 function buildExportTimestamp(): string {
@@ -5244,10 +5521,13 @@ function transparentSortDistance(plot: RenderableObject, cameraPosition: vec3): 
 function intersectSphere(
   origin: vec3,
   direction: vec3,
-  center: PointLightObject['position'],
+  center: PointLightObject['position'] | vec3,
   radius: number,
 ): number | null {
-  const oc = vec3.fromValues(origin[0] - center.x, origin[1] - center.y, origin[2] - center.z);
+  const centerX = 'x' in center ? center.x : center[0];
+  const centerY = 'y' in center ? center.y : center[1];
+  const centerZ = 'z' in center ? center.z : center[2];
+  const oc = vec3.fromValues(origin[0] - centerX, origin[1] - centerY, origin[2] - centerZ);
   const a = vec3.dot(direction, direction);
   const b = 2 * vec3.dot(oc, direction);
   const c = vec3.dot(oc, oc) - radius * radius;

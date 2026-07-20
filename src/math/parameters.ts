@@ -22,7 +22,7 @@ export interface ParameterAnimationStep {
  * min→max in four seconds regardless of the range width.
  */
 export function advanceAnimatedParameter(
-  parameter: EquationParameter,
+  parameter: Pick<EquationParameter, 'value' | 'min' | 'max' | 'animationSpeed'>,
   dtSeconds: number,
   direction: 1 | -1,
 ): ParameterAnimationStep {
@@ -41,6 +41,21 @@ export function advanceAnimatedParameter(
     nextDirection = 1;
   }
   return { value, direction: nextDirection };
+}
+
+/** Advance monotonically through a range and wrap to its minimum. */
+export function advanceLoopingParameter(
+  parameter: Pick<EquationParameter, 'value' | 'min' | 'max' | 'animationSpeed'>,
+  dtSeconds: number,
+): number {
+  const range = parameter.max - parameter.min;
+  if (!Number.isFinite(range) || range <= 0 || !Number.isFinite(dtSeconds) || dtSeconds < 0) {
+    return parameter.value;
+  }
+  const speed = clampAnimationSpeed(parameter.animationSpeed);
+  const offset = parameter.value - parameter.min + speed * range * dtSeconds;
+  const wrappedOffset = ((offset % range) + range) % range;
+  return parameter.min + wrappedOffset;
 }
 
 export function clampAnimationSpeed(speed: number | undefined): number {

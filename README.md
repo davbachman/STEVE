@@ -4,7 +4,7 @@
 
 **[Open ST.E.V.E. in your browser](https://davbachman.github.io/STEVE/)**
 
-ST.E.V.E. is a desktop-first, browser-only 3D graphing studio. Build multi-object scenes from equations, edit them interactively, light and style them, animate mathematical constants, and export still images, GIF loops, project files, or triangle meshes.
+ST.E.V.E. is a desktop-first, browser-only 3D graphing studio. Build multi-object scenes from equations, edit them interactively, light and style them, animate mathematical constants and lights along curves, and export still images, GIF loops, project files, or triangle meshes.
 
 ST.E.V.E. requires a modern desktop browser with WebGL2. Floating-point color-buffer support is recommended for the full rendering path; the app provides a compatibility fallback when it is unavailable.
 
@@ -16,9 +16,10 @@ Created by David Bachman with GPT 5.4, GPT 5.5, GPT 5.6 Sol, and Fable 5. Learn 
 - Use the streamlined Graph workflow for `z=f(x,y)` by entering only `f(x,y)`.
 - Derive an intersection curve from any two surface objects; the curve updates when either source surface is edited, moved, or animated.
 - Combine plots, intersection curves, point lights, and directional lights in one scene.
+- Pin point or directional lights to parametric curves, scrub their curve parameter, and animate them with endpoint-aware bounce or loop playback.
 - Edit equations with function autocomplete, an on-demand syntax reference, automatic equation classification, and a live LaTeX preview.
 - Turn user-defined equation constants into continuous sliders, ping-pong animations, or discrete families of sampled copies.
-- Record full-detail animated-constant loops and camera turntable loops as GIF files.
+- Record full-detail animated-constant loops, curve-pinned light paths, and camera turntable loops as GIF files.
 - Rename and reposition plots and lights, edit curve/surface domains and sampling density, and choose implicit-meshing bounds and quality.
 - Style objects with material presets, color, opacity, reflectiveness, roughness, refraction, index of refraction, and emissive color/strength.
 - Add a UV-style grid to parametric and explicit surfaces, or add independently colored and spaced X/Y/Z contour lines to surfaces.
@@ -31,12 +32,12 @@ Created by David Bachman with GPT 5.4, GPT 5.5, GPT 5.6 Sol, and Fable 5. Learn 
 
 ## Quick Start
 
-1. [Open the live app](https://davbachman.github.io/STEVE/). A new project begins with `Directional Light 1`; add mathematical objects and more lights from the left panel.
+1. [Open the live app](https://davbachman.github.io/STEVE/). A new project begins with ambient scene lighting only and no light objects; add mathematical objects and point or directional lights from the left panel.
 2. Under **Curve**, choose `+ Parametric` or `+ Intersection`. Under **Surface**, choose `+ Graph`, `+ Parametric`, or `+ Implicit`. Under **Lights**, choose `+ Point` or `+ Directional`.
 3. Select a plot in the object list, then replace its example equation in the editor across the top. Select a light to edit its controls in the right inspector.
-4. For plots and lights, use the **Object** tab for name, position, domain, sampling, bounds, quality, light direction, or equation constants. An intersection's Object tab selects its source surfaces and adjusts its width. Use **Appearance** for material or light properties.
+4. For plots and lights, use the **Object** tab for name, position, domain, sampling, bounds, quality, equation constants, or curve pinning. An intersection's Object tab selects its source surfaces and adjusts its width. Use **Appearance** for material or light properties.
 5. Click empty viewport space or press `Esc` to clear the selection and show **Scene Settings** in the right panel.
-6. Move around the viewport with right-drag to orbit, `Shift` + right-drag to pan, and the scroll wheel to zoom. Left-drag a selected plot or light to move it in the XY plane; hold `Shift` while left-dragging to change its Z position.
+6. Move around the viewport with right-drag to orbit, `Shift` + right-drag to pan, and the scroll wheel to zoom. Left-drag a selected plot or unpinned light to move it in the XY plane; hold `Shift` while left-dragging to change its Z position.
 7. Use **File** to start a new project, save/open a project, export a PNG, or export the selected plot/intersection as STL. Use **STEVE → Settings** for rendering and export-quality controls.
 
 The **STEVE** menu also contains the About dialog, this Instructions page, and a Feedback form. Sending feedback opens a draft in your default email app.
@@ -74,6 +75,16 @@ Switch the mode button to **Discrete** to sample equally spaced levels instead. 
 
 To record a camera orbit, clear the object selection, enable **Turntable animation** in Scene Settings, set **Orbit speed**, and choose **Record loop**. GIF exports preserve the viewport aspect ratio and are limited to 720 pixels on their longest side.
 
+## Pinning Lights to Parametric Curves
+
+1. Select a point or directional light and enable **Pin to curve** on its **Object** tab.
+2. Click **Click here, and then click parameterized curve to pin light to**, then click a parametric curve in the viewport. Press `Esc` to cancel picking. The selected curve's card replaces the prompt.
+3. Use the `t` slider to place the light anywhere between the curve's current parameter bounds. The light follows edits to the curve, its transform, its bounds, and its equation constants.
+4. Press the triangle beside the slider to animate. Curves with different endpoint positions bounce from one end to the other; curves whose endpoints meet advance continuously and wrap around as a loop.
+5. While playback is active, adjust **t speed** or choose **Record loop** to export one complete light-path GIF. Recording restores the light's prior parameter value when it finishes.
+
+A pinned light's independent position control is hidden and its viewport handle cannot be dragged. Disable **Pin to curve** to detach it at its current curve position. A directional light remains aimed from its moving tail toward the world origin throughout playback.
+
 ## Surface Intersections
 
 1. Choose **Curve → + Intersection** and select the new intersection object.
@@ -87,7 +98,7 @@ Intersections are derived in world space, so they follow source-surface edits, m
 
 The **Appearance** tab provides Matte Plastic, Glossy Plastic, Ceramic, Brushed Metal, Chrome, Clear Glass, Frosted Glass, Tinted Glass, Rubber, and Mirror presets. Presets can be customized with the material controls. Refraction takes effect when opacity is below 1. **Surface Decorations** contains grid controls for parametric/explicit surfaces and X/Y/Z contour controls for non-curve plot surfaces.
 
-Point lights provide position, color, intensity, range, and shadow controls. Directional lights provide sun azimuth/elevation, an exact direction vector, color, intensity, and shadows. A light's visibility checkbox hides its editor gizmo only; set its intensity to `0` when you want to turn off its illumination.
+Point lights provide position, color, intensity, range, and shadow controls. Directional lights provide position, color, intensity, and shadows. Their viewport gizmo is an arrow with a draggable handle at its tail; both the arrow and the light rays always point from that position toward the world origin. Both light types can be pinned to a parametric curve from the Object tab. A light's visibility checkbox hides its editor gizmo only; set its intensity to `0` when you want to turn off its illumination.
 
 With nothing selected, **Scene Settings** controls the turntable, ambient light, shadow-map resolution and softness, projection, background, ground plane and reflection, XY grid, axes, and axis labels. **STEVE → Settings** controls tone mapping, exposure, Halos, PNG export scale, and interactive quality.
 
@@ -96,7 +107,7 @@ With nothing selected, **Scene Settings** controls the turntable, ambient light,
 | Input | Action |
 | --- | --- |
 | Click an object | Select it |
-| Left-drag a selected plot or light | Move in XY |
+| Left-drag a selected plot or unpinned light | Move in XY |
 | `Shift` + left-drag | Move along Z |
 | Right-drag | Orbit |
 | `Shift` + right-drag | Pan |
@@ -115,7 +126,7 @@ Except for `Esc`, shortcuts apply when focus is not inside a text or number fiel
 
 | Shortcut | Action |
 | --- | --- |
-| `Esc` | Clear the selection or cancel intersection-source picking |
+| `Esc` | Clear the selection or cancel intersection-surface/light-curve picking |
 | `Delete` or `Backspace` | Delete the selected object |
 | `Command/Ctrl` + `C` | Copy the selected object and all of its settings |
 | `Command/Ctrl` + `V` | Paste an object; pasting a full tuple or equality creates a new classified plot |
@@ -127,7 +138,7 @@ Except for `Esc`, shortcuts apply when focus is not inside a text or number fiel
 
 - **File → Save** writes scene objects plus scene/render settings to `scene.3dplot.json` by default. **Open** accepts `.json` and `.3dplot.json` project files. Camera pose, current selection, and open UI state are not stored.
 - **File → Export PNG** saves the current viewport. Choose Standard (1×), High (2×), or Ultra (4×) under **STEVE → Settings**.
-- **Record loop** exports GIF animation from either the Scene turntable controls or a playing continuous constant.
+- **Record loop** exports GIF animation from the Scene turntable controls, a playing continuous constant, or an animated curve-pinned light.
 - **File → Export STL** is available when a plot or intersection is selected. It exports the current generated triangle mesh in its world position; visual material and lighting settings are not part of STL.
 - Parametric curves and intersection curves export their rendered tube/ribbon geometry, not abstract mathematical paths.
 - STL export does not guarantee a closed or watertight solid; inspect open surfaces before using them for 3D printing.

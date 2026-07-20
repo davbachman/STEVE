@@ -11,7 +11,7 @@ import type {
   SceneObject,
 } from '../types/contracts';
 import { analyzeEquationText, analyzeGraphExpression } from '../math/classifier';
-import { syncEquationParameters } from '../math/parameters';
+import { DEFAULT_PARAMETER_ANIMATION_SPEED, syncEquationParameters } from '../math/parameters';
 
 export const APP_VERSION = '0.1.0-dev';
 export const DEFAULT_TURNTABLE_SPEED = 20;
@@ -426,6 +426,7 @@ export function createPointLight(name = 'Point Light', position = { x: 3, y: -3,
     intensity: 40,
     range: 40,
     castShadows: true,
+    curvePin: createDefaultLightCurvePin(),
   };
 }
 
@@ -439,13 +440,36 @@ export function createDirectionalLight(
     type: 'directional_light',
     visible: true,
     position,
-    direction: { x: -0.6, y: -0.4, z: -1 },
+    direction: directionTowardOrigin(position),
     color: '#fff2df',
     intensity: 1.35,
     castShadows: true,
+    curvePin: createDefaultLightCurvePin(),
+  };
+}
+
+function createDefaultLightCurvePin() {
+  return {
+    enabled: false,
+    curveId: null,
+    parameterValue: 0,
+    animating: false,
+    animationSpeed: DEFAULT_PARAMETER_ANIMATION_SPEED,
+  };
+}
+
+export function directionTowardOrigin(position: { x: number; y: number; z: number }): { x: number; y: number; z: number } {
+  const length = Math.hypot(position.x, position.y, position.z);
+  if (!Number.isFinite(length) || length < 1e-6) {
+    return { x: 0, y: 0, z: -1 };
+  }
+  return {
+    x: -position.x / length,
+    y: -position.y / length,
+    z: -position.z / length,
   };
 }
 
 export function createDefaultObjects(): SceneObject[] {
-  return [createDirectionalLight('Directional Light 1')];
+  return [];
 }

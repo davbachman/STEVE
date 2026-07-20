@@ -172,6 +172,16 @@ export interface IntersectionObject {
   };
 }
 
+export interface LightCurvePin {
+  enabled: boolean;
+  curveId: UUID | null;
+  parameterValue: number;
+  /** Runtime playback toggle; persisted consistently with equation-parameter animation. */
+  animating: boolean;
+  /** Fraction of the source curve's t range traversed per second. */
+  animationSpeed: number;
+}
+
 export interface PointLightObject {
   id: UUID;
   name: string;
@@ -182,6 +192,7 @@ export interface PointLightObject {
   intensity: number;
   range: number;
   castShadows: boolean;
+  curvePin: LightCurvePin;
 }
 
 export interface DirectionalLightObject {
@@ -189,13 +200,14 @@ export interface DirectionalLightObject {
   name: string;
   type: 'directional_light';
   visible: boolean;
-  /** Positions the editor gizmo; directional lighting itself is position-independent. */
+  /** Positions the editor gizmo and defines a ray aimed from here toward world origin. */
   position: Vec3;
-  /** Direction in which the light rays travel (toward the scene). */
+  /** Derived direction in which the light rays travel, always toward world origin. */
   direction: Vec3;
   color: string;
   intensity: number;
   castShadows: boolean;
+  curvePin: LightCurvePin;
 }
 
 /** Retained only so schema-v1 projects can migrate their former scene light. */
@@ -255,6 +267,8 @@ export interface RenderSettings {
 }
 
 export type RenderableObject = PlotObject | IntersectionObject;
+
+export type LightObject = PointLightObject | DirectionalLightObject;
 
 export type SceneObject = RenderableObject | PointLightObject | DirectionalLightObject;
 

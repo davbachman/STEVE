@@ -58,7 +58,7 @@ describe('ObjectListPanel creation buttons', () => {
       buttons[6]?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(useAppStore.getState().objects.filter((object) => object.type === 'point_light')).toHaveLength(1);
-    expect(useAppStore.getState().objects.filter((object) => object.type === 'directional_light')).toHaveLength(2);
+    expect(useAppStore.getState().objects.filter((object) => object.type === 'directional_light')).toHaveLength(1);
   });
 
   it('creates intersections without making sidebar cards draggable', () => {
