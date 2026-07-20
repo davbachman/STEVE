@@ -25,6 +25,12 @@ describe('ObjectListPanel creation buttons', () => {
     root = createRoot(host);
     act(() => root?.render(<ObjectListPanel />));
 
+    const startupDirectionalToggle = host.querySelector(
+      'input[aria-label="Show gizmo for Directional Light 1"]',
+    );
+    expect(startupDirectionalToggle).toBeInstanceOf(HTMLInputElement);
+    expect((startupDirectionalToggle as HTMLInputElement).checked).toBe(false);
+
     const groups = Array.from(host.querySelectorAll('.creator-group'));
     expect(groups.map((group) => group.querySelector('h3')?.textContent)).toEqual([
       'Curve',
@@ -58,7 +64,7 @@ describe('ObjectListPanel creation buttons', () => {
       buttons[6]?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     expect(useAppStore.getState().objects.filter((object) => object.type === 'point_light')).toHaveLength(1);
-    expect(useAppStore.getState().objects.filter((object) => object.type === 'directional_light')).toHaveLength(1);
+    expect(useAppStore.getState().objects.filter((object) => object.type === 'directional_light')).toHaveLength(2);
   });
 
   it('creates intersections without making sidebar cards draggable', () => {

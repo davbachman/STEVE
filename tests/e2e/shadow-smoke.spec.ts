@@ -21,7 +21,6 @@ test.describe('WebGL2 Shadow Smoke', () => {
     await page.getByLabel('XY grid').check();
     await page.getByLabel('Ground plane').check();
 
-    await page.getByRole('button', { name: '+ Directional' }).click();
     await page.getByRole('button', { name: /Directional Light 1/ }).click();
     await page.getByRole('button', { name: 'Appearance' }).click();
     await page.getByLabel('Cast shadows').check();

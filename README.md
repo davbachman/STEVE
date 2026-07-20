@@ -32,7 +32,7 @@ Created by David Bachman with GPT 5.4, GPT 5.5, GPT 5.6 Sol, and Fable 5. Learn 
 
 ## Quick Start
 
-1. [Open the live app](https://davbachman.github.io/STEVE/). A new project begins with ambient scene lighting only and no light objects; add mathematical objects and point or directional lights from the left panel.
+1. [Open the live app](https://davbachman.github.io/STEVE/). A new project begins with ambient scene lighting and an unchecked `Directional Light 1`; check its object-row box to show its viewport gizmo, or add mathematical objects and more lights from the left panel.
 2. Under **Curve**, choose `+ Parametric` or `+ Intersection`. Under **Surface**, choose `+ Graph`, `+ Parametric`, or `+ Implicit`. Under **Lights**, choose `+ Point` or `+ Directional`.
 3. Select a plot in the object list, then replace its example equation in the editor across the top. Select a light to edit its controls in the right inspector.
 4. For plots and lights, use the **Object** tab for name, position, domain, sampling, bounds, quality, equation constants, or curve pinning. An intersection's Object tab selects its source surfaces and adjusts its width. Use **Appearance** for material or light properties.

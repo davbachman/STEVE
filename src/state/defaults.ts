@@ -473,5 +473,7 @@ export function directionTowardOrigin(position: { x: number; y: number; z: numbe
 }
 
 export function createDefaultObjects(): SceneObject[] {
-  return [];
+  const directional = createDirectionalLight('Directional Light 1');
+  directional.visible = false;
+  return [directional];
 }
