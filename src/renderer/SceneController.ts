@@ -529,18 +529,19 @@ export class SceneController {
       throw new Error('An animation loop is already being recorded');
     }
     const gl = this.gl;
-    const scene = this.latestSnapshot?.scene;
-    if (!gl || !scene) {
+    const snapshot = this.latestSnapshot;
+    if (!gl || !snapshot) {
       throw new Error('Viewport not ready');
     }
+    const { scene, render } = snapshot;
     if (!scene.turntableEnabled) {
       throw new Error('Start the turntable animation before recording a loop');
     }
 
     const baseWidth = this.canvas.width;
     const baseHeight = this.canvas.height;
-    const dimensions = resolveTurntableGifDimensions(baseWidth, baseHeight);
-    const timing = resolveTurntableGifTiming(scene.turntableSpeed);
+    const dimensions = resolveTurntableGifDimensions(baseWidth, baseHeight, render.gifMaxDimension);
+    const timing = resolveTurntableGifTiming(scene.turntableSpeed, render.gifFrameRate);
     const savedCamera = {
       alpha: this.camera.alpha,
       beta: this.camera.beta,
@@ -622,8 +623,15 @@ export class SceneController {
 
     const baseWidth = this.canvas.width;
     const baseHeight = this.canvas.height;
-    const dimensions = resolveTurntableGifDimensions(baseWidth, baseHeight);
-    const timing = resolveParameterGifTiming(parameter.animationSpeed);
+    const dimensions = resolveTurntableGifDimensions(
+      baseWidth,
+      baseHeight,
+      initialState.render.gifMaxDimension,
+    );
+    const timing = resolveParameterGifTiming(
+      parameter.animationSpeed,
+      initialState.render.gifFrameRate,
+    );
     const savedValue = parameter.value;
     const animatedParameters = collectAnimatingContinuousParameters(initialState);
     const encoder = new GifEncoderWorkerClient();
@@ -735,11 +743,19 @@ export class SceneController {
     }
 
     const mode = curveTraversalMode(curve);
-    const timing = resolveRangeGifTiming(light.curvePin.animationSpeed, mode);
+    const timing = resolveRangeGifTiming(
+      light.curvePin.animationSpeed,
+      mode,
+      initialState.render.gifFrameRate,
+    );
     const savedValue = light.curvePin.parameterValue;
     const baseWidth = this.canvas.width;
     const baseHeight = this.canvas.height;
-    const dimensions = resolveTurntableGifDimensions(baseWidth, baseHeight);
+    const dimensions = resolveTurntableGifDimensions(
+      baseWidth,
+      baseHeight,
+      initialState.render.gifMaxDimension,
+    );
     const encoder = new GifEncoderWorkerClient();
     this.recordingGif = true;
     setAnimationGifRecording(true);

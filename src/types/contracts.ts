@@ -264,6 +264,10 @@ export interface RenderSettings {
   bloomRadius: number;
   bloomThreshold: number;
   interactiveQuality: 'performance' | 'balanced' | 'quality';
+  /** Longest output edge, in pixels, for recorded GIF loops. */
+  gifMaxDimension: 480 | 720 | 1080;
+  /** Target frames per second for recorded GIF loops. */
+  gifFrameRate: 10 | 15 | 20;
 }
 
 export type RenderableObject = PlotObject | IntersectionObject;

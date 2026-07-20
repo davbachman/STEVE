@@ -281,6 +281,8 @@ export const defaultRenderSettings = (): RenderSettings => ({
   bloomRadius: 1.5,
   bloomThreshold: 1,
   interactiveQuality: 'balanced',
+  gifMaxDimension: 720,
+  gifFrameRate: 20,
 });
 
 function analyzedEquation(rawText: string) {

@@ -9,14 +9,20 @@ export interface TurntableGifTiming {
   angleStepRadians: number;
 }
 
-export function resolveTurntableGifTiming(speedDegreesPerSecond: number): TurntableGifTiming {
+export function resolveTurntableGifTiming(
+  speedDegreesPerSecond: number,
+  framesPerSecond = TURNTABLE_GIF_FPS,
+): TurntableGifTiming {
   const safeSpeed = Number.isFinite(speedDegreesPerSecond) && speedDegreesPerSecond > 0
     ? speedDegreesPerSecond
     : 1;
+  const safeFramesPerSecond = Number.isFinite(framesPerSecond) && framesPerSecond > 0
+    ? framesPerSecond
+    : TURNTABLE_GIF_FPS;
   const durationSeconds = 360 / safeSpeed;
   const frameCount = Math.min(
     TURNTABLE_GIF_MAX_FRAMES,
-    Math.max(1, Math.round(durationSeconds * TURNTABLE_GIF_FPS)),
+    Math.max(1, Math.round(durationSeconds * safeFramesPerSecond)),
   );
   return {
     durationSeconds,

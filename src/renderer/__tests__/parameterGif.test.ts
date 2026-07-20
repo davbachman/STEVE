@@ -14,6 +14,10 @@ describe('parameter GIF loop', () => {
     expect(timing.frameCount).toBe(96);
     expect(timing.frameDelayMs * timing.frameCount).toBeCloseTo(8000, 8);
 
+    const smooth = resolveParameterGifTiming(0.25, 20);
+    expect(smooth.frameCount).toBe(160);
+    expect(smooth.frameDelayMs).toBe(50);
+
     const slow = resolveParameterGifTiming(0.02);
     expect(slow.frameCount).toBe(PARAMETER_GIF_MAX_FRAMES);
     expect(slow.frameDelayMs * slow.frameCount).toBeCloseTo(100_000, 8);
@@ -34,6 +38,10 @@ describe('parameter GIF loop', () => {
     expect(timing.durationSeconds).toBe(4);
     expect(timing.frameCount).toBe(48);
     expect(timing.frameDelayMs * timing.frameCount).toBeCloseTo(4000, 8);
+
+    const compact = resolveRangeGifTiming(0.25, 'wrap', 10);
+    expect(compact.frameCount).toBe(40);
+    expect(compact.frameDelayMs).toBe(100);
 
     expect(rangeValueForGifFrame(0, 8, 0, 8, 'wrap')).toBe(0);
     expect(rangeValueForGifFrame(0, 8, 7, 8, 'wrap')).toBe(7);

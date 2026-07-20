@@ -103,13 +103,19 @@ describe('TopBar menus', () => {
     expect(settingsDialog?.textContent).not.toContain('Render diagnostics overlay');
     const toneMapping = host.querySelector('select[aria-label="Tone Mapping"]');
     const pngQuality = host.querySelector('select[aria-label="PNG Export Quality"]');
+    const gifMaximumSize = host.querySelector('select[aria-label="GIF Maximum Size"]');
+    const gifFrameRate = host.querySelector('select[aria-label="GIF Frame Rate"]');
     const interactiveQuality = host.querySelector('select[aria-label="Interactive Quality"]');
     expect(toneMapping).toBeInstanceOf(HTMLSelectElement);
     expect(pngQuality).toBeInstanceOf(HTMLSelectElement);
+    expect(gifMaximumSize).toBeInstanceOf(HTMLSelectElement);
+    expect(gifFrameRate).toBeInstanceOf(HTMLSelectElement);
     expect(interactiveQuality).toBeInstanceOf(HTMLSelectElement);
     if (
       !(toneMapping instanceof HTMLSelectElement)
       || !(pngQuality instanceof HTMLSelectElement)
+      || !(gifMaximumSize instanceof HTMLSelectElement)
+      || !(gifFrameRate instanceof HTMLSelectElement)
       || !(interactiveQuality instanceof HTMLSelectElement)
     ) {
       throw new Error('Expected settings selects');
@@ -125,10 +131,16 @@ describe('TopBar menus', () => {
       toneMapping.dispatchEvent(new Event('change', { bubbles: true }));
       setNativeSelectValue(pngQuality, '4');
       pngQuality.dispatchEvent(new Event('change', { bubbles: true }));
+      setNativeSelectValue(gifMaximumSize, '1080');
+      gifMaximumSize.dispatchEvent(new Event('change', { bubbles: true }));
+      setNativeSelectValue(gifFrameRate, '10');
+      gifFrameRate.dispatchEvent(new Event('change', { bubbles: true }));
       setNativeSelectValue(interactiveQuality, 'performance');
       interactiveQuality.dispatchEvent(new Event('change', { bubbles: true }));
     });
     expect(useAppStore.getState().render.toneMapping).toBe('filmic');
+    expect(useAppStore.getState().render.gifMaxDimension).toBe(1080);
+    expect(useAppStore.getState().render.gifFrameRate).toBe(10);
     expect(useAppStore.getState().render.interactiveQuality).toBe('performance');
 
     const haloCheckbox = Array.from(settingsDialog?.querySelectorAll('input[type="checkbox"]') ?? []).find(

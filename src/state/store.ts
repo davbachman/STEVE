@@ -1609,6 +1609,8 @@ function normalizeRenderSettingsImport(
   return {
     toneMapping: asEnum(renderInput.toneMapping, ['aces', 'filmic', 'none']) ?? defaults.toneMapping,
     interactiveQuality: asEnum(renderInput.interactiveQuality, ['performance', 'balanced', 'quality']) ?? defaults.interactiveQuality,
+    gifMaxDimension: asNumberEnum(renderInput.gifMaxDimension, [480, 720, 1080]) ?? defaults.gifMaxDimension,
+    gifFrameRate: asNumberEnum(renderInput.gifFrameRate, [10, 15, 20]) ?? defaults.gifFrameRate,
     exposure: asFiniteNumber(renderInput.exposure) ?? defaults.exposure,
     bloomEnabled: asBoolean(renderInput.bloomEnabled) ?? defaults.bloomEnabled,
     bloomStrength: clampNumber(
@@ -2076,6 +2078,11 @@ function plotParameterValue(objects: SceneObject[], plotId: UUID, parameterField
 function asEnum<T extends string>(value: unknown, allowed: readonly T[]): T | null {
   if (typeof value !== 'string') return null;
   return (allowed as readonly string[]).includes(value) ? (value as T) : null;
+}
+
+function asNumberEnum<T extends number>(value: unknown, allowed: readonly T[]): T | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+  return (allowed as readonly number[]).includes(value) ? (value as T) : null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

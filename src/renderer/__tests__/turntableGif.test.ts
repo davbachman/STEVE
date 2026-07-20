@@ -13,6 +13,10 @@ describe('turntable GIF recording', () => {
     expect(defaultTiming.frameDelayMs).toBe(50);
     expect(defaultTiming.angleStepRadians * defaultTiming.frameCount).toBeCloseTo(Math.PI * 2, 12);
 
+    const compactTiming = resolveTurntableGifTiming(20, 10);
+    expect(compactTiming.frameCount).toBe(180);
+    expect(compactTiming.frameDelayMs).toBe(100);
+
     const slowTiming = resolveTurntableGifTiming(1);
     expect(slowTiming.frameCount).toBe(TURNTABLE_GIF_MAX_FRAMES);
     expect(slowTiming.frameDelayMs * slowTiming.frameCount).toBeCloseTo(360_000, 8);
@@ -20,6 +24,8 @@ describe('turntable GIF recording', () => {
 
   it('keeps aspect ratio and caps the longest output dimension at 720px', () => {
     expect(resolveTurntableGifDimensions(1440, 900)).toEqual({ width: 720, height: 450 });
+    expect(resolveTurntableGifDimensions(1440, 900, 1080)).toEqual({ width: 1080, height: 675 });
+    expect(resolveTurntableGifDimensions(1440, 900, 480)).toEqual({ width: 480, height: 300 });
     expect(resolveTurntableGifDimensions(500, 300)).toEqual({ width: 500, height: 300 });
     expect(resolveTurntableGifDimensions(0, Number.NaN)).toEqual({ width: 1, height: 1 });
   });

@@ -7,19 +7,26 @@ export interface ParameterGifTiming {
   frameDelayMs: number;
 }
 
-export function resolveParameterGifTiming(animationSpeed: number | undefined): ParameterGifTiming {
-  return resolveRangeGifTiming(animationSpeed, 'bounce');
+export function resolveParameterGifTiming(
+  animationSpeed: number | undefined,
+  framesPerSecond = PARAMETER_GIF_FPS,
+): ParameterGifTiming {
+  return resolveRangeGifTiming(animationSpeed, 'bounce', framesPerSecond);
 }
 
 export function resolveRangeGifTiming(
   animationSpeed: number | undefined,
   mode: 'bounce' | 'wrap',
+  framesPerSecond = PARAMETER_GIF_FPS,
 ): ParameterGifTiming {
   const safeSpeed = Number.isFinite(animationSpeed) && (animationSpeed ?? 0) > 0
     ? animationSpeed as number
     : 0.25;
+  const safeFramesPerSecond = Number.isFinite(framesPerSecond) && framesPerSecond > 0
+    ? framesPerSecond
+    : PARAMETER_GIF_FPS;
   const durationSeconds = (mode === 'bounce' ? 2 : 1) / safeSpeed;
-  const uncappedFrameCount = Math.max(2, Math.round(durationSeconds * PARAMETER_GIF_FPS));
+  const uncappedFrameCount = Math.max(2, Math.round(durationSeconds * safeFramesPerSecond));
   const normalizedFrameCount = mode === 'bounce'
     ? Math.max(2, Math.round(uncappedFrameCount / 2) * 2)
     : uncappedFrameCount;

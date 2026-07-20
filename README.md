@@ -73,7 +73,7 @@ Every user-defined constant starts in **Continuous** mode:
 
 Switch the mode button to **Discrete** to sample equally spaced levels instead. Set **num copies**, use the value slider to show one level, or press play to show all levels at once. Multiple discrete constants that are showing all copies produce every combination of their sampled values, so high copy counts can make a scene expensive to mesh and draw.
 
-To record a camera orbit, clear the object selection, enable **Turntable animation** in Scene Settings, set **Orbit speed**, and choose **Record loop**. GIF exports preserve the viewport aspect ratio and are limited to 720 pixels on their longest side.
+To record a camera orbit, clear the object selection, enable **Turntable animation** in Scene Settings, set **Orbit speed**, and choose **Record loop**. GIF exports preserve the viewport aspect ratio. Under **STEVE → Settings**, choose a maximum longest edge of 480, 720, or 1,080 pixels and a target frame rate of 10, 15, or 20 fps.
 
 ## Pinning Lights to Parametric Curves
 
@@ -100,7 +100,7 @@ The **Appearance** tab provides Matte Plastic, Glossy Plastic, Ceramic, Brushed 
 
 Point lights provide position, color, intensity, range, and shadow controls. Directional lights provide position, color, intensity, and shadows. Their viewport gizmo is an arrow with a draggable handle at its tail; both the arrow and the light rays always point from that position toward the world origin. Both light types can be pinned to a parametric curve from the Object tab. A light's visibility checkbox hides its editor gizmo only; set its intensity to `0` when you want to turn off its illumination.
 
-With nothing selected, **Scene Settings** controls the turntable, ambient light, shadow-map resolution and softness, projection, background, ground plane and reflection, XY grid, axes, and axis labels. **STEVE → Settings** controls tone mapping, exposure, Halos, PNG export scale, and interactive quality.
+With nothing selected, **Scene Settings** controls the turntable, ambient light, shadow-map resolution and softness, projection, background, ground plane and reflection, XY grid, axes, and axis labels. **STEVE → Settings** controls tone mapping, exposure, Halos, PNG export scale, GIF maximum size and frame rate, and interactive quality.
 
 ## Viewport Controls
 
@@ -138,7 +138,7 @@ Except for `Esc`, shortcuts apply when focus is not inside a text or number fiel
 
 - **File → Save** writes scene objects plus scene/render settings to `scene.3dplot.json` by default. **Open** accepts `.json` and `.3dplot.json` project files. Camera pose, current selection, and open UI state are not stored.
 - **File → Export PNG** saves the current viewport. Choose Standard (1×), High (2×), or Ultra (4×) under **STEVE → Settings**.
-- **Record loop** exports GIF animation from the Scene turntable controls, a playing continuous constant, or an animated curve-pinned light.
+- **Record loop** exports GIF animation from the Scene turntable controls, a playing continuous constant, or an animated curve-pinned light. GIF maximum size and target frame rate are configured under **STEVE → Settings**.
 - **File → Export STL** is available when a plot or intersection is selected. It exports the current generated triangle mesh in its world position; visual material and lighting settings are not part of STL.
 - Parametric curves and intersection curves export their rendered tube/ribbon geometry, not abstract mathematical paths.
 - STL export does not guarantee a closed or watertight solid; inspect open surfaces before using them for 3D printing.
@@ -151,6 +151,7 @@ ST.E.V.E. does not autosave. Save before reloading the page or choosing **File �
 
 - The renderer uses up to four point lights and four directional lights. Up to three point lights can cast shadows, subject to available graphics hardware; the first eligible directional light supplies the directional shadow map.
 - Up to four objects use live per-object reflection probes at once. PNG output is capped at 8,192 pixels on its longest side, so the requested scale can be reduced for an already-large viewport.
+- GIF recording is capped at 360 turntable frames or 180 parameter/light frames. Long, slow loops preserve their duration and may therefore run below the selected target frame rate. Higher GIF dimensions and frame rates take longer to encode and create larger files.
 - Large implicit bounds and higher implicit quality take longer to mesh. The inspector warns about invalid or unusually large bounds.
 - Large discrete families, dense surface sampling, reflections, refraction, shadows, and Halos can all increase rendering cost. Use **Performance** or **Balanced** interactive quality while editing a heavy scene.
 

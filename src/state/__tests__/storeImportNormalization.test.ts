@@ -107,6 +107,8 @@ describe('project import normalization', () => {
         bloomStrength: 12,
         bloomRadius: 0,
         bloomThreshold: -4,
+        gifMaxDimension: 1080,
+        gifFrameRate: 10,
         showDiagnostics: true,
       },
     }) as never);
@@ -116,8 +118,24 @@ describe('project import normalization', () => {
       bloomStrength: 2,
       bloomRadius: 0.25,
       bloomThreshold: 0,
+      gifMaxDimension: 1080,
+      gifFrameRate: 10,
     });
     expect(useAppStore.getState().render).not.toHaveProperty('showDiagnostics');
+  });
+
+  it('defaults unsupported GIF quality settings during import', () => {
+    useAppStore.getState().replaceProject(baseProject({
+      render: {
+        gifMaxDimension: 4096,
+        gifFrameRate: 60,
+      },
+    }) as never);
+
+    expect(useAppStore.getState().render).toMatchObject({
+      gifMaxDimension: 720,
+      gifFrameRate: 20,
+    });
   });
 
   it('preserves imported parameter values for detected constants', () => {

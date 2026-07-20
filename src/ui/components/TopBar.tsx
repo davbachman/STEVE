@@ -459,6 +459,34 @@ export function TopBar({
                   </select>
                 </label>
                 <label>
+                  <span>GIF Maximum Size</span>
+                  <select
+                    value={render.gifMaxDimension}
+                    onChange={(e) => updateRender({
+                      gifMaxDimension: Number(e.target.value) as typeof render.gifMaxDimension,
+                    })}
+                    aria-label="GIF Maximum Size"
+                  >
+                    <option value={480}>Compact (480 px)</option>
+                    <option value={720}>Standard (720 px)</option>
+                    <option value={1080}>High (1080 px)</option>
+                  </select>
+                </label>
+                <label>
+                  <span>GIF Frame Rate</span>
+                  <select
+                    value={render.gifFrameRate}
+                    onChange={(e) => updateRender({
+                      gifFrameRate: Number(e.target.value) as typeof render.gifFrameRate,
+                    })}
+                    aria-label="GIF Frame Rate"
+                  >
+                    <option value={10}>Compact (10 fps)</option>
+                    <option value={15}>Standard (15 fps)</option>
+                    <option value={20}>Smooth (20 fps)</option>
+                  </select>
+                </label>
+                <label>
                   <span>Interactive Quality</span>
                   <select
                     value={render.interactiveQuality}
