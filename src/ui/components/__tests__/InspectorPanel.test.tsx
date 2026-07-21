@@ -370,7 +370,7 @@ describe('RangeField numeric entry', () => {
     expect(labelTexts().some((text) => text.startsWith('Gradient Bottom'))).toBe(false);
   });
 
-  it('reveals emission controls only when Emission is checked for surfaces and curves', () => {
+  it('reveals emission controls for enabled materials and starts Neon Yellow curves emissive', () => {
     act(() => {
       const store = useAppStore.getState();
       store.newProject();
@@ -419,9 +419,9 @@ describe('RangeField numeric entry', () => {
       store.setInspectorTab('material');
     });
     expect(emissionCheckbox()).toBeInstanceOf(HTMLInputElement);
-    expect(emissionCheckbox()?.checked).toBe(false);
-    expect(hasEmissionColor()).toBe(false);
-    expect(hasEmissionStrength()).toBe(false);
+    expect(emissionCheckbox()?.checked).toBe(true);
+    expect(hasEmissionColor()).toBe(true);
+    expect(hasEmissionStrength()).toBe(true);
   });
 
   it('groups grid and contour controls in one Surface Decorations dropdown', () => {
