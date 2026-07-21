@@ -96,7 +96,7 @@ Intersections are derived in world space, so they follow source-surface edits, m
 
 ## Appearance, Lighting, and Scene Controls
 
-The **Appearance** tab provides Matte Plastic, Glossy Plastic, Ceramic, Brushed Metal, Chrome, Neon Yellow, Clear Glass, Frosted Glass, Tinted Glass, Rubber, and Mirror presets. New parametric curves use the emissive Neon Yellow preset by default. Presets can be customized with the material controls. Refraction takes effect when opacity is below 1. **Surface Decorations** contains grid controls for parametric/explicit surfaces and X/Y/Z contour controls for non-curve plot surfaces.
+The **Appearance** tab provides Matte Plastic, Glossy Plastic, Ceramic, Brushed Metal, Chrome, Neon Yellow, Clear Glass, Frosted Glass, Tinted Glass, Rubber, and Mirror presets. New parametric curves use Ceramic by default, while intersection curves use the emissive Neon Yellow preset. Presets can be customized with the material controls. Refraction takes effect when opacity is below 1. **Surface Decorations** contains grid controls for parametric/explicit surfaces and X/Y/Z contour controls for non-curve plot surfaces.
 
 Point lights provide position, color, intensity, range, and shadow controls. Directional lights provide position, color, intensity, and shadows. Their viewport gizmo is an arrow with a draggable handle at its tail; both the arrow and the light rays always point from that position toward the world origin. Both light types can be pinned to a parametric curve from the Object tab. A light's visibility checkbox hides its editor gizmo only; set its intensity to `0` when you want to turn off its illumination.
 

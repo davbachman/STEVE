@@ -341,7 +341,7 @@ export function createDefaultCurve(name = 'Curve'): PlotObject {
       tubeRadius: 0.06,
       renderAsTube: true,
     },
-    material: { ...materialPresets['Neon Yellow'] },
+    material: { ...materialPresets.Ceramic },
   };
 }
 
@@ -352,7 +352,7 @@ export function createDefaultIntersection(name = 'Intersection'): IntersectionOb
     type: 'intersection',
     visible: true,
     transform: { position: { x: 0, y: 0, z: 0 } },
-    material: { ...materialPresets['Chrome'] },
+    material: { ...materialPresets['Neon Yellow'] },
     sourceSurfaceIds: [null, null],
     curveStyle: {
       tubeRadius: 0.06,

@@ -45,7 +45,7 @@ describe('intersection object state', () => {
       sourceSurfaceIds: [null, null],
       curveStyle: { tubeRadius: 0.06, renderAsTube: true },
     });
-    expect(first.material).toEqual(materialPresets.Chrome);
+    expect(first.material).toEqual(materialPresets['Neon Yellow']);
     expect(second.name).toBe('Intersection 2');
     expect(useAppStore.getState().selectedId).toBe(second.id);
     expect(useAppStore.getState().ui.inspectorTab).toBe('object');
@@ -224,7 +224,7 @@ describe('intersection object state', () => {
       sourceSurfaceIds: [null, null],
       curveStyle: { tubeRadius: 0.06, renderAsTube: true },
     });
-    expect(pasted.material).toEqual(materialPresets.Chrome);
+    expect(pasted.material).toEqual(materialPresets['Neon Yellow']);
   });
 
   it('clears a deleted source in the same undoable edit', () => {

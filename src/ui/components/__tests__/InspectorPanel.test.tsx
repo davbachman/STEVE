@@ -370,7 +370,7 @@ describe('RangeField numeric entry', () => {
     expect(labelTexts().some((text) => text.startsWith('Gradient Bottom'))).toBe(false);
   });
 
-  it('reveals emission controls for enabled materials and starts Neon Yellow curves emissive', () => {
+  it('reveals emission controls only when Emission is checked for surfaces and curves', () => {
     act(() => {
       const store = useAppStore.getState();
       store.newProject();
@@ -419,9 +419,9 @@ describe('RangeField numeric entry', () => {
       store.setInspectorTab('material');
     });
     expect(emissionCheckbox()).toBeInstanceOf(HTMLInputElement);
-    expect(emissionCheckbox()?.checked).toBe(true);
-    expect(hasEmissionColor()).toBe(true);
-    expect(hasEmissionStrength()).toBe(true);
+    expect(emissionCheckbox()?.checked).toBe(false);
+    expect(hasEmissionColor()).toBe(false);
+    expect(hasEmissionStrength()).toBe(false);
   });
 
   it('groups grid and contour controls in one Surface Decorations dropdown', () => {
@@ -545,7 +545,7 @@ describe('RangeField numeric entry', () => {
     expect(intersection.sourceSurfaceIds).toEqual([implicitId, parametricId]);
   });
 
-  it('gives intersections curve-equivalent Appearance controls without surface decorations', () => {
+  it('gives intersections Neon curve Appearance controls without surface decorations', () => {
     act(() => {
       const store = useAppStore.getState();
       store.newProject();
@@ -564,8 +564,9 @@ describe('RangeField numeric entry', () => {
     for (const label of ['Preset', 'Color', 'Opacity', 'Reflectiveness', 'Roughness', 'Refraction', 'Emission']) {
       expect(labelTexts.some((text) => text?.startsWith(label)), label).toBe(true);
     }
-    expect(container.textContent).not.toContain('Emission color');
-    expect(container.textContent).not.toContain('Emission strength');
+    expect(container.querySelector<HTMLSelectElement>('select')?.value).toBe('Neon Yellow');
+    expect(container.textContent).toContain('Emission color');
+    expect(container.textContent).toContain('Emission strength');
     expect(container.textContent).not.toContain('Surface Decorations');
     expect(container.textContent).not.toContain('Wireframe');
     expect(container.textContent).not.toContain('Contours');

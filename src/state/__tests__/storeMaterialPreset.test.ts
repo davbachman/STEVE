@@ -43,20 +43,14 @@ describe('material preset application', () => {
     });
   });
 
-  it('creates parametric curves with the emissive Neon Yellow preset', () => {
+  it('creates parametric curves with the Ceramic preset', () => {
     useAppStore.getState().addPlot('curve');
     const curve = useAppStore.getState().objects.find(
       (object): object is PlotObject => object.type === 'plot'
         && object.equation.kind === 'parametric_curve',
     );
 
-    expect(curve?.material).toEqual(materialPresets['Neon Yellow']);
-    expect(curve?.material).toMatchObject({
-      baseColor: '#fff200',
-      emissionEnabled: true,
-      emissionColor: '#fff200',
-      emissionStrength: 3.5,
-      presetName: 'Neon Yellow',
-    });
+    expect(curve?.material).toEqual(materialPresets.Ceramic);
+    expect(curve?.material.presetName).toBe('Ceramic');
   });
 });
