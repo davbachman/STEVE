@@ -222,7 +222,7 @@ describe('RangeField numeric entry', () => {
     expect(panel?.getAttribute('aria-label')).toBe('Grid & Axes');
     expect(panel?.textContent).toContain('XY Grid');
     expect(panel?.textContent).toContain('Axes Length');
-    expect(panel?.textContent).toContain('Default Graph Bounds');
+    expect(panel?.textContent).toContain('Graph Bounds');
     expect(panel?.textContent).not.toContain('Ambient Light');
   });
 

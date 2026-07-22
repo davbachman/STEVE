@@ -1207,7 +1207,7 @@ function BoundsEditor({ objectId }: { objectId?: string } = {}) {
 
   return (
     <div className="bounds-editor">
-      <h4>{objectId ? 'Object Bounds' : 'Default Graph Bounds'}</h4>
+      <h4>{objectId ? 'Object Bounds' : 'Graph Bounds'}</h4>
       <div
         className="domain-table domain-table--bounds"
         role="table"
