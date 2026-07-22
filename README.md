@@ -138,7 +138,7 @@ Except for `Esc`, shortcuts apply when focus is not inside a text or number fiel
 
 - **File → Save** writes scene objects plus scene/render settings to `scene.3dplot.json` by default. **Open** accepts `.json` and `.3dplot.json` project files. Camera pose, current selection, and open UI state are not stored.
 - **File → Export PNG** saves the current viewport. Choose Standard (1×), High (2×), or Ultra (4×) under **STEVE → Settings**.
-- **Record loop** exports GIF animation from the Scene turntable controls, a playing continuous constant, or an animated curve-pinned light. GIF maximum size and target frame rate are configured under **STEVE → Settings**.
+- **Record loop** exports GIF animation from the Scene turntable controls, a playing continuous constant, or an animated curve-pinned light. The current object selection is temporarily cleared while frames are captured and restored when recording finishes or is canceled, keeping selection outlines and light gizmos out of the GIF. GIF maximum size and target frame rate are configured under **STEVE → Settings**.
 - **File → Export STL** is available when a plot or intersection is selected. It exports the current generated triangle mesh in its world position; visual material and lighting settings are not part of STL.
 - Parametric curves and intersection curves export their rendered tube/ribbon geometry, not abstract mathematical paths.
 - STL export does not guarantee a closed or watertight solid; inspect open surfaces before using them for 3D printing.

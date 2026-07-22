@@ -29,7 +29,7 @@ import {
   intersectRayWithPlotGeometry,
   type PlotGeometry,
 } from './plotGeometry';
-import { setAnimationGifRecording } from './animationRecordingState';
+import { GifSelectionGuard, setAnimationGifRecording } from './animationRecordingState';
 import { GifEncoderWorkerClient } from './GifEncoderWorkerClient';
 import {
   parameterValueForGifFrame,
@@ -343,6 +343,7 @@ export class SceneController {
   private recordingGif = false;
   private gifAbortController: AbortController | null = null;
   private gifEncoder: GifEncoderWorkerClient | null = null;
+  private readonly gifSelection = new GifSelectionGuard();
   private lastFrameTime = 0;
   private frameTimeMs = 16.67;
   private fps = 60;
@@ -537,10 +538,18 @@ export class SceneController {
 
   private beginGifRecording(encoder: GifEncoderWorkerClient): AbortController {
     const abortController = new AbortController();
+    const state = useAppStore.getState();
+    this.gifSelection.begin(state.selectedId);
     this.recordingGif = true;
     this.gifAbortController = abortController;
     this.gifEncoder = encoder;
     setAnimationGifRecording(true);
+    if (state.selectedId !== null) {
+      state.selectObject(null);
+    }
+    if (this.latestSnapshot) {
+      this.latestSnapshot = { ...this.latestSnapshot, selectedId: null };
+    }
     return abortController;
   }
 
@@ -550,6 +559,14 @@ export class SceneController {
     this.gifEncoder = null;
     this.recordingGif = false;
     setAnimationGifRecording(false);
+    const state = useAppStore.getState();
+    const selectedId = this.gifSelection.finish(new Set(state.objects.map((object) => object.id)));
+    if (state.selectedId !== selectedId) {
+      state.selectObject(selectedId);
+    }
+    if (this.latestSnapshot) {
+      this.latestSnapshot = { ...this.latestSnapshot, selectedId };
+    }
   }
 
   private async recordTurntableLoop(onProgress?: (progress: number) => void): Promise<void> {
@@ -580,9 +597,9 @@ export class SceneController {
     const encoder = new GifEncoderWorkerClient();
     const abortController = this.beginGifRecording(encoder);
     const { signal } = abortController;
-    onProgress?.(0);
 
     try {
+      onProgress?.(0);
       throwIfGifRecordingCancelled(signal);
       this.canvas.width = dimensions.width;
       this.canvas.height = dimensions.height;
@@ -670,9 +687,9 @@ export class SceneController {
     const encoder = new GifEncoderWorkerClient();
     const abortController = this.beginGifRecording(encoder);
     const { signal } = abortController;
-    onProgress?.(0);
 
     try {
+      onProgress?.(0);
       for (const entry of animatedParameters) {
         useAppStore.getState().setParameterAnimation(entry.plotId, entry.parameterName, { animating: false });
       }
@@ -798,9 +815,9 @@ export class SceneController {
     const encoder = new GifEncoderWorkerClient();
     const abortController = this.beginGifRecording(encoder);
     const { signal } = abortController;
-    onProgress?.(0);
 
     try {
+      onProgress?.(0);
       this.canvas.width = dimensions.width;
       this.canvas.height = dimensions.height;
       gl.viewport(0, 0, dimensions.width, dimensions.height);
@@ -992,7 +1009,10 @@ export class SceneController {
       return;
     }
     this.orthographicProjection = state.scene.cameraProjection === 'orthographic';
-    const snapshot = createRendererSceneSnapshot(state, this.getCameraSnapshot());
+    const snapshot = createRendererSceneSnapshot({
+      ...state,
+      selectedId: this.gifSelection.selectedIdForRender(state.selectedId),
+    }, this.getCameraSnapshot());
     this.latestSnapshot = snapshot;
     this.syncBackground(snapshot);
     this.syncPointLights(snapshot.objects);
