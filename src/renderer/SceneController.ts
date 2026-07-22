@@ -639,6 +639,7 @@ export class SceneController {
       this.canvas.height = baseHeight;
       gl.viewport(0, 0, baseWidth, baseHeight);
       this.endGifRecording(abortController);
+      this.resizeViewport();
       this.updateCameraMatrices();
       this.renderScene();
     }
@@ -760,6 +761,7 @@ export class SceneController {
       this.canvas.height = baseHeight;
       gl.viewport(0, 0, baseWidth, baseHeight);
       this.endGifRecording(abortController);
+      this.resizeViewport();
       const restoredState = useAppStore.getState();
       this.sync({
         scene: restoredState.scene,
@@ -876,6 +878,7 @@ export class SceneController {
       this.canvas.height = baseHeight;
       gl.viewport(0, 0, baseWidth, baseHeight);
       this.endGifRecording(abortController);
+      this.resizeViewport();
       const restoredState = useAppStore.getState();
       this.sync({
         scene: restoredState.scene,
@@ -991,7 +994,10 @@ export class SceneController {
 
   resizeViewport(): void {
     const gl = this.gl;
-    if (!gl) {
+    // Recording deliberately renders into a smaller backing store. Clearing the
+    // selection can also change the surrounding layout and queue a resize, so
+    // leave the capture dimensions untouched until the recording is complete.
+    if (!gl || this.recordingGif) {
       return;
     }
     const width = Math.max(1, Math.floor(this.canvas.clientWidth * window.devicePixelRatio));
