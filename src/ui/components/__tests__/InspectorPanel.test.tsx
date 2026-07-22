@@ -179,6 +179,53 @@ describe('RangeField numeric entry', () => {
     }
   });
 
+  it('groups unselected scene controls into camera, lighting, and grid tabs', () => {
+    act(() => {
+      const store = useAppStore.getState();
+      store.newProject();
+      store.setInspectorTab('scene');
+    });
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    act(() => {
+      root?.render(<InspectorPanel />);
+    });
+
+    const sceneTabs = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+    expect(sceneTabs.map((tab) => tab.textContent)).toEqual([
+      'Camera & Environment',
+      'Lights & Shadows',
+      'Grid & Axes',
+    ]);
+    expect(sceneTabs.map((tab) => tab.getAttribute('aria-selected'))).toEqual(['true', 'false', 'false']);
+
+    const panel = container.querySelector('#scene-settings-panel');
+    expect(panel?.getAttribute('aria-label')).toBe('Camera & Environment');
+    expect(panel?.textContent).toContain('Turntable animation');
+    expect(panel?.textContent).toContain('Camera Projection');
+    expect(panel?.textContent).not.toContain('Ambient Light');
+    expect(panel?.textContent).not.toContain('XY Grid');
+
+    act(() => {
+      sceneTabs[1]?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(panel?.getAttribute('aria-label')).toBe('Lights & Shadows');
+    expect(panel?.textContent).toContain('Ambient Light');
+    expect(panel?.textContent).toContain('Shadow map resolution');
+    expect(panel?.textContent).not.toContain('Camera Projection');
+
+    act(() => {
+      sceneTabs[2]?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(panel?.getAttribute('aria-label')).toBe('Grid & Axes');
+    expect(panel?.textContent).toContain('XY Grid');
+    expect(panel?.textContent).toContain('Axes Length');
+    expect(panel?.textContent).toContain('Default Graph Bounds');
+    expect(panel?.textContent).not.toContain('Ambient Light');
+  });
+
   it('shows orbit speed only while turntable animation is active', () => {
     act(() => {
       const store = useAppStore.getState();
@@ -198,11 +245,8 @@ describe('RangeField numeric entry', () => {
     );
     expect(turntableButton).toBeInstanceOf(HTMLButtonElement);
     const sceneSettings = container.querySelector('fieldset.scene-settings-fieldset');
-    expect(Array.from(sceneSettings?.children ?? []).slice(0, 3).map((element) => element.textContent)).toEqual([
-      'Scene Settings',
-      'Turntable animation',
-      'Ambient Light',
-    ]);
+    expect(sceneSettings?.getAttribute('aria-label')).toBe('Camera & Environment');
+    expect(sceneSettings?.firstElementChild?.textContent).toBe('Turntable animation');
     expect(turntableButton?.getAttribute('aria-pressed')).toBe('false');
     expect(Array.from(container.querySelectorAll('.range-field')).some(
       (field) => field.firstElementChild?.textContent === 'Orbit speed (°/s)',
@@ -572,7 +616,7 @@ describe('RangeField numeric entry', () => {
     expect(container.textContent).not.toContain('Contours');
   });
 
-  it('shows Scene controls by themselves when no object is selected', () => {
+  it('shows scene tabs when no object is selected', () => {
     act(() => {
       useAppStore.getState().newProject();
       useAppStore.getState().setInspectorTab('scene');
@@ -583,14 +627,10 @@ describe('RangeField numeric entry', () => {
     act(() => root?.render(<InspectorPanel />));
 
     const tabLabels = Array.from(container.querySelectorAll('.tabs__tab')).map((button) => button.textContent);
-    expect(tabLabels).toEqual([]);
-    expect(container.querySelector('.tabs')).toBeNull();
-    expect(container.querySelector('.scene-settings-heading')?.textContent).toBe('Scene Settings');
-    expect(Array.from(container.querySelectorAll('label')).some(
-      (label) => label.textContent?.includes('Ambient light'),
-    )).toBe(true);
-    expect(container.textContent).toContain('Shadow map resolution');
-    expect(container.textContent).toContain('Shadow softness');
+    expect(tabLabels).toEqual(['Camera & Environment', 'Lights & Shadows', 'Grid & Axes']);
+    expect(container.querySelector('.tabs__tab--active')?.textContent).toBe('Camera & Environment');
+    expect(container.textContent).toContain('Camera Projection');
+    expect(container.textContent).not.toContain('Ambient light');
   });
 
   it('shows only Object and Appearance when an object is selected', () => {
@@ -613,9 +653,9 @@ describe('RangeField numeric entry', () => {
     expect(container.textContent).not.toContain('Ambient light');
 
     act(() => useAppStore.getState().selectObject(null));
-    expect(tabLabels()).toEqual([]);
-    expect(container.querySelector('.tabs')).toBeNull();
-    expect(container.textContent).toContain('Ambient light');
+    expect(tabLabels()).toEqual(['Camera & Environment', 'Lights & Shadows', 'Grid & Axes']);
+    expect(container.querySelector('.tabs__tab--active')?.textContent).toBe('Camera & Environment');
+    expect(container.textContent).toContain('Camera Projection');
   });
 
   it('keeps point-light position in Object and puts its other controls in Appearance', () => {

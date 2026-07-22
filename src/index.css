@@ -1064,6 +1064,11 @@ input[type='color'] {
   background: linear-gradient(180deg, #1f3354, #16263f);
 }
 
+.tabs--scene .tabs__tab {
+  min-width: 0;
+  line-height: 1.2;
+}
+
 .inspector-content {
   padding: 0.75rem;
 }
@@ -1077,10 +1082,6 @@ input[type='color'] {
 .bounds-editor h4 {
   margin: 0.2rem 0 0;
   font-size: 0.95rem;
-}
-
-.inspector-section .scene-settings-heading {
-  text-align: center;
 }
 
 .inspector-section label,

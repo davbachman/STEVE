@@ -29,7 +29,16 @@ const tabs = [
   { id: 'material', label: 'Appearance' },
 ] as const;
 
+const sceneTabs = [
+  { id: 'camera', label: 'Camera & Environment' },
+  { id: 'lighting', label: 'Lights & Shadows' },
+  { id: 'grid', label: 'Grid & Axes' },
+] as const;
+
+type SceneTabId = (typeof sceneTabs)[number]['id'];
+
 export function InspectorPanel({ viewportApi = null }: { viewportApi?: ViewportApi | null }) {
+  const [sceneTab, setSceneTab] = useState<SceneTabId>('camera');
   const storedTab = useAppStore((s) => s.ui.inspectorTab);
   const setTab = useAppStore((s) => s.setInspectorTab);
   const objects = useAppStore((s) => s.objects);
@@ -47,11 +56,27 @@ export function InspectorPanel({ viewportApi = null }: { viewportApi?: ViewportA
             </button>
           ))}
         </div>
-      ) : null}
+      ) : (
+        <div className="tabs tabs--scene" role="tablist" aria-label="Scene settings">
+          {sceneTabs.map((sceneTabOption) => (
+            <button
+              key={sceneTabOption.id}
+              type="button"
+              role="tab"
+              aria-selected={sceneTab === sceneTabOption.id}
+              aria-controls="scene-settings-panel"
+              className={sceneTab === sceneTabOption.id ? 'tabs__tab tabs__tab--active' : 'tabs__tab'}
+              onClick={() => setSceneTab(sceneTabOption.id)}
+            >
+              {sceneTabOption.label}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="inspector-content">
         {tab === 'object' ? <ObjectTab selected={selected} viewportApi={viewportApi} /> : null}
         {tab === 'material' ? <MaterialTab selected={selected} /> : null}
-        {tab === 'scene' ? <SceneTab viewportApi={viewportApi} /> : null}
+        {tab === 'scene' ? <SceneTab activeTab={sceneTab} viewportApi={viewportApi} /> : null}
       </div>
     </aside>
   );
@@ -650,7 +675,7 @@ function CollapsibleSection({
   );
 }
 
-function SceneTab({ viewportApi }: { viewportApi: ViewportApi | null }) {
+function SceneTab({ activeTab, viewportApi }: { activeTab: SceneTabId; viewportApi: ViewportApi | null }) {
   const scene = useAppStore((s) => s.scene);
   const updateScene = useAppStore((s) => s.updateScene);
   const [recordingProgress, setRecordingProgress] = useState<number | null>(null);
@@ -669,174 +694,193 @@ function SceneTab({ viewportApi }: { viewportApi: ViewportApi | null }) {
   };
 
   return (
-    <fieldset className="inspector-section scene-settings-fieldset" disabled={recording}>
-      <h3 className="scene-settings-heading">Scene Settings</h3>
-      <button
-        type="button"
-        className={scene.turntableEnabled ? 'turntable-toggle is-active' : 'turntable-toggle'}
-        aria-pressed={scene.turntableEnabled}
-        disabled={recording}
-        onClick={() => updateScene({ turntableEnabled: !scene.turntableEnabled })}
-      >
-        Turntable animation
-      </button>
-      {scene.turntableEnabled ? (
+    <fieldset
+      id="scene-settings-panel"
+      className="inspector-section scene-settings-fieldset"
+      role="tabpanel"
+      aria-label={sceneTabs.find((tab) => tab.id === activeTab)?.label}
+      disabled={recording}
+    >
+      {activeTab === 'camera' ? (
         <>
-          <RangeField
-            label="Orbit speed (°/s)"
-            min={MIN_TURNTABLE_SPEED}
-            max={MAX_TURNTABLE_SPEED}
-            step={1}
-            value={scene.turntableSpeed}
-            disabled={recording}
-            onChange={(value) => updateScene({
-              turntableSpeed: Math.min(MAX_TURNTABLE_SPEED, Math.max(MIN_TURNTABLE_SPEED, value)),
-            })}
-          />
           <button
             type="button"
-            className="turntable-record-button"
-            disabled={!viewportApi || recording}
-            aria-live="polite"
-            onClick={recordLoop}
+            className={scene.turntableEnabled ? 'turntable-toggle is-active' : 'turntable-toggle'}
+            aria-pressed={scene.turntableEnabled}
+            disabled={recording}
+            onClick={() => updateScene({ turntableEnabled: !scene.turntableEnabled })}
           >
-            {recording ? `Recording ${Math.round((recordingProgress ?? 0) * 100)}%` : 'Record loop'}
+            Turntable animation
           </button>
-          {recording ? (
-            <progress
-              className="turntable-record-progress"
-              aria-label="Turntable GIF recording progress"
-              max={1}
-              value={recordingProgress ?? 0}
-            />
+          {scene.turntableEnabled ? (
+            <>
+              <RangeField
+                label="Orbit speed (°/s)"
+                min={MIN_TURNTABLE_SPEED}
+                max={MAX_TURNTABLE_SPEED}
+                step={1}
+                value={scene.turntableSpeed}
+                disabled={recording}
+                onChange={(value) => updateScene({
+                  turntableSpeed: Math.min(MAX_TURNTABLE_SPEED, Math.max(MIN_TURNTABLE_SPEED, value)),
+                })}
+              />
+              <button
+                type="button"
+                className="turntable-record-button"
+                disabled={!viewportApi || recording}
+                aria-live="polite"
+                onClick={recordLoop}
+              >
+                {recording ? `Recording ${Math.round((recordingProgress ?? 0) * 100)}%` : 'Record loop'}
+              </button>
+              {recording ? (
+                <progress
+                  className="turntable-record-progress"
+                  aria-label="Turntable GIF recording progress"
+                  max={1}
+                  value={recordingProgress ?? 0}
+                />
+              ) : null}
+              {recordingError ? <div className="inspector-note" role="alert">{recordingError}</div> : null}
+            </>
           ) : null}
-          {recordingError ? <div className="inspector-note" role="alert">{recordingError}</div> : null}
-        </>
-      ) : null}
-      <h3>Ambient Light</h3>
-      <label className="checkbox-row">
-        <input
-          type="checkbox"
-          checked={scene.ambient.enabled}
-          onChange={(e) => updateScene({ ambient: { ...scene.ambient, enabled: e.target.checked } })}
-        />
-        Ambient light
-      </label>
-      {scene.ambient.enabled ? (
-        <>
+          <h3>Camera &amp; Environment</h3>
           <label>
-            Color
-            <input type="color" value={scene.ambient.color} onChange={(e) => updateScene({ ambient: { ...scene.ambient, color: e.target.value } })} />
-          </label>
-          <RangeField label="Intensity" min={0} max={2} step={0.01} value={scene.ambient.intensity} onChange={(v) => updateScene({ ambient: { ...scene.ambient, intensity: v } })} />
-        </>
-      ) : null}
-      <h3>Shadows</h3>
-      <label>
-        Shadow map resolution
-        <select
-          value={String(scene.shadow.shadowMapResolution)}
-          onChange={(e) => updateScene({ shadow: { ...scene.shadow, shadowMapResolution: Number(e.target.value) } })}
-        >
-          {![512, 1024, 2048, 4096].includes(scene.shadow.shadowMapResolution) ? (
-            <option value={String(scene.shadow.shadowMapResolution)}>{scene.shadow.shadowMapResolution}</option>
-          ) : null}
-          <option value="512">512</option>
-          <option value="1024">1024</option>
-          <option value="2048">2048</option>
-          <option value="4096">4096</option>
-        </select>
-      </label>
-      <RangeField
-        label="Shadow softness"
-        min={0}
-        max={1}
-        step={0.01}
-        value={scene.shadow.shadowSoftness}
-        onChange={(v) => updateScene({ shadow: { ...scene.shadow, shadowSoftness: v } })}
-      />
-      <h3>Camera &amp; Environment</h3>
-      <label>
-        Camera Projection
-        <select
-          value={scene.cameraProjection}
-          onChange={(e) => updateScene({ cameraProjection: e.target.value as 'perspective' | 'orthographic' })}
-        >
-          <option value="perspective">Perspective</option>
-          <option value="orthographic">Orthographic</option>
-        </select>
-      </label>
-      <label>
-        Background Mode
-        <select value={scene.backgroundMode} onChange={(e) => updateScene({ backgroundMode: e.target.value as 'solid' | 'gradient' })}>
-          <option value="solid">Solid</option>
-          <option value="gradient">Gradient</option>
-        </select>
-      </label>
-      {scene.backgroundMode === 'solid' ? (
-        <label>
-          Solid Color
-          <input type="color" value={scene.backgroundColor} onChange={(e) => updateScene({ backgroundColor: e.target.value })} />
-        </label>
-      ) : (
-        <>
-          <label>
-            Gradient Top
-            <input type="color" value={scene.gradientTopColor} onChange={(e) => updateScene({ gradientTopColor: e.target.value })} />
+            Camera Projection
+            <select
+              value={scene.cameraProjection}
+              onChange={(e) => updateScene({ cameraProjection: e.target.value as 'perspective' | 'orthographic' })}
+            >
+              <option value="perspective">Perspective</option>
+              <option value="orthographic">Orthographic</option>
+            </select>
           </label>
           <label>
-            Gradient Bottom
-            <input type="color" value={scene.gradientBottomColor} onChange={(e) => updateScene({ gradientBottomColor: e.target.value })} />
+            Background Mode
+            <select value={scene.backgroundMode} onChange={(e) => updateScene({ backgroundMode: e.target.value as 'solid' | 'gradient' })}>
+              <option value="solid">Solid</option>
+              <option value="gradient">Gradient</option>
+            </select>
           </label>
-        </>
-      )}
-      <label className="checkbox-row">
-        <input type="checkbox" checked={scene.groundPlaneVisible} onChange={(e) => updateScene({ groundPlaneVisible: e.target.checked })} />
-        Ground plane
-      </label>
-      {scene.groundPlaneVisible ? (
-        <>
-          <RangeField label="Ground Size" min={1} max={80} step={1} value={scene.groundPlaneSize} onChange={(v) => updateScene({ groundPlaneSize: v })} />
-          <label>
-            Ground Color
-            <input type="color" value={scene.groundPlaneColor} onChange={(e) => updateScene({ groundPlaneColor: e.target.value })} />
-          </label>
-          <RangeField label="Ground Roughness" min={0} max={1} step={0.01} value={scene.groundPlaneRoughness} onChange={(v) => updateScene({ groundPlaneRoughness: v })} />
+          {scene.backgroundMode === 'solid' ? (
+            <label>
+              Solid Color
+              <input type="color" value={scene.backgroundColor} onChange={(e) => updateScene({ backgroundColor: e.target.value })} />
+            </label>
+          ) : (
+            <>
+              <label>
+                Gradient Top
+                <input type="color" value={scene.gradientTopColor} onChange={(e) => updateScene({ gradientTopColor: e.target.value })} />
+              </label>
+              <label>
+                Gradient Bottom
+                <input type="color" value={scene.gradientBottomColor} onChange={(e) => updateScene({ gradientBottomColor: e.target.value })} />
+              </label>
+            </>
+          )}
           <label className="checkbox-row">
-            <input type="checkbox" checked={scene.groundPlaneReflective} onChange={(e) => updateScene({ groundPlaneReflective: e.target.checked })} />
-            Ground reflection
+            <input type="checkbox" checked={scene.groundPlaneVisible} onChange={(e) => updateScene({ groundPlaneVisible: e.target.checked })} />
+            Ground plane
           </label>
+          {scene.groundPlaneVisible ? (
+            <>
+              <RangeField label="Ground Size" min={1} max={80} step={1} value={scene.groundPlaneSize} onChange={(v) => updateScene({ groundPlaneSize: v })} />
+              <label>
+                Ground Color
+                <input type="color" value={scene.groundPlaneColor} onChange={(e) => updateScene({ groundPlaneColor: e.target.value })} />
+              </label>
+              <RangeField label="Ground Roughness" min={0} max={1} step={0.01} value={scene.groundPlaneRoughness} onChange={(v) => updateScene({ groundPlaneRoughness: v })} />
+              <label className="checkbox-row">
+                <input type="checkbox" checked={scene.groundPlaneReflective} onChange={(e) => updateScene({ groundPlaneReflective: e.target.checked })} />
+                Ground reflection
+              </label>
+            </>
+          ) : null}
         </>
       ) : null}
-      <label className="checkbox-row">
-        <input type="checkbox" checked={scene.gridVisible} onChange={(e) => updateScene({ gridVisible: e.target.checked })} />
-        XY grid
-      </label>
-      {scene.gridVisible ? (
+      {activeTab === 'lighting' ? (
         <>
-          <RangeField label="Grid Extent" min={1} max={80} step={1} value={scene.gridExtent} onChange={(v) => updateScene({ gridExtent: v })} />
-          <RangeField label="Grid Spacing" min={0.1} max={10} step={0.1} value={scene.gridSpacing} onChange={(v) => updateScene({ gridSpacing: v })} />
-          <RangeField label="Grid Opacity" min={0} max={1} step={0.01} value={scene.gridLineOpacity} onChange={(v) => updateScene({ gridLineOpacity: v })} />
-        </>
-      ) : null}
-      <label className="checkbox-row">
-        <input type="checkbox" checked={scene.axesVisible} onChange={(e) => updateScene({ axesVisible: e.target.checked })} />
-        Axes
-      </label>
-      {scene.axesVisible ? (
-        <>
-          <RangeField label="Axes Length" min={1} max={30} step={0.5} value={scene.axesLength} onChange={(v) => updateScene({ axesLength: v })} />
+          <h3>Ambient Light</h3>
           <label className="checkbox-row">
             <input
               type="checkbox"
-              checked={scene.axisLabelsVisible}
-              onChange={(e) => updateScene({ axisLabelsVisible: e.target.checked })}
+              checked={scene.ambient.enabled}
+              onChange={(e) => updateScene({ ambient: { ...scene.ambient, enabled: e.target.checked } })}
             />
-            Axis labels
+            Ambient light
           </label>
+          {scene.ambient.enabled ? (
+            <>
+              <label>
+                Color
+                <input type="color" value={scene.ambient.color} onChange={(e) => updateScene({ ambient: { ...scene.ambient, color: e.target.value } })} />
+              </label>
+              <RangeField label="Intensity" min={0} max={2} step={0.01} value={scene.ambient.intensity} onChange={(v) => updateScene({ ambient: { ...scene.ambient, intensity: v } })} />
+            </>
+          ) : null}
+          <h3>Shadows</h3>
+          <label>
+            Shadow map resolution
+            <select
+              value={String(scene.shadow.shadowMapResolution)}
+              onChange={(e) => updateScene({ shadow: { ...scene.shadow, shadowMapResolution: Number(e.target.value) } })}
+            >
+              {![512, 1024, 2048, 4096].includes(scene.shadow.shadowMapResolution) ? (
+                <option value={String(scene.shadow.shadowMapResolution)}>{scene.shadow.shadowMapResolution}</option>
+              ) : null}
+              <option value="512">512</option>
+              <option value="1024">1024</option>
+              <option value="2048">2048</option>
+              <option value="4096">4096</option>
+            </select>
+          </label>
+          <RangeField
+            label="Shadow softness"
+            min={0}
+            max={1}
+            step={0.01}
+            value={scene.shadow.shadowSoftness}
+            onChange={(v) => updateScene({ shadow: { ...scene.shadow, shadowSoftness: v } })}
+          />
         </>
       ) : null}
-      <BoundsEditor />
+      {activeTab === 'grid' ? (
+        <>
+          <h3>XY Grid</h3>
+          <label className="checkbox-row">
+            <input type="checkbox" checked={scene.gridVisible} onChange={(e) => updateScene({ gridVisible: e.target.checked })} />
+            XY grid
+          </label>
+          {scene.gridVisible ? (
+            <>
+              <RangeField label="Grid Extent" min={1} max={80} step={1} value={scene.gridExtent} onChange={(v) => updateScene({ gridExtent: v })} />
+              <RangeField label="Grid Spacing" min={0.1} max={10} step={0.1} value={scene.gridSpacing} onChange={(v) => updateScene({ gridSpacing: v })} />
+              <RangeField label="Grid Opacity" min={0} max={1} step={0.01} value={scene.gridLineOpacity} onChange={(v) => updateScene({ gridLineOpacity: v })} />
+            </>
+          ) : null}
+          <h3>Axes</h3>
+          <label className="checkbox-row">
+            <input type="checkbox" checked={scene.axesVisible} onChange={(e) => updateScene({ axesVisible: e.target.checked })} />
+            Axes
+          </label>
+          {scene.axesVisible ? (
+            <>
+              <RangeField label="Axes Length" min={1} max={30} step={0.5} value={scene.axesLength} onChange={(v) => updateScene({ axesLength: v })} />
+              <label className="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={scene.axisLabelsVisible}
+                  onChange={(e) => updateScene({ axisLabelsVisible: e.target.checked })}
+                />
+                Axis labels
+              </label>
+            </>
+          ) : null}
+          <BoundsEditor />
+        </>
+      ) : null}
     </fieldset>
   );
 }
