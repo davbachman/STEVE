@@ -745,7 +745,6 @@ function SceneTab({ activeTab, viewportApi }: { activeTab: SceneTabId; viewportA
               {recordingError ? <div className="inspector-note" role="alert">{recordingError}</div> : null}
             </>
           ) : null}
-          <h3>Camera &amp; Environment</h3>
           <label>
             Camera Projection
             <select
