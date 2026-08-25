@@ -95,6 +95,10 @@ describe('renderSnapshot helpers', () => {
     surface.material.opacity = 1;
     expect(classifyInteractiveShadowMode(surface)).toBe('solid');
     expect(shouldPlotCastInteractiveShadows(surface)).toBe(true);
+
+    surface.castShadows = false;
+    expect(classifyInteractiveShadowMode(surface)).toBe('none');
+    expect(shouldPlotCastInteractiveShadows(surface)).toBe(false);
   });
 
   it('supports wireframe grid lines on expression-only Graph objects', () => {

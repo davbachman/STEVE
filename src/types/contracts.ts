@@ -152,6 +152,7 @@ export interface PlotObject {
   name: string;
   type: 'plot';
   visible: boolean;
+  castShadows: boolean;
   transform: Transform;
   equation: EquationSpec;
   material: MaterialParams;
@@ -162,6 +163,7 @@ export interface IntersectionObject {
   name: string;
   type: 'intersection';
   visible: boolean;
+  castShadows: boolean;
   /** Intersections are derived in world space and always keep an identity transform. */
   transform: Transform;
   material: MaterialParams;

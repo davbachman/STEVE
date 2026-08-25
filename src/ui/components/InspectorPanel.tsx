@@ -401,6 +401,7 @@ function IntersectionObjectFields({ intersection }: { intersection: Extract<Scen
 
 function MaterialTab({ selected }: { selected: SceneObject | null }) {
   const updatePlotMaterial = useAppStore((s) => s.updatePlotMaterial);
+  const setObjectCastShadows = useAppStore((s) => s.setObjectCastShadows);
   const applyPreset = useAppStore((s) => s.applyMaterialPreset);
   if (!selected) return <EmptyState text="Select an object or light to edit appearance" />;
   if (selected.type === 'point_light') return <PointLightAppearanceFields light={selected} />;
@@ -414,6 +415,14 @@ function MaterialTab({ selected }: { selected: SceneObject | null }) {
 
   return (
     <div className="inspector-section">
+      <label className="checkbox-row">
+        <input
+          type="checkbox"
+          checked={selected.castShadows}
+          onChange={(e) => setObjectCastShadows(selected.id, e.target.checked)}
+        />
+        Casts Shadows
+      </label>
       <h3>Material</h3>
       <label>
         Preset
@@ -1153,7 +1162,7 @@ function PointLightAppearanceFields({ light }: { light: Extract<SceneObject, { t
       <RangeField label="Range" min={1} max={100} step={1} value={light.range} onChange={(v) => updatePointLight(light.id, { range: v })} />
       <label className="checkbox-row">
         <input type="checkbox" checked={light.castShadows} onChange={(e) => updatePointLight(light.id, { castShadows: e.target.checked })} />
-        Cast shadows
+        Casts Shadows
       </label>
     </div>
   );
@@ -1174,7 +1183,7 @@ function DirectionalLightAppearanceFields({ light }: { light: Extract<SceneObjec
       <RangeField label="Intensity" min={0} max={4} step={0.01} value={light.intensity} onChange={(intensity) => updateDirectionalLight(light.id, { intensity })} />
       <label className="checkbox-row">
         <input type="checkbox" checked={light.castShadows} onChange={(e) => updateDirectionalLight(light.id, { castShadows: e.target.checked })} />
-        Cast shadows
+        Casts Shadows
       </label>
     </div>
   );

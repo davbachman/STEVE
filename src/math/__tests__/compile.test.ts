@@ -11,6 +11,7 @@ function explicitPlot(rawText: string, parameters: Array<{ name: string; value: 
     name: 'plot',
     type: 'plot',
     visible: true,
+    castShadows: true,
     transform: { position: { x: 0, y: 0, z: 0 } },
     equation: {
       kind: 'explicit_surface',

@@ -41,6 +41,7 @@ describe('intersection object state', () => {
       name: 'Intersection 1',
       type: 'intersection',
       visible: true,
+      castShadows: true,
       transform: { position: { x: 0, y: 0, z: 0 } },
       sourceSurfaceIds: [null, null],
       curveStyle: { tubeRadius: 0.06, renderAsTube: true },
@@ -220,6 +221,7 @@ describe('intersection object state', () => {
     expect(pasted).toMatchObject({
       type: 'intersection',
       visible: true,
+      castShadows: true,
       transform: { position: { x: 0, y: 0, z: 0 } },
       sourceSurfaceIds: [null, null],
       curveStyle: { tubeRadius: 0.06, renderAsTube: true },

@@ -105,7 +105,7 @@ export function shouldShowPlotWireframe(plot: RenderableObject): boolean {
 }
 
 export function classifyInteractiveShadowMode(plot: RenderableObject): InteractiveShadowMode {
-  if (!plot.visible) {
+  if (!plot.visible || !plot.castShadows) {
     return 'none';
   }
   const opacity = clamp01(plot.material.opacity);

@@ -468,6 +468,42 @@ describe('RangeField numeric entry', () => {
     expect(hasEmissionStrength()).toBe(false);
   });
 
+  it('defaults every object Appearance menu to casting shadows and updates renderable objects', () => {
+    const addObject = (kind: 'surface' | 'intersection' | 'point' | 'directional') => {
+      const store = useAppStore.getState();
+      store.newProject();
+      if (kind === 'surface') store.addPlot('surface');
+      if (kind === 'intersection') store.addIntersection();
+      if (kind === 'point') store.addPointLight();
+      if (kind === 'directional') store.addDirectionalLight();
+      store.setInspectorTab('material');
+    };
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+
+    for (const kind of ['surface', 'intersection', 'point', 'directional'] as const) {
+      act(() => {
+        addObject(kind);
+        root?.render(<InspectorPanel />);
+      });
+      const checkbox = Array.from(container.querySelectorAll('label')).find(
+        (label) => label.textContent?.trim() === 'Casts Shadows',
+      )?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+      expect(checkbox, kind).toBeInstanceOf(HTMLInputElement);
+      expect(checkbox?.checked, kind).toBe(true);
+
+      if (kind === 'surface') {
+        act(() => checkbox?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+        const selected = useAppStore.getState().objects.find(
+          (object) => object.id === useAppStore.getState().selectedId,
+        );
+        expect(selected?.castShadows).toBe(false);
+      }
+    }
+  });
+
   it('groups grid and contour controls in one Surface Decorations dropdown', () => {
     act(() => {
       const store = useAppStore.getState();
@@ -673,14 +709,14 @@ describe('RangeField numeric entry', () => {
     expect(content?.textContent).toContain('Position');
     expect(content?.textContent).not.toContain('Intensity');
     expect(content?.textContent).not.toContain('Range');
-    expect(content?.textContent).not.toContain('Cast shadows');
+    expect(content?.textContent).not.toContain('Casts Shadows');
 
     act(() => useAppStore.getState().setInspectorTab('material'));
     content = container.querySelector('.inspector-content');
     expect(content?.textContent).toContain('Color');
     expect(content?.textContent).toContain('Intensity');
     expect(content?.textContent).toContain('Range');
-    expect(content?.textContent).toContain('Cast shadows');
+    expect(content?.textContent).toContain('Casts Shadows');
     expect(content?.textContent).not.toContain('Position');
   });
 
@@ -706,13 +742,13 @@ describe('RangeField numeric entry', () => {
     expect(content?.textContent).not.toContain('Sun elevation');
     expect(content?.textContent).not.toContain('Direction (points toward scene)');
     expect(content?.textContent).not.toContain('Intensity');
-    expect(content?.textContent).not.toContain('Cast shadows');
+    expect(content?.textContent).not.toContain('Casts Shadows');
 
     act(() => useAppStore.getState().setInspectorTab('material'));
     content = container.querySelector('.inspector-content');
     expect(content?.textContent).toContain('Color');
     expect(content?.textContent).toContain('Intensity');
-    expect(content?.textContent).toContain('Cast shadows');
+    expect(content?.textContent).toContain('Casts Shadows');
     expect(content?.textContent).not.toContain('Position');
     expect(content?.textContent).not.toContain('Direction (points toward scene)');
   });

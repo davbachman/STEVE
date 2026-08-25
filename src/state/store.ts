@@ -122,6 +122,7 @@ interface AppActions {
   updateRender: (patch: Partial<RenderSettings>) => void;
   setObjectName: (id: UUID, name: string) => void;
   setObjectVisibility: (id: UUID, visible: boolean) => void;
+  setObjectCastShadows: (id: UUID, castShadows: boolean) => void;
   setObjectPosition: (id: UUID, pos: { x: number; y: number; z: number }) => void;
   beginObjectDragHistory: (id: UUID) => void;
   commitObjectDragHistory: (id: UUID) => void;
@@ -1107,6 +1108,20 @@ export const useAppStore = create<AppState>((set, get) => ({
       };
     }),
 
+  setObjectCastShadows: (id, castShadows) =>
+    set((state) => {
+      const idx = state.objects.findIndex((obj) => obj.id === id);
+      if (idx === -1 || state.objects[idx].castShadows === castShadows) return state;
+      const next = produce(state, (draft) => {
+        draft.objects[idx].castShadows = castShadows;
+      });
+      return {
+        ...next,
+        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyFuture: [],
+      };
+    }),
+
   setObjectPosition: (id, pos) =>
     set((state) => {
       const idx = state.objects.findIndex((obj) => obj.id === id);
@@ -1660,6 +1675,7 @@ function normalizeIntersectionObjectImport(record: Record<string, unknown>, inde
     id: asNonEmptyString(record.id) ?? fallback.id,
     name: asNonEmptyString(record.name) ?? fallback.name,
     visible: asBoolean(record.visible) ?? fallback.visible,
+    castShadows: asBoolean(record.castShadows) ?? fallback.castShadows,
     transform: structuredClone(fallback.transform),
     material: normalizeMaterialImport(materialInput, fallback.material),
     sourceSurfaceIds: [
@@ -1683,6 +1699,7 @@ function normalizePlotObjectImport(record: Record<string, unknown>, index: numbe
     id: asNonEmptyString(record.id) ?? fallback.id,
     name: asNonEmptyString(record.name) ?? fallback.name,
     visible: asBoolean(record.visible) ?? fallback.visible,
+    castShadows: asBoolean(record.castShadows) ?? fallback.castShadows,
     transform: {
       position: normalizeVec3(transformInput?.position, fallback.transform.position),
     },

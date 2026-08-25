@@ -1397,7 +1397,7 @@ export class SceneController {
     gl.disable(gl.CULL_FACE);
     for (const plotSnapshot of snapshot.plots) {
       const opacity = clamp01(plotSnapshot.plot.material.opacity);
-      if (opacity >= 0.999 || !plotSnapshot.plot.visible) {
+      if (opacity >= 0.999 || !plotSnapshot.plot.visible || !plotSnapshot.plot.castShadows) {
         continue;
       }
       this.drawTransparentShadowMeshWithMatrix(plotSnapshot.plot, this.renderPrograms!.transShadow, this.lightViewProjection);

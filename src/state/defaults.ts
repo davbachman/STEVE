@@ -333,6 +333,7 @@ export function createDefaultCurve(name = 'Curve'): PlotObject {
     name,
     type: 'plot',
     visible: true,
+    castShadows: true,
     transform: { position: { x: 0, y: 0, z: 0 } },
     equation: {
       kind: 'parametric_curve',
@@ -351,6 +352,7 @@ export function createDefaultIntersection(name = 'Intersection'): IntersectionOb
     name,
     type: 'intersection',
     visible: true,
+    castShadows: true,
     transform: { position: { x: 0, y: 0, z: 0 } },
     material: { ...materialPresets['Neon Yellow'] },
     sourceSurfaceIds: [null, null],
@@ -369,6 +371,7 @@ export function createDefaultSurface(name = 'Surface'): PlotObject {
     name,
     type: 'plot',
     visible: true,
+    castShadows: true,
     transform: { position: { x: 0, y: 0, z: 0 } },
     equation: {
       kind: 'parametric_surface',
@@ -387,6 +390,7 @@ export function createDefaultGraph(name = 'Graph'): PlotObject {
     name,
     type: 'plot',
     visible: true,
+    castShadows: true,
     transform: { position: { x: 0, y: 0, z: 0 } },
     equation: {
       kind: 'explicit_surface',
@@ -409,6 +413,7 @@ export function createDefaultImplicit(name = 'Implicit'): PlotObject {
     name,
     type: 'plot',
     visible: true,
+    castShadows: true,
     transform: { position: { x: 0, y: 0, z: 0 } },
     equation: {
       kind: 'implicit_surface',
@@ -428,6 +433,7 @@ export function createBlankPlot(name = 'Surface'): PlotObject {
     name,
     type: 'plot',
     visible: true,
+    castShadows: true,
     transform: { position: { x: 0, y: 0, z: 0 } },
     equation: {
       kind: 'explicit_surface',

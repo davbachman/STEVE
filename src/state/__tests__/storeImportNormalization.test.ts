@@ -30,6 +30,7 @@ describe('project import normalization', () => {
       objects: [
         {
           ...validPlot,
+          castShadows: false,
           equation: {
             kind: 'explicit_surface',
             source: { rawText: 'z = cos(x) * sin(y)' },
@@ -69,6 +70,7 @@ describe('project import normalization', () => {
       throw new Error('Expected imported plot');
     }
     expect(state.objects[0].equation.source.rawText).toBe('z = cos(x) * sin(y)');
+    expect(state.objects[0].castShadows).toBe(false);
     expect(state.objects[0].material.ior).toBe(1.6);
     expect(state.objects[0].material.refractionEnabled).toBe(false);
     expect(state.objects[0].material.emissionEnabled).toBe(true);
