@@ -27,6 +27,22 @@ export function sortTransparentSceneBackToFront<T>(
     .map(({ item }) => item);
 }
 
+export function farthestPositionFromCamera(
+  positions: ReadonlyArray<ScenePosition>,
+  cameraPosition: ScenePosition,
+): ScenePosition | null {
+  let farthest: ScenePosition | null = null;
+  let farthestDistance = Number.NEGATIVE_INFINITY;
+  for (const position of positions) {
+    const distance = squaredDistance(position, cameraPosition);
+    if (distance > farthestDistance) {
+      farthest = position;
+      farthestDistance = distance;
+    }
+  }
+  return farthest;
+}
+
 function squaredDistance(a: ScenePosition, b: ScenePosition): number {
   const dx = a.x - b.x;
   const dy = a.y - b.y;

@@ -38,7 +38,11 @@ import {
   resolveRangeGifTiming,
 } from './parameterGif';
 import { resolveTurntableGifDimensions, resolveTurntableGifTiming } from './turntableGif';
-import { sortTransparentSceneBackToFront } from './transparentSceneOrder';
+import {
+  farthestPositionFromCamera,
+  sortTransparentSceneBackToFront,
+  type ScenePosition,
+} from './transparentSceneOrder';
 
 export type ViewPreset = 'top' | 'front' | 'side' | 'default';
 
@@ -1789,7 +1793,7 @@ export class SceneController {
         })
         .map((plotSnapshot) => ({
           item: { kind: 'plot' as const, plotSnapshot },
-          position: plotSnapshot.plot.transform.position,
+          position: this.transparentPlotSortPosition(plotSnapshot.plot, snapshot.pointLights, cameraPosition),
         })),
       ...snapshot.pointLights
         .filter(({ light }) => shouldRenderPointLightGizmo(light))
@@ -1808,6 +1812,26 @@ export class SceneController {
     gl.disable(gl.BLEND);
     gl.enable(gl.CULL_FACE);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  private transparentPlotSortPosition(
+    plot: RenderableObject,
+    pointLights: RendererSceneSnapshot['pointLights'],
+    cameraPosition: vec3,
+  ): ScenePosition {
+    const pinnedLightPositions = pointLights
+      .map(({ light }) => light)
+      .filter((light) => (
+        shouldRenderPointLightGizmo(light)
+        && light.curvePin.enabled
+        && light.curvePin.curveId === plot.id
+      ))
+      .map((light) => light.position);
+    return farthestPositionFromCamera(pinnedLightPositions, {
+      x: cameraPosition[0],
+      y: cameraPosition[1],
+      z: cameraPosition[2],
+    }) ?? plot.transform.position;
   }
 
   private renderTransparentItems(
@@ -2277,12 +2301,41 @@ export class SceneController {
     this.drawPointGizmoHandle(
       program,
       pointBuffer,
-      vec3.fromValues(light.position.x, light.position.y, light.position.z),
+      this.pointLightGizmoRenderPosition(snapshot, light),
       pointLightGizmoColor(light.color, selected),
       selected ? 360 : 300,
       selected,
     );
     this.finishPointGizmoPass();
+  }
+
+  private pointLightGizmoRenderPosition(
+    snapshot: RendererSceneSnapshot,
+    light: PointLightObject,
+  ): vec3 {
+    const position = vec3.fromValues(light.position.x, light.position.y, light.position.z);
+    const curve = pinnedCurveForLight(light, snapshot.objects);
+    if (
+      !curve?.visible
+      || clamp01(curve.material.opacity) <= 0.001
+      || curve.equation.kind !== 'parametric_curve'
+    ) {
+      return position;
+    }
+
+    const renderedHalfWidth = curve.equation.renderAsTube
+      ? curve.equation.tubeRadius
+      : Math.max(0.02, curve.equation.tubeRadius * 0.35);
+    const depthAllowance = renderedHalfWidth + Math.max(0.001, this.camera.radius * 0.0002);
+    const cameraPosition = this.getCameraPosition();
+    const towardCamera = this.orthographicProjection
+      ? vec3.sub(vec3.create(), cameraPosition, this.camera.target)
+      : vec3.sub(vec3.create(), cameraPosition, position);
+    if (vec3.squaredLength(towardCamera) <= Number.EPSILON) {
+      return position;
+    }
+    vec3.normalize(towardCamera, towardCamera);
+    return vec3.scaleAndAdd(position, position, towardCamera, depthAllowance);
   }
 
   private renderDirectionalLightGizmos(snapshot: RendererSceneSnapshot, program: ProgramBundle): void {

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { sortTransparentSceneBackToFront } from '../transparentSceneOrder';
+import {
+  farthestPositionFromCamera,
+  sortTransparentSceneBackToFront,
+} from '../transparentSceneOrder';
 
 describe('transparent scene ordering', () => {
   it('interleaves plots and point-light gizmos from far to near', () => {
@@ -20,5 +23,16 @@ describe('transparent scene ordering', () => {
     ], { x: 0, y: 0, z: 0 });
 
     expect(ordered).toEqual(['first', 'second']);
+  });
+
+  it('finds the farthest pinned-light position for a shared transparent curve', () => {
+    const farthest = farthestPositionFromCamera([
+      { x: 0, y: 3, z: 0 },
+      { x: 0, y: 8, z: 0 },
+      { x: 0, y: 5, z: 0 },
+    ], { x: 0, y: 0, z: 0 });
+
+    expect(farthest).toEqual({ x: 0, y: 8, z: 0 });
+    expect(farthestPositionFromCamera([], { x: 0, y: 0, z: 0 })).toBeNull();
   });
 });

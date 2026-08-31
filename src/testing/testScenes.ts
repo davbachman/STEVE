@@ -15,6 +15,7 @@ export type BuiltInTestSceneId =
   | 'shadow-regression'
   | 'point-shadow-regression'
   | 'point-light-gizmo-occlusion'
+  | 'pinned-light-gizmo-curve'
   | 'interactive-render-regression'
   | 'phase5b-path-mixed-geometry';
 
@@ -26,6 +27,8 @@ export function createBuiltInTestScene(id: BuiltInTestSceneId): ProjectFileV1 {
       return createPointShadowRegressionScene();
     case 'point-light-gizmo-occlusion':
       return createPointLightGizmoOcclusionScene();
+    case 'pinned-light-gizmo-curve':
+      return createPinnedLightGizmoCurveScene();
     case 'interactive-render-regression':
       return createInteractiveRenderRegressionScene();
     case 'phase5b-path-mixed-geometry':
@@ -33,6 +36,59 @@ export function createBuiltInTestScene(id: BuiltInTestSceneId): ProjectFileV1 {
     default:
       return createShadowRegressionScene();
   }
+}
+
+function createPinnedLightGizmoCurveScene(): ProjectFileV1 {
+  const curve = createDefaultCurve('Pinned Gizmo Curve');
+  curve.material = {
+    ...materialPresets['Matte Plastic'],
+    baseColor: '#1f2937',
+    reflectiveness: 0,
+    roughness: 1,
+  };
+  curve.castShadows = false;
+  if (curve.equation.kind === 'parametric_curve') {
+    curve.equation.source = analyzeEquationText('(t, 2, 1.5)').source;
+    curve.equation.tDomain = { min: -4, max: 4, samples: 160 };
+    curve.equation.renderAsTube = true;
+    curve.equation.tubeRadius = 0.18;
+  }
+
+  const light = createPointLight('Pinned Test Light', { x: 0, y: 0, z: 0 });
+  light.color = '#ffffff';
+  light.intensity = 0;
+  light.castShadows = false;
+  light.curvePin = {
+    enabled: true,
+    curveId: curve.id,
+    parameterValue: 0,
+    animating: false,
+    animationSpeed: 0.2,
+  };
+
+  const scene = defaultSceneSettings();
+  scene.cameraProjection = 'orthographic';
+  scene.backgroundMode = 'solid';
+  scene.backgroundColor = '#111827';
+  scene.groundPlaneVisible = false;
+  scene.gridVisible = false;
+  scene.axesVisible = false;
+  scene.axisLabelsVisible = false;
+  scene.ambient = { enabled: true, color: '#ffffff', intensity: 0.6 };
+  scene.directional = { ...scene.directional, enabled: false };
+
+  const render = defaultRenderSettings();
+  render.toneMapping = 'none';
+  render.exposure = 1;
+  render.bloomEnabled = false;
+
+  return {
+    schemaVersion: 1,
+    appVersion: APP_VERSION,
+    scene,
+    render,
+    objects: [curve, light],
+  };
 }
 
 function createPointLightGizmoOcclusionScene(): ProjectFileV1 {

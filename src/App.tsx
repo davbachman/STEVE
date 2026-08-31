@@ -37,6 +37,7 @@ export default function App() {
       testScene === 'shadow-regression'
       || testScene === 'point-shadow-regression'
       || testScene === 'point-light-gizmo-occlusion'
+      || testScene === 'pinned-light-gizmo-curve'
       || testScene === 'interactive-render-regression'
       || testScene === 'phase5b-path-mixed-geometry'
     ) {
