@@ -38,6 +38,7 @@ import {
   resolveRangeGifTiming,
 } from './parameterGif';
 import { resolveTurntableGifDimensions, resolveTurntableGifTiming } from './turntableGif';
+import { sortTransparentSceneBackToFront } from './transparentSceneOrder';
 
 export type ViewPreset = 'top' | 'front' | 'side' | 'default';
 
@@ -110,6 +111,10 @@ interface ActiveDirectionalShadowLight {
   light: DirectionalLightObject;
   lightIndex: number;
 }
+
+type TransparentSceneRenderItem =
+  | { kind: 'plot'; plotSnapshot: RendererSceneSnapshot['plots'][number] }
+  | { kind: 'point-light-gizmo'; light: PointLightObject };
 
 interface RenderTargets {
   width: number;
@@ -1084,7 +1089,7 @@ export class SceneController {
     this.renderSelectionOutline();
     this.renderSelectedFeatureEdges(snapshot);
     this.renderOverlayLines(snapshot);
-    this.renderLightGizmos(snapshot, programs.gizmo);
+    this.renderDirectionalLightGizmos(snapshot, programs.gizmo);
     this.syncRenderDiagnostics(snapshot, pointShadowLights);
   }
 
@@ -1776,13 +1781,28 @@ export class SceneController {
   ): void {
     const gl = this.gl!;
     const cameraPosition = this.getCameraPosition();
-    const transparentPlots = snapshot.plots
-      .filter(({ plot }) => {
-        const opacity = clamp01(plot.material.opacity);
-        return plot.visible && opacity > 0.001 && opacity < 0.999;
-      })
-      .sort((a, b) => transparentSortDistance(b.plot, cameraPosition) - transparentSortDistance(a.plot, cameraPosition));
-    this.renderTransparentPlots(snapshot, pointLights, pointShadowLights, transparentPlots);
+    const renderItems = sortTransparentSceneBackToFront<TransparentSceneRenderItem>([
+      ...snapshot.plots
+        .filter(({ plot }) => {
+          const opacity = clamp01(plot.material.opacity);
+          return plot.visible && opacity > 0.001 && opacity < 0.999;
+        })
+        .map((plotSnapshot) => ({
+          item: { kind: 'plot' as const, plotSnapshot },
+          position: plotSnapshot.plot.transform.position,
+        })),
+      ...snapshot.pointLights
+        .filter(({ light }) => shouldRenderPointLightGizmo(light))
+        .map(({ light }) => ({
+          item: { kind: 'point-light-gizmo' as const, light },
+          position: light.position,
+        })),
+    ], {
+      x: cameraPosition[0],
+      y: cameraPosition[1],
+      z: cameraPosition[2],
+    });
+    this.renderTransparentItems(snapshot, pointLights, pointShadowLights, renderItems);
 
     gl.depthMask(true);
     gl.disable(gl.BLEND);
@@ -1790,20 +1810,31 @@ export class SceneController {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
-  private renderTransparentPlots(
+  private renderTransparentItems(
     snapshot: RendererSceneSnapshot,
     pointLights: ReadonlyArray<PointLightObject>,
     pointShadowLights: ReadonlyArray<ActivePointShadowLight>,
-    transparentPlots: ReadonlyArray<RendererSceneSnapshot['plots'][number]>,
+    renderItems: ReadonlyArray<TransparentSceneRenderItem>,
   ): void {
     const gl = this.gl!;
-    this.bindTransparentMeshPass(snapshot, pointLights, pointShadowLights);
-    for (const plotSnapshot of transparentPlots) {
+    let meshPassNeedsBinding = true;
+    for (const renderItem of renderItems) {
+      if (renderItem.kind === 'point-light-gizmo') {
+        this.renderPointLightGizmo(snapshot, renderItem.light, this.renderPrograms!.gizmo);
+        meshPassNeedsBinding = true;
+        continue;
+      }
+      if (meshPassNeedsBinding) {
+        this.bindTransparentMeshPass(snapshot, pointLights, pointShadowLights);
+        meshPassNeedsBinding = false;
+      }
+      const plotSnapshot = renderItem.plotSnapshot;
       const probeUsage = this.prepareProbeForPlot(snapshot, plotSnapshot.plot);
       const usesRefraction = plotUsesRefraction(plotSnapshot.plot);
       if (usesRefraction) {
         // Snapshot everything rendered so far (opaque scene plus farther
-        // transparent plots) so this surface can refract what is behind it.
+        // transparent plots and point-light gizmos) so this surface can
+        // refract what is behind it.
         this.updateRefractionSource();
       }
       if (probeUsage.refreshed || usesRefraction) {
@@ -2228,14 +2259,64 @@ export class SceneController {
     gl.depthFunc(gl.LESS);
   }
 
-  private renderLightGizmos(snapshot: RendererSceneSnapshot, program: ProgramBundle): void {
+  private renderPointLightGizmo(
+    snapshot: RendererSceneSnapshot,
+    light: PointLightObject,
+    program: ProgramBundle,
+  ): void {
     const gl = this.gl!;
+    this.gizmoPointBuffer ??= createPointBuffer(gl);
+    const pointBuffer = this.gizmoPointBuffer;
+    if (!pointBuffer) {
+      return;
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.renderTargets.sceneFramebuffer);
+    gl.viewport(0, 0, this.renderTargets.width, this.renderTargets.height);
+    this.bindPointGizmoPass(program);
+    const selected = snapshot.selectedId === light.id;
+    this.drawPointGizmoHandle(
+      program,
+      pointBuffer,
+      vec3.fromValues(light.position.x, light.position.y, light.position.z),
+      pointLightGizmoColor(light.color, selected),
+      selected ? 360 : 300,
+      selected,
+    );
+    this.finishPointGizmoPass();
+  }
+
+  private renderDirectionalLightGizmos(snapshot: RendererSceneSnapshot, program: ProgramBundle): void {
+    const visibleLights = snapshot.directionalLights.filter(({ light }) => light.visible);
+    if (visibleLights.length === 0) {
+      return;
+    }
+    const gl = this.gl!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, this.renderTargets.width, this.renderTargets.height);
     this.renderDirectionalLightArrows(snapshot);
     this.gizmoPointBuffer ??= createPointBuffer(gl);
     const pointBuffer = this.gizmoPointBuffer;
     if (!pointBuffer) {
       return;
     }
+    this.bindPointGizmoPass(program);
+    for (const { light } of visibleLights) {
+      const selected = snapshot.selectedId === light.id;
+      const { tail } = directionalLightGizmoEndpoints(light, this.camera.radius);
+      this.drawPointGizmoHandle(
+        program,
+        pointBuffer,
+        tail,
+        directionalLightGizmoColor(light.color, selected),
+        selected ? 345 : 300,
+        selected,
+      );
+    }
+    this.finishPointGizmoPass();
+  }
+
+  private bindPointGizmoPass(program: ProgramBundle): void {
+    const gl = this.gl!;
     gl.useProgram(program.program);
     gl.uniformMatrix4fv(program.uniforms.u_view, false, this.viewMatrix);
     gl.uniformMatrix4fv(program.uniforms.u_projection, false, this.projectionMatrix);
@@ -2245,40 +2326,27 @@ export class SceneController {
     gl.disable(gl.CULL_FACE);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    const drawHandle = (
-      position: vec3,
-      color: Float32Array,
-      size: number,
-      selected: boolean,
-    ) => {
-      const model = mat4.fromTranslation(mat4.create(), position);
-      gl.uniformMatrix4fv(program.uniforms.u_model, false, model);
-      gl.uniform1f(program.uniforms.u_size, size);
-      gl.uniform3fv(program.uniforms.u_color, color);
-      gl.uniform1f(program.uniforms.u_selected, selected ? 1 : 0);
-      drawLineBuffer(gl, pointBuffer);
-    };
-    for (const { light } of snapshot.pointLights) {
-      if (!shouldRenderPointLightGizmo(light)) {
-        continue;
-      }
-      const selected = snapshot.selectedId === light.id;
-      drawHandle(
-        vec3.fromValues(light.position.x, light.position.y, light.position.z),
-        pointLightGizmoColor(light.color, selected),
-        selected ? 360 : 300,
-        selected,
-      );
-    }
-    for (const { light } of snapshot.directionalLights) {
-      if (!light.visible) {
-        continue;
-      }
-      const selected = snapshot.selectedId === light.id;
-      const { tail } = directionalLightGizmoEndpoints(light, this.camera.radius);
-      const color = directionalLightGizmoColor(light.color, selected);
-      drawHandle(tail, color, selected ? 345 : 300, selected);
-    }
+  }
+
+  private drawPointGizmoHandle(
+    program: ProgramBundle,
+    pointBuffer: GpuLineBuffer,
+    position: vec3,
+    color: Float32Array,
+    size: number,
+    selected: boolean,
+  ): void {
+    const gl = this.gl!;
+    const model = mat4.fromTranslation(mat4.create(), position);
+    gl.uniformMatrix4fv(program.uniforms.u_model, false, model);
+    gl.uniform1f(program.uniforms.u_size, size);
+    gl.uniform3fv(program.uniforms.u_color, color);
+    gl.uniform1f(program.uniforms.u_selected, selected ? 1 : 0);
+    drawLineBuffer(gl, pointBuffer);
+  }
+
+  private finishPointGizmoPass(): void {
+    const gl = this.gl!;
     gl.depthMask(true);
     gl.depthFunc(gl.LESS);
     gl.disable(gl.BLEND);
@@ -5631,13 +5699,6 @@ function closestZOnVerticalAxisToRay(ray: { origin: vec3; direction: vec3 }, x: 
   }
   const t = rhs2 + dk * s;
   return Number.isFinite(t) ? t : null;
-}
-
-function transparentSortDistance(plot: RenderableObject, cameraPosition: vec3): number {
-  const dx = plot.transform.position.x - cameraPosition[0];
-  const dy = plot.transform.position.y - cameraPosition[1];
-  const dz = plot.transform.position.z - cameraPosition[2];
-  return dx * dx + dy * dy + dz * dz;
 }
 
 function intersectSphere(

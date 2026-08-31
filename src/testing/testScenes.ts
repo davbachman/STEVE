@@ -14,6 +14,7 @@ import { analyzeEquationText } from '../math/classifier';
 export type BuiltInTestSceneId =
   | 'shadow-regression'
   | 'point-shadow-regression'
+  | 'point-light-gizmo-occlusion'
   | 'interactive-render-regression'
   | 'phase5b-path-mixed-geometry';
 
@@ -23,6 +24,8 @@ export function createBuiltInTestScene(id: BuiltInTestSceneId): ProjectFileV1 {
       return createShadowRegressionScene();
     case 'point-shadow-regression':
       return createPointShadowRegressionScene();
+    case 'point-light-gizmo-occlusion':
+      return createPointLightGizmoOcclusionScene();
     case 'interactive-render-regression':
       return createInteractiveRenderRegressionScene();
     case 'phase5b-path-mixed-geometry':
@@ -30,6 +33,60 @@ export function createBuiltInTestScene(id: BuiltInTestSceneId): ProjectFileV1 {
     default:
       return createShadowRegressionScene();
   }
+}
+
+function createPointLightGizmoOcclusionScene(): ProjectFileV1 {
+  const occluder = createDefaultSurface('Gizmo Occluder');
+  occluder.material = {
+    ...materialPresets['Matte Plastic'],
+    baseColor: '#3a4658',
+    opacity: 0,
+    reflectiveness: 0,
+    roughness: 1,
+    wireframeVisible: false,
+    refractionEnabled: false,
+  };
+  occluder.castShadows = false;
+  if (occluder.equation.kind === 'parametric_surface') {
+    occluder.equation.source = analyzeEquationText('(u, 0, v + 1.5)').source;
+    occluder.equation.domain = {
+      uMin: -5,
+      uMax: 5,
+      vMin: -5,
+      vMax: 5,
+      uSamples: 24,
+      vSamples: 24,
+    };
+  }
+
+  const light = createPointLight('Occlusion Test Light', { x: 0, y: 2, z: 1.5 });
+  light.color = '#ffffff';
+  light.intensity = 0;
+  light.castShadows = false;
+
+  const scene = defaultSceneSettings();
+  scene.cameraProjection = 'orthographic';
+  scene.backgroundMode = 'solid';
+  scene.backgroundColor = '#111827';
+  scene.groundPlaneVisible = false;
+  scene.gridVisible = false;
+  scene.axesVisible = false;
+  scene.axisLabelsVisible = false;
+  scene.ambient = { enabled: true, color: '#ffffff', intensity: 0.6 };
+  scene.directional = { ...scene.directional, enabled: false };
+
+  const render = defaultRenderSettings();
+  render.toneMapping = 'none';
+  render.exposure = 1;
+  render.bloomEnabled = false;
+
+  return {
+    schemaVersion: 1,
+    appVersion: APP_VERSION,
+    scene,
+    render,
+    objects: [occluder, light],
+  };
 }
 
 function createShadowRegressionScene(): ProjectFileV1 {
