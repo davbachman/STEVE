@@ -126,6 +126,12 @@ interface RenderTargets {
   sceneFramebuffer: WebGLFramebuffer | null;
   sceneColor: WebGLTexture | null;
   sceneDepth: WebGLTexture | null;
+  pointGizmoFramebuffer: WebGLFramebuffer | null;
+  pointGizmoColor: WebGLTexture | null;
+  pointGizmoDepth: WebGLRenderbuffer | null;
+  pointGizmoSourceFramebuffer: WebGLFramebuffer | null;
+  pointGizmoSourceColor: WebGLTexture | null;
+  pointGizmoSourceDepth: WebGLRenderbuffer | null;
   bloomWidth: number;
   bloomHeight: number;
   bloomFramebufferA: WebGLFramebuffer | null;
@@ -137,6 +143,16 @@ interface RenderTargets {
   maskFramebuffer: WebGLFramebuffer | null;
   maskTexture: WebGLTexture | null;
   maskDepth: WebGLTexture | null;
+}
+
+interface PointGizmoRenderBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  centerX: number;
+  centerY: number;
+  radius: number;
 }
 
 interface ProbeRenderResources {
@@ -188,6 +204,7 @@ interface RenderPrograms {
   mesh: ProgramBundle;
   contour: ProgramBundle;
   shadow: ProgramBundle;
+  pointGizmoSourceMask: ProgramBundle;
   transShadow: ProgramBundle;
   pointShadow: ProgramBundle;
   pointTransShadow: ProgramBundle;
@@ -254,6 +271,9 @@ const PLANAR_REFLECTION_TEXTURE_UNIT = 6;
 const POINT_SHADOW_TEXTURE_UNIT_BASE = BASE_FRAGMENT_TEXTURE_UNITS;
 const POINT_SHADOW_TEXTURE_UNIT_STRIDE = 3;
 const POINT_SHADOW_NEAR = 0.05;
+const POINT_GIZMO_TARGET_SIZE = 36;
+const POINT_GIZMO_MASK_COLOR = new Float32Array([1, 1, 1]);
+const MAX_POINT_GIZMO_OVERLAY_EXCLUSIONS = 8;
 const ZERO_PROBE_CENTER = vec3.fromValues(0, 0, 0);
 const MAX_EXPORT_DIMENSION = 8192;
 const DEFAULT_CAMERA_ALPHA = -Math.PI / 3;
@@ -480,6 +500,7 @@ export class SceneController {
         deleteProgramBundle(gl, this.renderPrograms.mesh);
         deleteProgramBundle(gl, this.renderPrograms.contour);
         deleteProgramBundle(gl, this.renderPrograms.shadow);
+        deleteProgramBundle(gl, this.renderPrograms.pointGizmoSourceMask);
         deleteProgramBundle(gl, this.renderPrograms.transShadow);
         deleteProgramBundle(gl, this.renderPrograms.pointShadow);
         deleteProgramBundle(gl, this.renderPrograms.pointTransShadow);
@@ -1090,7 +1111,7 @@ export class SceneController {
     this.compositeScene(snapshot);
     this.renderTransparentContourOverlays(snapshot);
     this.renderSelectionMask(snapshot);
-    this.renderSelectionOutline();
+    this.renderSelectionOutline(snapshot);
     this.renderSelectedFeatureEdges(snapshot);
     this.renderOverlayLines(snapshot);
     this.renderDirectionalLightGizmos(snapshot, programs.gizmo);
@@ -1844,7 +1865,13 @@ export class SceneController {
     let meshPassNeedsBinding = true;
     for (const renderItem of renderItems) {
       if (renderItem.kind === 'point-light-gizmo') {
-        this.renderPointLightGizmo(snapshot, renderItem.light, this.renderPrograms!.gizmo);
+        this.renderPointLightGizmo(
+          snapshot,
+          renderItem.light,
+          this.renderPrograms!.gizmo,
+          pointLights,
+          pointShadowLights,
+        );
         meshPassNeedsBinding = true;
         continue;
       }
@@ -2049,7 +2076,7 @@ export class SceneController {
     gl.clearColor(0, 0, 0, 0);
     gl.clearDepth(1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    if (!selected || !isRenderableObject(selected)) {
+    if (!selected || !isRenderableObject(selected) || !selected.visible) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
       return;
     }
@@ -2077,7 +2104,7 @@ export class SceneController {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
-  private renderSelectionOutline(): void {
+  private renderSelectionOutline(snapshot: RendererSceneSnapshot): void {
     const gl = this.gl!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, this.renderTargets.width, this.renderTargets.height);
@@ -2093,6 +2120,14 @@ export class SceneController {
     gl.uniform1i(this.renderPrograms!.outline.uniforms.u_maskDepth, 1);
     gl.uniform1i(this.renderPrograms!.outline.uniforms.u_sceneDepth, 2);
     gl.uniform2f(this.renderPrograms!.outline.uniforms.u_texelSize, 1 / Math.max(1, this.renderTargets.width), 1 / Math.max(1, this.renderTargets.height));
+    const selected = snapshot.selectedId
+      ? snapshot.objects.find((object) => object.id === snapshot.selectedId)
+      : null;
+    const exclusions = selected && isRenderableObject(selected) && selected.visible
+      ? this.pointGizmoOverlayExclusions(snapshot, selected.id)
+      : { count: 0, values: new Float32Array(MAX_POINT_GIZMO_OVERLAY_EXCLUSIONS * 3) };
+    gl.uniform1i(this.renderPrograms!.outline.uniforms.u_gizmoExclusionCount, exclusions.count);
+    gl.uniform3fv(this.renderPrograms!.outline.uniforms['u_gizmoExclusions[0]'], exclusions.values);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
     gl.disable(gl.BLEND);
@@ -2100,7 +2135,7 @@ export class SceneController {
 
   private renderSelectedFeatureEdges(snapshot: RendererSceneSnapshot): void {
     const selected = snapshot.selectedId ? snapshot.objects.find((object) => object.id === snapshot.selectedId) : null;
-    if (!selected || !isRenderableObject(selected)) {
+    if (!selected || !isRenderableObject(selected) || !selected.visible) {
       return;
     }
     const visual = this.plotVisuals.get(selected.id);
@@ -2114,6 +2149,9 @@ export class SceneController {
     gl.disable(gl.CULL_FACE);
     gl.useProgram(this.renderPrograms!.line.program);
     this.setLineProgramFrameUniforms();
+    const exclusions = this.pointGizmoOverlayExclusions(snapshot, selected.id);
+    gl.uniform1i(this.renderPrograms!.line.uniforms.u_gizmoExclusionCount, exclusions.count);
+    gl.uniform3fv(this.renderPrograms!.line.uniforms['u_gizmoExclusions[0]'], exclusions.values);
     const model = mat4.fromTranslation(mat4.create(), vec3.fromValues(
       selected.transform.position.x,
       selected.transform.position.y,
@@ -2198,6 +2236,7 @@ export class SceneController {
       Math.max(1, this.canvas.width),
       Math.max(1, this.canvas.height),
     );
+    gl.uniform1i(this.renderPrograms!.line.uniforms.u_gizmoExclusionCount, 0);
   }
 
   private setLineScreenOffset(x: number, y: number): void {
@@ -2287,6 +2326,8 @@ export class SceneController {
     snapshot: RendererSceneSnapshot,
     light: PointLightObject,
     program: ProgramBundle,
+    pointLights: ReadonlyArray<PointLightObject>,
+    pointShadowLights: ReadonlyArray<ActivePointShadowLight>,
   ): void {
     const gl = this.gl!;
     this.gizmoPointBuffer ??= createPointBuffer(gl);
@@ -2294,48 +2335,498 @@ export class SceneController {
     if (!pointBuffer) {
       return;
     }
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.renderTargets.sceneFramebuffer);
-    gl.viewport(0, 0, this.renderTargets.width, this.renderTargets.height);
-    this.bindPointGizmoPass(program);
+    const position = vec3.fromValues(light.position.x, light.position.y, light.position.z);
     const selected = snapshot.selectedId === light.id;
+    const size = selected ? 360 : 300;
+    const pinnedCurve = pinnedCurveForLight(light, snapshot.objects);
+    const usesSourceAwareDepth = Boolean(
+      pinnedCurve?.visible
+      && clamp01(pinnedCurve.material.opacity) >= 0.999,
+    );
+    const sourceAwareBounds = usesSourceAwareDepth
+      ? this.pointLightGizmoRenderBounds(position, size)
+      : null;
+    if (sourceAwareBounds && pinnedCurve) {
+      this.copySceneColorToPointGizmoTarget(sourceAwareBounds);
+      this.markPointLightGizmoSourcePixels(
+        pinnedCurve,
+        position,
+        size,
+        selected,
+        program,
+        pointBuffer,
+        sourceAwareBounds,
+      );
+      this.preparePointLightGizmoDepth(snapshot, pinnedCurve.id, sourceAwareBounds);
+      this.copyPointLightGizmoStencil(sourceAwareBounds);
+      this.writePointLightGizmoDepth(position, size, selected, program, pointBuffer, sourceAwareBounds);
+      this.renderPointLightGizmoOpaqueOccluders(
+        snapshot,
+        pinnedCurve.id,
+        pointLights,
+        pointShadowLights,
+        sourceAwareBounds,
+      );
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.renderTargets.pointGizmoFramebuffer);
+      gl.viewport(
+        -sourceAwareBounds.x,
+        -sourceAwareBounds.y,
+        this.renderTargets.width,
+        this.renderTargets.height,
+      );
+    } else {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.renderTargets.sceneFramebuffer);
+      gl.viewport(0, 0, this.renderTargets.width, this.renderTargets.height);
+    }
+    this.bindPointGizmoPass(program);
     this.drawPointGizmoHandle(
       program,
       pointBuffer,
-      this.pointLightGizmoRenderPosition(snapshot, light),
+      position,
       pointLightGizmoColor(light.color, selected),
-      selected ? 360 : 300,
+      size,
       selected,
     );
     this.finishPointGizmoPass();
+    if (sourceAwareBounds && pinnedCurve) {
+      this.renderPointLightGizmoTransparentOccluders(
+        snapshot,
+        pinnedCurve.id,
+        pointLights,
+        pointShadowLights,
+        sourceAwareBounds,
+      );
+      this.copyPointGizmoTargetToSceneColor(sourceAwareBounds);
+    }
   }
 
-  private pointLightGizmoRenderPosition(
-    snapshot: RendererSceneSnapshot,
-    light: PointLightObject,
-  ): vec3 {
-    const position = vec3.fromValues(light.position.x, light.position.y, light.position.z);
-    const curve = pinnedCurveForLight(light, snapshot.objects);
+  private pointLightGizmoRenderBounds(position: vec3, size: number): PointGizmoRenderBounds | null {
+    const viewPosition = vec4.transformMat4(
+      vec4.create(),
+      vec4.fromValues(position[0], position[1], position[2], 1),
+      this.viewMatrix,
+    );
+    const clip = vec4.transformMat4(vec4.create(), viewPosition, this.projectionMatrix);
     if (
-      !curve?.visible
-      || clamp01(curve.material.opacity) <= 0.001
-      || curve.equation.kind !== 'parametric_curve'
+      clip[3] <= 0
+      || clip[0] < -clip[3]
+      || clip[0] > clip[3]
+      || clip[1] < -clip[3]
+      || clip[1] > clip[3]
+      || clip[2] < -clip[3]
+      || clip[2] > clip[3]
     ) {
-      return position;
+      return null;
+    }
+    const centerX = (clip[0] / clip[3] * 0.5 + 0.5) * this.renderTargets.width;
+    const centerY = (clip[1] / clip[3] * 0.5 + 0.5) * this.renderTargets.height;
+    const pointSize = clamp(size / Math.max(clip[3], 0.001), 10, 30);
+    const radius = pointSize / 2 + 2;
+    const x = clamp(Math.floor(centerX - radius), 0, this.renderTargets.width);
+    const y = clamp(Math.floor(centerY - radius), 0, this.renderTargets.height);
+    const right = clamp(Math.ceil(centerX + radius), 0, this.renderTargets.width);
+    const top = clamp(Math.ceil(centerY + radius), 0, this.renderTargets.height);
+    const width = right - x;
+    const height = top - y;
+    return width > 0 && height > 0
+      ? { x, y, width, height, centerX, centerY, radius }
+      : null;
+  }
+
+  private pointGizmoOverlayExclusions(
+    snapshot: RendererSceneSnapshot,
+    sourceCurveId: string,
+  ): { count: number; values: Float32Array } {
+    const values = new Float32Array(MAX_POINT_GIZMO_OVERLAY_EXCLUSIONS * 3);
+    let count = 0;
+    for (const { light } of snapshot.pointLights) {
+      if (
+        count >= MAX_POINT_GIZMO_OVERLAY_EXCLUSIONS
+        || !shouldRenderPointLightGizmo(light)
+        || !light.curvePin.enabled
+        || light.curvePin.curveId !== sourceCurveId
+      ) {
+        continue;
+      }
+      const position = vec3.fromValues(light.position.x, light.position.y, light.position.z);
+      const bounds = this.pointLightGizmoRenderBounds(position, snapshot.selectedId === light.id ? 360 : 300);
+      if (!bounds) {
+        continue;
+      }
+      values[count * 3] = bounds.centerX;
+      values[count * 3 + 1] = bounds.centerY;
+      values[count * 3 + 2] = bounds.radius;
+      count += 1;
+    }
+    return { count, values };
+  }
+
+  private plotMayOverlapPointGizmo(
+    plot: RenderableObject,
+    bounds: PointGizmoRenderBounds,
+    viewProjection: mat4,
+  ): boolean {
+    const visual = this.plotVisuals.get(plot.id);
+    if (!visual) {
+      return false;
+    }
+    const geometryBounds = visual.geometry.bounds;
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    for (const x of [geometryBounds.min.x, geometryBounds.max.x]) {
+      for (const y of [geometryBounds.min.y, geometryBounds.max.y]) {
+        for (const z of [geometryBounds.min.z, geometryBounds.max.z]) {
+          const clip = vec4.transformMat4(
+            vec4.create(),
+            vec4.fromValues(
+              x + plot.transform.position.x,
+              y + plot.transform.position.y,
+              z + plot.transform.position.z,
+              1,
+            ),
+            viewProjection,
+          );
+          if (clip[3] <= 0.0001) {
+            return true;
+          }
+          const screenX = (clip[0] / clip[3] * 0.5 + 0.5) * this.renderTargets.width;
+          const screenY = (clip[1] / clip[3] * 0.5 + 0.5) * this.renderTargets.height;
+          minX = Math.min(minX, screenX);
+          minY = Math.min(minY, screenY);
+          maxX = Math.max(maxX, screenX);
+          maxY = Math.max(maxY, screenY);
+        }
+      }
+    }
+    return maxX >= bounds.x - 1
+      && minX <= bounds.x + bounds.width + 1
+      && maxY >= bounds.y - 1
+      && minY <= bounds.y + bounds.height + 1;
+  }
+
+  private copySceneColorToPointGizmoTarget(bounds: PointGizmoRenderBounds): void {
+    const gl = this.gl!;
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.renderTargets.sceneFramebuffer);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.renderTargets.pointGizmoFramebuffer);
+    gl.blitFramebuffer(
+      bounds.x,
+      bounds.y,
+      bounds.x + bounds.width,
+      bounds.y + bounds.height,
+      0,
+      0,
+      bounds.width,
+      bounds.height,
+      gl.COLOR_BUFFER_BIT,
+      gl.NEAREST,
+    );
+  }
+
+  private copyPointGizmoTargetToSceneColor(bounds: PointGizmoRenderBounds): void {
+    const gl = this.gl!;
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.renderTargets.pointGizmoFramebuffer);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.renderTargets.sceneFramebuffer);
+    gl.blitFramebuffer(
+      0,
+      0,
+      bounds.width,
+      bounds.height,
+      bounds.x,
+      bounds.y,
+      bounds.x + bounds.width,
+      bounds.y + bounds.height,
+      gl.COLOR_BUFFER_BIT,
+      gl.NEAREST,
+    );
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.renderTargets.sceneFramebuffer);
+  }
+
+  private markPointLightGizmoSourcePixels(
+    sourceCurve: PlotObject,
+    position: vec3,
+    size: number,
+    selected: boolean,
+    pointProgram: ProgramBundle,
+    pointBuffer: GpuLineBuffer,
+    bounds: PointGizmoRenderBounds,
+  ): void {
+    const gl = this.gl!;
+    const framebuffer = this.renderTargets.pointGizmoSourceFramebuffer;
+    if (!framebuffer) {
+      return;
     }
 
-    const renderedHalfWidth = curve.equation.renderAsTube
-      ? curve.equation.tubeRadius
-      : Math.max(0.02, curve.equation.tubeRadius * 0.35);
-    const depthAllowance = renderedHalfWidth + Math.max(0.001, this.camera.radius * 0.0002);
-    const cameraPosition = this.getCameraPosition();
-    const towardCamera = this.orthographicProjection
-      ? vec3.sub(vec3.create(), cameraPosition, this.camera.target)
-      : vec3.sub(vec3.create(), cameraPosition, position);
-    if (vec3.squaredLength(towardCamera) <= Number.EPSILON) {
-      return position;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.viewport(-bounds.x, -bounds.y, this.renderTargets.width, this.renderTargets.height);
+    gl.colorMask(false, false, false, false);
+    gl.depthMask(false);
+    gl.stencilMask(0xff);
+    gl.clearStencil(0);
+    gl.clear(gl.STENCIL_BUFFER_BIT);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.CULL_FACE);
+    gl.disable(gl.BLEND);
+    gl.enable(gl.STENCIL_TEST);
+    gl.stencilFunc(gl.ALWAYS, 1, 0xff);
+    gl.stencilOp(gl.KEEP, gl.KEEP, gl.REPLACE);
+    const sourceMaskProgram = this.renderPrograms!.pointGizmoSourceMask;
+    gl.useProgram(sourceMaskProgram.program);
+    bindTexture(gl, this.renderTargets.sceneDepth, 0, gl.TEXTURE_2D);
+    gl.uniform1i(sourceMaskProgram.uniforms.u_sceneDepth, 0);
+    gl.uniform2f(
+      sourceMaskProgram.uniforms.u_viewportSize,
+      Math.max(1, this.renderTargets.width),
+      Math.max(1, this.renderTargets.height),
+    );
+    gl.uniform2f(sourceMaskProgram.uniforms.u_viewportOrigin, bounds.x, bounds.y);
+    const viewProjection = mat4.multiply(mat4.create(), this.projectionMatrix, this.viewMatrix);
+    this.drawShadowMeshWithMatrix(sourceCurve, sourceMaskProgram, viewProjection);
+
+    gl.disable(gl.DEPTH_TEST);
+    gl.stencilFunc(gl.EQUAL, 1, 0xff);
+    gl.stencilOp(gl.KEEP, gl.KEEP, gl.INCR);
+    gl.useProgram(pointProgram.program);
+    gl.uniformMatrix4fv(pointProgram.uniforms.u_view, false, this.viewMatrix);
+    gl.uniformMatrix4fv(pointProgram.uniforms.u_projection, false, this.projectionMatrix);
+    this.drawPointGizmoHandle(
+      pointProgram,
+      pointBuffer,
+      position,
+      POINT_GIZMO_MASK_COLOR,
+      size,
+      selected,
+    );
+
+    gl.disable(gl.STENCIL_TEST);
+    gl.colorMask(true, true, true, true);
+    gl.depthMask(true);
+    gl.depthFunc(gl.LESS);
+  }
+
+  private copyPointLightGizmoStencil(bounds: PointGizmoRenderBounds): void {
+    const gl = this.gl!;
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.renderTargets.pointGizmoSourceFramebuffer);
+    gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, this.renderTargets.pointGizmoFramebuffer);
+    gl.blitFramebuffer(
+      0,
+      0,
+      bounds.width,
+      bounds.height,
+      0,
+      0,
+      bounds.width,
+      bounds.height,
+      gl.STENCIL_BUFFER_BIT,
+      gl.NEAREST,
+    );
+  }
+
+  private writePointLightGizmoDepth(
+    position: vec3,
+    size: number,
+    selected: boolean,
+    program: ProgramBundle,
+    pointBuffer: GpuLineBuffer,
+    bounds: PointGizmoRenderBounds,
+  ): void {
+    const gl = this.gl!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.renderTargets.pointGizmoFramebuffer);
+    gl.viewport(-bounds.x, -bounds.y, this.renderTargets.width, this.renderTargets.height);
+    gl.colorMask(false, false, false, false);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthMask(true);
+    gl.depthFunc(gl.LESS);
+    gl.disable(gl.CULL_FACE);
+    gl.disable(gl.BLEND);
+    gl.disable(gl.STENCIL_TEST);
+    gl.useProgram(program.program);
+    gl.uniformMatrix4fv(program.uniforms.u_view, false, this.viewMatrix);
+    gl.uniformMatrix4fv(program.uniforms.u_projection, false, this.projectionMatrix);
+    this.drawPointGizmoHandle(
+      program,
+      pointBuffer,
+      position,
+      POINT_GIZMO_MASK_COLOR,
+      size,
+      selected,
+    );
+    gl.colorMask(true, true, true, true);
+    gl.depthMask(false);
+  }
+
+  private renderPointLightGizmoOpaqueOccluders(
+    snapshot: RendererSceneSnapshot,
+    sourceCurveId: string,
+    pointLights: ReadonlyArray<PointLightObject>,
+    pointShadowLights: ReadonlyArray<ActivePointShadowLight>,
+    bounds: PointGizmoRenderBounds,
+  ): void {
+    const gl = this.gl!;
+    const program = this.renderPrograms!.mesh;
+    const viewProjection = mat4.multiply(mat4.create(), this.projectionMatrix, this.viewMatrix);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.renderTargets.pointGizmoFramebuffer);
+    gl.viewport(-bounds.x, -bounds.y, this.renderTargets.width, this.renderTargets.height);
+    gl.colorMask(true, true, true, true);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthMask(false);
+    gl.depthFunc(gl.LEQUAL);
+    gl.disable(gl.CULL_FACE);
+    gl.disable(gl.BLEND);
+    gl.enable(gl.STENCIL_TEST);
+    gl.stencilMask(0x00);
+    gl.stencilFunc(gl.EQUAL, 2, 0xff);
+    gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+    gl.useProgram(program.program);
+    this.bindSceneUniforms(program, snapshot, pointLights, pointShadowLights, true, true);
+    gl.uniform2f(program.uniforms.u_pointGizmoCorrectionOrigin, bounds.x, bounds.y);
+    for (const plotSnapshot of snapshot.plots) {
+      const plot = plotSnapshot.plot;
+      if (
+        plot.id === sourceCurveId
+        || !plot.visible
+        || clamp01(plot.material.opacity) < 0.999
+        || !this.plotMayOverlapPointGizmo(plot, bounds, viewProjection)
+      ) {
+        continue;
+      }
+      this.drawShadedMesh(plot, program, false, this.existingProbeUsageForPlot(plot));
     }
-    vec3.normalize(towardCamera, towardCamera);
-    return vec3.scaleAndAdd(position, position, towardCamera, depthAllowance);
+    if (snapshot.scene.groundPlaneVisible) {
+      gl.enable(gl.CULL_FACE);
+      gl.cullFace(gl.BACK);
+      this.drawGroundPlane(snapshot.scene, program, false, false, this.planarReflectionReady);
+    }
+    gl.disable(gl.CULL_FACE);
+    gl.disable(gl.STENCIL_TEST);
+  }
+
+  private renderPointLightGizmoTransparentOccluders(
+    snapshot: RendererSceneSnapshot,
+    sourceCurveId: string,
+    pointLights: ReadonlyArray<PointLightObject>,
+    pointShadowLights: ReadonlyArray<ActivePointShadowLight>,
+    bounds: PointGizmoRenderBounds,
+  ): void {
+    const gl = this.gl!;
+    const cameraPosition = this.getCameraPosition();
+    const viewProjection = mat4.multiply(mat4.create(), this.projectionMatrix, this.viewMatrix);
+    const plots = sortTransparentSceneBackToFront(
+      snapshot.plots
+        .filter(({ plot }) => (
+          plot.id !== sourceCurveId
+          && plot.visible
+          && clamp01(plot.material.opacity) > 0.001
+          && clamp01(plot.material.opacity) < 0.999
+          && this.plotMayOverlapPointGizmo(plot, bounds, viewProjection)
+        ))
+        .map((plotSnapshot) => ({
+          item: plotSnapshot,
+          position: this.transparentPlotSortPosition(plotSnapshot.plot, snapshot.pointLights, cameraPosition),
+        })),
+      { x: cameraPosition[0], y: cameraPosition[1], z: cameraPosition[2] },
+    );
+    if (plots.length === 0) {
+      return;
+    }
+
+    const program = this.renderPrograms!.mesh;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.renderTargets.pointGizmoFramebuffer);
+    gl.viewport(-bounds.x, -bounds.y, this.renderTargets.width, this.renderTargets.height);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthMask(false);
+    gl.depthFunc(gl.LESS);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.blendEquation(gl.FUNC_ADD);
+    gl.enable(gl.STENCIL_TEST);
+    gl.stencilMask(0x00);
+    gl.stencilFunc(gl.EQUAL, 2, 0xff);
+    gl.stencilOp(gl.KEEP, gl.KEEP, gl.KEEP);
+    gl.useProgram(program.program);
+    this.bindSceneUniforms(program, snapshot, pointLights, pointShadowLights, true, true);
+    bindTexture(gl, this.renderTargets.sceneDepth, REFRACTION_TEXTURE_UNIT, gl.TEXTURE_2D);
+    gl.uniform1i(program.uniforms.u_pointGizmoCorrectionEnabled, 1);
+    gl.uniform2f(program.uniforms.u_pointGizmoCorrectionOrigin, bounds.x, bounds.y);
+    for (const plotSnapshot of plots) {
+      const probeUsage = this.existingProbeUsageForPlot(plotSnapshot.plot);
+      gl.enable(gl.CULL_FACE);
+      gl.cullFace(gl.FRONT);
+      this.drawShadedMesh(plotSnapshot.plot, program, true, probeUsage, undefined, false);
+      gl.cullFace(gl.BACK);
+      this.drawShadedMesh(plotSnapshot.plot, program, true, probeUsage, undefined, false);
+    }
+    gl.disable(gl.CULL_FACE);
+    gl.disable(gl.STENCIL_TEST);
+    gl.disable(gl.BLEND);
+    gl.depthMask(true);
+    gl.depthFunc(gl.LESS);
+  }
+
+  private preparePointLightGizmoDepth(
+    snapshot: RendererSceneSnapshot,
+    sourceCurveId: string,
+    bounds: PointGizmoRenderBounds,
+  ): void {
+    const gl = this.gl!;
+    const framebuffer = this.renderTargets.pointGizmoFramebuffer;
+    if (!framebuffer) {
+      return;
+    }
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.viewport(-bounds.x, -bounds.y, this.renderTargets.width, this.renderTargets.height);
+    gl.colorMask(false, false, false, false);
+    gl.depthMask(true);
+    gl.clearDepth(1);
+    gl.clear(gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LESS);
+    gl.disable(gl.CULL_FACE);
+    gl.disable(gl.BLEND);
+
+    const program = this.renderPrograms!.shadow;
+    const viewProjection = mat4.multiply(mat4.create(), this.projectionMatrix, this.viewMatrix);
+    gl.useProgram(program.program);
+    this.drawPointLightGizmoOpaqueDepth(snapshot, program, viewProjection, sourceCurveId, bounds);
+    gl.colorMask(true, true, true, true);
+  }
+
+  private drawPointLightGizmoOpaqueDepth(
+    snapshot: RendererSceneSnapshot,
+    program: ProgramBundle,
+    viewProjection: mat4,
+    excludedPlotId?: string,
+    bounds?: PointGizmoRenderBounds,
+  ): void {
+    const gl = this.gl!;
+    for (const plotSnapshot of snapshot.plots) {
+      const plot = plotSnapshot.plot;
+      if (
+        plot.id === excludedPlotId
+        || !plot.visible
+        || clamp01(plot.material.opacity) < 0.999
+        || (bounds && !this.plotMayOverlapPointGizmo(plot, bounds, viewProjection))
+      ) {
+        continue;
+      }
+      this.drawShadowMeshWithMatrix(plot, program, viewProjection);
+    }
+    if (snapshot.scene.groundPlaneVisible && this.groundMesh?.vao && this.groundMesh.indexCount > 0) {
+      gl.enable(gl.CULL_FACE);
+      gl.cullFace(gl.BACK);
+      const model = mat4.fromScaling(
+        mat4.create(),
+        vec3.fromValues(snapshot.scene.groundPlaneSize, snapshot.scene.groundPlaneSize, 1),
+      );
+      gl.uniformMatrix4fv(program.uniforms.u_model, false, model);
+      gl.uniformMatrix4fv(program.uniforms.u_lightMatrix, false, viewProjection);
+      gl.bindVertexArray(this.groundMesh.vao);
+      gl.drawElements(gl.TRIANGLES, this.groundMesh.indexCount, gl.UNSIGNED_SHORT, 0);
+      gl.bindVertexArray(null);
+      gl.disable(gl.CULL_FACE);
+    }
   }
 
   private renderDirectionalLightGizmos(snapshot: RendererSceneSnapshot, program: ProgramBundle): void {
@@ -2377,6 +2868,7 @@ export class SceneController {
     gl.depthFunc(gl.LEQUAL);
     gl.depthMask(false);
     gl.disable(gl.CULL_FACE);
+    gl.disable(gl.STENCIL_TEST);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
   }
@@ -2497,6 +2989,7 @@ export class SceneController {
     transparentPass: boolean,
     probe: ProbeUsage,
     preTransform?: mat4,
+    allowRefraction = true,
   ): void {
     const gl = this.gl!;
     const visual = this.plotVisuals.get(plot.id);
@@ -2525,7 +3018,10 @@ export class SceneController {
     );
     this.bindContourUniforms(program, contourUniformState(plot));
     gl.uniform1i(program.uniforms.u_isTransparentPass, transparentPass ? 1 : 0);
-    gl.uniform1i(program.uniforms.u_refractionEnabled, transparentPass && plotUsesRefraction(plot) ? 1 : 0);
+    gl.uniform1i(
+      program.uniforms.u_refractionEnabled,
+      transparentPass && allowRefraction && plotUsesRefraction(plot) ? 1 : 0,
+    );
     gl.uniform1f(program.uniforms.u_ior, clamp(plot.material.ior ?? 1.45, 1, 2.5));
     this.bindProbeUsage(program, probe);
     gl.bindVertexArray(visual.buffers.vao);
@@ -2645,6 +3141,8 @@ export class SceneController {
     );
     gl.uniform1i(program.uniforms.u_refractionEnabled, 0);
     gl.uniform1f(program.uniforms.u_ior, 1.45);
+    gl.uniform1i(program.uniforms.u_pointGizmoCorrectionEnabled, 0);
+    gl.uniform2f(program.uniforms.u_pointGizmoCorrectionOrigin, 0, 0);
     bindTexture(gl, this.shadowResources.directionalDepthTexture, 0, gl.TEXTURE_2D);
     bindTexture(gl, this.shadowResources.directionalTransDepthTexture, 1, gl.TEXTURE_2D);
     bindTexture(gl, this.shadowResources.directionalTransColorTexture, 2, gl.TEXTURE_2D);
@@ -2758,6 +3256,23 @@ export class SceneController {
     probe.refreshCount += 1;
     this.probeRefreshTotal += 1;
     return { useProbe: true, refreshed: true, texture: probe.cubemap, center: probe.center };
+  }
+
+  private existingProbeUsageForPlot(plot: RenderableObject): ProbeUsage {
+    if (!this.shouldUseProbeReflections(plot.material.reflectiveness)) {
+      return noProbeUsage();
+    }
+    const probe = this.probePool.get(plot.id);
+    if (!probe || probe.refreshCount <= 0) {
+      return noProbeUsage();
+    }
+    probe.lastUsedFrame = this.frameIndex;
+    return {
+      useProbe: true,
+      refreshed: false,
+      texture: probe.cubemap,
+      center: probe.center,
+    };
   }
 
   private allocateProbeInstance(plotId: string): ProbeInstance | null {
@@ -3437,6 +3952,38 @@ export class SceneController {
       { attachment: gl.COLOR_ATTACHMENT0, texture: sceneColor, target: gl.TEXTURE_2D },
       { attachment: gl.DEPTH_ATTACHMENT, texture: sceneDepth, target: gl.TEXTURE_2D },
     ]);
+    const pointGizmoColor = createColorTexture(
+      gl,
+      POINT_GIZMO_TARGET_SIZE,
+      POINT_GIZMO_TARGET_SIZE,
+      hdrColorFormat.internalFormat,
+      hdrColorFormat.format,
+      hdrColorFormat.type,
+      gl.NEAREST,
+    );
+    const pointGizmoDepth = createDepthStencilRenderbuffer(gl, POINT_GIZMO_TARGET_SIZE, POINT_GIZMO_TARGET_SIZE);
+    const pointGizmoFramebuffer = createFramebuffer(gl, [
+      { attachment: gl.COLOR_ATTACHMENT0, texture: pointGizmoColor, target: gl.TEXTURE_2D },
+    ]);
+    attachDepthStencilRenderbuffer(gl, pointGizmoFramebuffer, pointGizmoDepth);
+    const pointGizmoSourceColor = createColorTexture(
+      gl,
+      POINT_GIZMO_TARGET_SIZE,
+      POINT_GIZMO_TARGET_SIZE,
+      gl.RGBA8,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      gl.NEAREST,
+    );
+    const pointGizmoSourceDepth = createDepthStencilRenderbuffer(
+      gl,
+      POINT_GIZMO_TARGET_SIZE,
+      POINT_GIZMO_TARGET_SIZE,
+    );
+    const pointGizmoSourceFramebuffer = createFramebuffer(gl, [
+      { attachment: gl.COLOR_ATTACHMENT0, texture: pointGizmoSourceColor, target: gl.TEXTURE_2D },
+    ]);
+    attachDepthStencilRenderbuffer(gl, pointGizmoSourceFramebuffer, pointGizmoSourceDepth);
     const bloomWidth = Math.max(1, Math.ceil(width / 2));
     const bloomHeight = Math.max(1, Math.ceil(height / 2));
     const bloomTextureA = createColorTexture(
@@ -3481,6 +4028,12 @@ export class SceneController {
       sceneFramebuffer,
       sceneColor,
       sceneDepth,
+      pointGizmoFramebuffer,
+      pointGizmoColor,
+      pointGizmoDepth,
+      pointGizmoSourceFramebuffer,
+      pointGizmoSourceColor,
+      pointGizmoSourceDepth,
       bloomWidth,
       bloomHeight,
       bloomFramebufferA,
@@ -3497,12 +4050,18 @@ export class SceneController {
 
   private deleteRenderTargets(gl: WebGL2RenderingContext): void {
     deleteFramebuffer(gl, this.renderTargets.sceneFramebuffer);
+    deleteFramebuffer(gl, this.renderTargets.pointGizmoFramebuffer);
+    deleteFramebuffer(gl, this.renderTargets.pointGizmoSourceFramebuffer);
     deleteFramebuffer(gl, this.renderTargets.bloomFramebufferA);
     deleteFramebuffer(gl, this.renderTargets.bloomFramebufferB);
     deleteFramebuffer(gl, this.renderTargets.refractionFramebuffer);
     deleteFramebuffer(gl, this.renderTargets.maskFramebuffer);
     deleteTexture(gl, this.renderTargets.sceneColor);
     deleteTexture(gl, this.renderTargets.sceneDepth);
+    deleteTexture(gl, this.renderTargets.pointGizmoColor);
+    deleteTexture(gl, this.renderTargets.pointGizmoSourceColor);
+    if (this.renderTargets.pointGizmoDepth) gl.deleteRenderbuffer(this.renderTargets.pointGizmoDepth);
+    if (this.renderTargets.pointGizmoSourceDepth) gl.deleteRenderbuffer(this.renderTargets.pointGizmoSourceDepth);
     deleteTexture(gl, this.renderTargets.bloomTextureA);
     deleteTexture(gl, this.renderTargets.bloomTextureB);
     deleteTexture(gl, this.renderTargets.refractionTexture);
@@ -3681,6 +4240,8 @@ function createPrograms(gl: WebGL2RenderingContext): RenderPrograms {
     'u_enableShadows',
     'u_enableReflections',
     'u_isTransparentPass',
+    'u_pointGizmoCorrectionEnabled',
+    'u_pointGizmoCorrectionOrigin',
   ];
 
   return {
@@ -3707,6 +4268,18 @@ function createPrograms(gl: WebGL2RenderingContext): RenderPrograms {
       'u_model',
       'u_lightMatrix',
     ]),
+    pointGizmoSourceMask: createProgramBundle(
+      gl,
+      shadowVertexShaderSource,
+      pointGizmoSourceMaskFragmentShaderSource,
+      [
+        'u_model',
+        'u_lightMatrix',
+        'u_sceneDepth',
+        'u_viewportSize',
+        'u_viewportOrigin',
+      ],
+    ),
     transShadow: createProgramBundle(gl, shadowVertexShaderSource, transparentShadowFragmentShaderSource, [
       'u_model',
       'u_lightMatrix',
@@ -3734,6 +4307,8 @@ function createPrograms(gl: WebGL2RenderingContext): RenderPrograms {
       'u_viewport',
       'u_screenOffset',
       'u_color',
+      'u_gizmoExclusionCount',
+      'u_gizmoExclusions[0]',
     ]),
     gizmo: createProgramBundle(gl, pointGizmoVertexShaderSource, pointGizmoFragmentShaderSource, [
       'u_model',
@@ -3775,6 +4350,8 @@ function createPrograms(gl: WebGL2RenderingContext): RenderPrograms {
       'u_maskDepth',
       'u_sceneDepth',
       'u_texelSize',
+      'u_gizmoExclusionCount',
+      'u_gizmoExclusions[0]',
     ]),
     label: createProgramBundle(gl, axisLabelVertexShaderSource, axisLabelFragmentShaderSource, [
       'u_view',
@@ -3895,6 +4472,8 @@ uniform int u_clipWorldZAbove;
 uniform int u_enableShadows;
 uniform int u_enableReflections;
 uniform int u_isTransparentPass;
+uniform int u_pointGizmoCorrectionEnabled;
+uniform vec2 u_pointGizmoCorrectionOrigin;
 
 in vec3 v_worldPosition;
 in vec3 v_worldNormal;
@@ -4077,7 +4656,7 @@ vec3 applyLighting(vec3 N, vec3 V) {
       // The planar texture holds the scene mirrored about z=0, rendered from
       // the main camera, so the fragment's own screen position looks up its
       // mirror image; empty texels fall back to the environment.
-      vec2 screenUv = gl_FragCoord.xy / max(u_viewportSize, vec2(1.0));
+      vec2 screenUv = (gl_FragCoord.xy + u_pointGizmoCorrectionOrigin) / max(u_viewportSize, vec2(1.0));
       vec4 planarSample = textureLod(u_planarReflection, screenUv, reflectionLod * u_planarMaxLod);
       vec3 envReflected = textureLod(u_environment, reflected, reflectionLod * u_envMaxLod).rgb;
       reflectedColor = mix(envReflected, planarSample.rgb, clamp(planarSample.a, 0.0, 1.0));
@@ -4104,7 +4683,7 @@ vec3 applyRefraction(vec3 N, vec3 V, vec3 litColor) {
   if (dot(refracted, refracted) < 1e-6) {
     refracted = reflect(-V, N);
   }
-  vec2 screenUv = gl_FragCoord.xy / max(u_viewportSize, vec2(1.0));
+  vec2 screenUv = (gl_FragCoord.xy + u_pointGizmoCorrectionOrigin) / max(u_viewportSize, vec2(1.0));
   vec3 exitPoint = v_worldPosition + refracted * REFRACTION_THICKNESS;
   vec4 exitClip = u_projection * u_view * vec4(exitPoint, 1.0);
   vec2 refractedUv = exitClip.w > 0.0001 ? exitClip.xy / exitClip.w * 0.5 + 0.5 : screenUv;
@@ -4162,6 +4741,14 @@ ${meshLightingPreamble}
 out vec4 outColor;
 
 void main() {
+  if (u_pointGizmoCorrectionEnabled == 1) {
+    vec2 sceneUv = (gl_FragCoord.xy + u_pointGizmoCorrectionOrigin) / max(u_viewportSize, vec2(1.0));
+    if (gl_FragCoord.z < texture(u_refractionSource, sceneUv).r) {
+      // The normal transparent pass already rendered this fragment; only
+      // replay fragments that the pinned source curve incorrectly blocked.
+      discard;
+    }
+  }
   if (u_clipWorldZAbove == 1 && v_worldPosition.z > 0.0005) {
     // Mirrored planar-reflection pass: fragments above the ground plane come
     // from geometry that was below it and must not appear in the mirror.
@@ -4259,6 +4846,21 @@ precision highp float;
 void main() {}
 `;
 
+const pointGizmoSourceMaskFragmentShaderSource = `#version 300 es
+precision highp float;
+
+uniform sampler2D u_sceneDepth;
+uniform vec2 u_viewportSize;
+uniform vec2 u_viewportOrigin;
+
+void main() {
+  vec2 sceneUv = (gl_FragCoord.xy + u_viewportOrigin) / max(u_viewportSize, vec2(1.0));
+  if (gl_FragCoord.z > texture(u_sceneDepth, sceneUv).r + 0.000001) {
+    discard;
+  }
+}
+`;
+
 const transparentShadowFragmentShaderSource = `#version 300 es
 precision highp float;
 ${shadowVisibilityGlsl}
@@ -4341,8 +4943,18 @@ void main() {
 const lineFragmentShaderSource = `#version 300 es
 precision highp float;
 uniform vec4 u_color;
+uniform int u_gizmoExclusionCount;
+uniform vec3 u_gizmoExclusions[${MAX_POINT_GIZMO_OVERLAY_EXCLUSIONS}];
 out vec4 outColor;
 void main() {
+  for (int index = 0; index < ${MAX_POINT_GIZMO_OVERLAY_EXCLUSIONS}; index += 1) {
+    if (index >= u_gizmoExclusionCount) {
+      break;
+    }
+    if (distance(gl_FragCoord.xy, u_gizmoExclusions[index].xy) <= u_gizmoExclusions[index].z) {
+      discard;
+    }
+  }
   outColor = u_color;
 }
 `;
@@ -4533,6 +5145,8 @@ uniform sampler2D u_mask;
 uniform sampler2D u_maskDepth;
 uniform sampler2D u_sceneDepth;
 uniform vec2 u_texelSize;
+uniform int u_gizmoExclusionCount;
+uniform vec3 u_gizmoExclusions[${MAX_POINT_GIZMO_OVERLAY_EXCLUSIONS}];
 in vec2 v_uv;
 out vec4 outColor;
 
@@ -4541,6 +5155,15 @@ float sampleMask(vec2 uv) {
 }
 
 void main() {
+  for (int index = 0; index < ${MAX_POINT_GIZMO_OVERLAY_EXCLUSIONS}; index += 1) {
+    if (index >= u_gizmoExclusionCount) {
+      break;
+    }
+    if (distance(gl_FragCoord.xy, u_gizmoExclusions[index].xy) <= u_gizmoExclusions[index].z) {
+      outColor = vec4(0.0);
+      return;
+    }
+  }
   float center = sampleMask(v_uv);
   float selectedDepth = texture(u_maskDepth, v_uv).r;
   float sceneDepth = texture(u_sceneDepth, v_uv).r;
@@ -4686,6 +5309,35 @@ function createFramebuffer(
   }
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   return framebuffer;
+}
+
+function createDepthStencilRenderbuffer(
+  gl: WebGL2RenderingContext,
+  width: number,
+  height: number,
+): WebGLRenderbuffer {
+  const renderbuffer = gl.createRenderbuffer();
+  if (!renderbuffer) {
+    throw new Error('Failed to create depth-stencil renderbuffer');
+  }
+  gl.bindRenderbuffer(gl.RENDERBUFFER, renderbuffer);
+  gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH24_STENCIL8, width, height);
+  gl.bindRenderbuffer(gl.RENDERBUFFER, null);
+  return renderbuffer;
+}
+
+function attachDepthStencilRenderbuffer(
+  gl: WebGL2RenderingContext,
+  framebuffer: WebGLFramebuffer,
+  renderbuffer: WebGLRenderbuffer,
+): void {
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_STENCIL_ATTACHMENT, gl.RENDERBUFFER, renderbuffer);
+  if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    throw new Error('Framebuffer is incomplete after attaching depth-stencil');
+  }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
 }
 
 function createColorTexture(
@@ -5664,6 +6316,12 @@ function emptyRenderTargets(): RenderTargets {
     sceneFramebuffer: null,
     sceneColor: null,
     sceneDepth: null,
+    pointGizmoFramebuffer: null,
+    pointGizmoColor: null,
+    pointGizmoDepth: null,
+    pointGizmoSourceFramebuffer: null,
+    pointGizmoSourceColor: null,
+    pointGizmoSourceDepth: null,
     bloomWidth: 0,
     bloomHeight: 0,
     bloomFramebufferA: null,

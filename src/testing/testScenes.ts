@@ -48,7 +48,7 @@ function createPinnedLightGizmoCurveScene(): ProjectFileV1 {
   };
   curve.castShadows = false;
   if (curve.equation.kind === 'parametric_curve') {
-    curve.equation.source = analyzeEquationText('(t, 2, 1.5)').source;
+    curve.equation.source = analyzeEquationText('(0, t + 2, 1.5)').source;
     curve.equation.tDomain = { min: -4, max: 4, samples: 160 };
     curve.equation.renderAsTube = true;
     curve.equation.tubeRadius = 0.18;
@@ -65,6 +65,29 @@ function createPinnedLightGizmoCurveScene(): ProjectFileV1 {
     animating: false,
     animationSpeed: 0.2,
   };
+
+  const occluder = createDefaultSurface('Pinned Gizmo Occluder');
+  occluder.material = {
+    ...materialPresets['Matte Plastic'],
+    baseColor: '#3a4658',
+    opacity: 0,
+    reflectiveness: 0,
+    roughness: 1,
+    wireframeVisible: false,
+    refractionEnabled: false,
+  };
+  occluder.castShadows = false;
+  if (occluder.equation.kind === 'parametric_surface') {
+    occluder.equation.source = analyzeEquationText('(u, 0, v + 1.5)').source;
+    occluder.equation.domain = {
+      uMin: -5,
+      uMax: 5,
+      vMin: -5,
+      vMax: 5,
+      uSamples: 24,
+      vSamples: 24,
+    };
+  }
 
   const scene = defaultSceneSettings();
   scene.cameraProjection = 'orthographic';
@@ -87,7 +110,7 @@ function createPinnedLightGizmoCurveScene(): ProjectFileV1 {
     appVersion: APP_VERSION,
     scene,
     render,
-    objects: [curve, light],
+    objects: [curve, light, occluder],
   };
 }
 

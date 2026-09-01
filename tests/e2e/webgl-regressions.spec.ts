@@ -101,41 +101,120 @@ test.describe('WebGL Regressions', () => {
     await page.goto('/?testScene=pinned-light-gizmo-curve');
     await expect(page.getByRole('button', { name: /Pinned Gizmo Curve/i })).toBeVisible();
     await expect(page.getByRole('button', { name: /Pinned Test Light/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /Pinned Gizmo Occluder/i })).toBeVisible();
 
     const webGlGate = page.getByRole('heading', { name: 'WebGL2 Required' });
     if (await webGlGate.isVisible().catch(() => false)) {
       test.skip(true, 'WebGL2 not available in this Playwright browser session');
     }
-
-    await page.getByRole('button', { name: 'Front' }).click();
-    await page.waitForTimeout(150);
-    const withCurve = await readCanvasCenterColor(page);
+    await page.waitForTimeout(50);
+    await expect(page.getByRole('status', {
+      name: /Building (Pinned Gizmo Curve|Pinned Gizmo Occluder)/,
+    })).toHaveCount(0, { timeout: 30_000 });
 
     await page.getByRole('checkbox', { name: 'Show Pinned Gizmo Curve' }).uncheck();
     await page.waitForTimeout(150);
-    const withoutCurve = await readCanvasCenterColor(page);
-    const colorDifference = Math.hypot(
-      withCurve[0] - withoutCurve[0],
-      withCurve[1] - withoutCurve[1],
-      withCurve[2] - withoutCurve[2],
-    );
+    const obliqueGizmoCenter = await findPointLightGizmoCenter(page);
+    const obliqueWithoutCurve = await readCanvasDiscPixels(page, obliqueGizmoCenter);
+    await page.getByRole('checkbox', { name: 'Show Pinned Gizmo Curve' }).check();
+    await page.waitForTimeout(150);
+    const obliqueWithCurve = await readCanvasDiscPixels(page, obliqueGizmoCenter);
+    expect(meanPixelDifference(obliqueWithCurve, obliqueWithoutCurve)).toBeLessThan(5);
 
-    expect(colorDifference).toBeLessThan(5);
+    const projection = page.getByRole('combobox', { name: 'Camera Projection' });
+    await projection.selectOption('perspective');
+    await page.getByRole('checkbox', { name: 'Show Pinned Gizmo Curve' }).uncheck();
+    await page.waitForTimeout(150);
+    const perspectiveGizmoCenter = await findPointLightGizmoCenter(page);
+    const perspectiveWithoutCurve = await readCanvasDiscPixels(page, perspectiveGizmoCenter, 5);
+    await page.getByRole('checkbox', { name: 'Show Pinned Gizmo Curve' }).check();
+    await page.waitForTimeout(150);
+    const perspectiveWithCurve = await readCanvasDiscPixels(page, perspectiveGizmoCenter, 5);
+    expect(meanPixelDifference(perspectiveWithCurve, perspectiveWithoutCurve)).toBeLessThan(5);
+
+    await projection.selectOption('orthographic');
+    await page.getByRole('button', { name: 'Front' }).click();
+    await page.waitForTimeout(150);
+    await page.getByRole('checkbox', { name: 'Show Pinned Gizmo Curve' }).uncheck();
+    await page.waitForTimeout(150);
+    const gizmoCenter = await findPointLightGizmoCenter(page);
+    const withoutCurve = await readCanvasDiscPixels(page, gizmoCenter);
+    const withoutCurveCenter = await readCanvasDiscPixels(page, gizmoCenter, 2);
 
     await page.getByRole('checkbox', { name: 'Show Pinned Gizmo Curve' }).check();
+    await page.waitForTimeout(150);
+    const withOpaqueCurve = await readCanvasDiscPixels(page, gizmoCenter);
+    const withOpaqueCurveCenter = await readCanvasDiscPixels(page, gizmoCenter, 2);
+
+    expect(meanPixelDifference(withOpaqueCurve, withoutCurve)).toBeLessThan(5);
+    expect(meanPixelDifference(withOpaqueCurveCenter, withoutCurveCenter)).toBeLessThan(5);
+
     await page.getByRole('button', { name: /Pinned Gizmo Curve/i }).click();
     await page.getByRole('button', { name: 'Appearance' }).click();
+    await page.waitForTimeout(150);
+    const selectedGizmoCenter = await findPointLightGizmoCenter(page);
+    const withSelectedOpaqueCurve = await readCanvasDiscPixels(page, selectedGizmoCenter);
+    await page.getByRole('checkbox', { name: 'Show Pinned Gizmo Curve' }).uncheck();
+    await page.waitForTimeout(150);
+    const withoutSelectedCurve = await readCanvasDiscPixels(page, selectedGizmoCenter);
+    await page.getByRole('checkbox', { name: 'Show Pinned Gizmo Curve' }).check();
+    await page.waitForTimeout(150);
+    expect(meanPixelDifference(withSelectedOpaqueCurve, withoutSelectedCurve)).toBeLessThan(5);
+
     await setRangeField(page, 'Opacity', '0.5');
     await page.keyboard.press('Escape');
     await page.waitForTimeout(150);
-    const throughTransparentCurve = await readCanvasCenterColor(page);
-    const transparentColorDifference = Math.hypot(
-      throughTransparentCurve[0] - withoutCurve[0],
-      throughTransparentCurve[1] - withoutCurve[1],
-      throughTransparentCurve[2] - withoutCurve[2],
-    );
+    const throughTransparentCurve = await readCanvasDiscPixels(page, gizmoCenter);
+    const throughTransparentCurveCenter = await readCanvasDiscPixels(page, gizmoCenter, 2);
 
-    expect(transparentColorDifference).toBeLessThan(5);
+    expect(meanPixelDifference(throughTransparentCurve, withoutCurve)).toBeLessThan(5);
+    expect(meanPixelDifference(throughTransparentCurveCenter, withoutCurveCenter)).toBeLessThan(5);
+
+    await page.getByRole('button', { name: /Pinned Gizmo Curve/i }).click();
+    await page.getByRole('button', { name: 'Appearance' }).click();
+    await setRangeField(page, 'Opacity', '1');
+    await page.getByRole('button', { name: /Pinned Gizmo Occluder/i }).click();
+    await page.getByRole('button', { name: 'Appearance' }).click();
+    await page.waitForTimeout(150);
+    const occluderGizmoCenter = await findPointLightGizmoCenter(page);
+    const withoutOccluder = await readCanvasDiscPixels(page, occluderGizmoCenter);
+    const withoutOccluderCenter = await readCanvasDiscPixels(page, occluderGizmoCenter, 2);
+    await setRangeField(page, 'Opacity', '0.5');
+    await page.waitForTimeout(150);
+    const throughTransparentOccluder = await readCanvasDiscPixels(page, occluderGizmoCenter);
+    const throughTransparentOccluderCenter = await readCanvasDiscPixels(page, occluderGizmoCenter, 2);
+    await setRangeField(page, 'Opacity', '1');
+    await page.waitForTimeout(150);
+    const behindOpaqueOccluder = await readCanvasDiscPixels(page, occluderGizmoCenter);
+    const behindOpaqueOccluderCenter = await readCanvasDiscPixels(page, occluderGizmoCenter, 2);
+
+    const transparentOccluderDifference = meanPixelDifference(throughTransparentOccluder, withoutOccluder);
+    const opaqueOccluderDifference = meanPixelDifference(behindOpaqueOccluder, withoutOccluder);
+    const transparentOccluderCenterDifference = meanPixelDifference(
+      throughTransparentOccluderCenter,
+      withoutOccluderCenter,
+    );
+    const opaqueOccluderCenterDifference = meanPixelDifference(behindOpaqueOccluderCenter, withoutOccluderCenter);
+    expect(transparentOccluderDifference).toBeGreaterThan(5);
+    expect(opaqueOccluderDifference).toBeGreaterThan(transparentOccluderDifference + 5);
+    expect(transparentOccluderCenterDifference).toBeGreaterThan(5);
+    expect(opaqueOccluderCenterDifference).toBeGreaterThan(transparentOccluderCenterDifference + 5);
+
+    await setRangeField(page, 'Opacity', '0.5');
+    await page.getByRole('button', { name: 'Object' }).click();
+    const occluderPositionY = page.getByRole('textbox', { name: 'Position y' });
+    await occluderPositionY.fill('-3');
+    await occluderPositionY.blur();
+    await page.waitForTimeout(150);
+    const frontOccluderCenter = await findPointLightGizmoCenter(page);
+    const frontOccluderWithSource = await readCanvasDiscPixels(page, frontOccluderCenter, 2);
+
+    await page.getByRole('checkbox', { name: 'Show Pinned Gizmo Curve' }).uncheck();
+    await page.waitForTimeout(150);
+    const frontOccluderWithoutSourceCenter = await findPointLightGizmoCenter(page);
+    const frontOccluderWithoutSource = await readCanvasDiscPixels(page, frontOccluderWithoutSourceCenter, 2);
+
+    expect(meanPixelDifference(frontOccluderWithSource, frontOccluderWithoutSource)).toBeLessThan(5);
   });
 });
 
@@ -201,8 +280,13 @@ async function readCanvasCenterContrast(page: import('@playwright/test').Page): 
   }));
 }
 
-async function readCanvasCenterColor(page: import('@playwright/test').Page): Promise<[number, number, number]> {
-  return page.evaluate(() => new Promise<[number, number, number]>((resolve, reject) => {
+interface CanvasPoint {
+  x: number;
+  y: number;
+}
+
+async function findPointLightGizmoCenter(page: import('@playwright/test').Page): Promise<CanvasPoint> {
+  return page.evaluate(() => new Promise<CanvasPoint>((resolve, reject) => {
     requestAnimationFrame(() => {
       const canvas = document.querySelector<HTMLCanvasElement>('.viewport-canvas');
       const gl = canvas?.getContext('webgl2');
@@ -211,26 +295,74 @@ async function readCanvasCenterColor(page: import('@playwright/test').Page): Pro
         return;
       }
 
-      const radius = 2;
+      const pixels = new Uint8Array(canvas.width * canvas.height * 4);
+      gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      let weightedX = 0;
+      let weightedY = 0;
+      let totalWeight = 0;
+      for (let index = 0; index < pixels.length; index += 4) {
+        const red = pixels[index];
+        const green = pixels[index + 1];
+        const blue = pixels[index + 2];
+        const weight = Math.max(0, red + green - blue - 180);
+        if (weight <= 0) {
+          continue;
+        }
+        const pixelIndex = index / 4;
+        weightedX += (pixelIndex % canvas.width) * weight;
+        weightedY += Math.floor(pixelIndex / canvas.width) * weight;
+        totalWeight += weight;
+      }
+      if (totalWeight <= 0) {
+        reject(new Error('Point-light gizmo pixels were not found'));
+        return;
+      }
+      resolve({ x: weightedX / totalWeight, y: weightedY / totalWeight });
+    });
+  }));
+}
+
+async function readCanvasDiscPixels(
+  page: import('@playwright/test').Page,
+  center: CanvasPoint,
+  radius = 11,
+): Promise<number[]> {
+  return page.evaluate(({ center, radius }) => new Promise<number[]>((resolve, reject) => {
+    requestAnimationFrame(() => {
+      const canvas = document.querySelector<HTMLCanvasElement>('.viewport-canvas');
+      const gl = canvas?.getContext('webgl2');
+      if (!canvas || !gl) {
+        reject(new Error('WebGL2 canvas is unavailable'));
+        return;
+      }
+
       const size = radius * 2 + 1;
       const pixels = new Uint8Array(size * size * 4);
       gl.readPixels(
-        Math.round(canvas.width / 2) - radius,
-        Math.round(canvas.height / 2) - radius,
+        Math.round(center.x) - radius,
+        Math.round(center.y) - radius,
         size,
         size,
         gl.RGBA,
         gl.UNSIGNED_BYTE,
         pixels,
       );
-      const rgb: [number, number, number] = [0, 0, 0];
-      for (let index = 0; index < pixels.length; index += 4) {
-        rgb[0] += pixels[index];
-        rgb[1] += pixels[index + 1];
-        rgb[2] += pixels[index + 2];
+      const discPixels: number[] = [];
+      for (let y = -radius; y <= radius; y += 1) {
+        for (let x = -radius; x <= radius; x += 1) {
+          if (x * x + y * y > radius * radius) {
+            continue;
+          }
+          const index = ((y + radius) * size + x + radius) * 4;
+          discPixels.push(pixels[index], pixels[index + 1], pixels[index + 2]);
+        }
       }
-      const count = pixels.length / 4;
-      resolve([rgb[0] / count, rgb[1] / count, rgb[2] / count]);
+      resolve(discPixels);
     });
-  }));
+  }), { center, radius });
+}
+
+function meanPixelDifference(left: number[], right: number[]): number {
+  expect(left).toHaveLength(right.length);
+  return left.reduce((sum, value, index) => sum + Math.abs(value - right[index]), 0) / left.length;
 }
