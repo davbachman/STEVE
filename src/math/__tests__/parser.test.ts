@@ -70,4 +70,32 @@ describe('math parser and classifier', () => {
     const fn = compileNumericExpression(parsed.ast!);
     expect(fn({ x: 4 })).toBe(50);
   });
+
+  it.each([
+    ['-x^2', -9],
+    ['(-x)^2', 9],
+    ['-2^2', -4],
+    ['2^-2', 0.25],
+    ['2^3^2', 512],
+    ['(2^3)^2', 64],
+    ['2^-2^2', 1 / 16],
+    ['-2^-2', -0.25],
+    ['3*-x^2', -27],
+    ['--x^2', 9],
+    ['+x^2', 9],
+  ])('evaluates signs and powers in %s using mathematical precedence', (text, expected) => {
+    const parsed = parseMath(text);
+    expect(parsed.status).toBe('ok');
+    expect(compileNumericExpression(parsed.ast!)({ x: 3 })).toBe(expected);
+  });
+
+  it.each([
+    ['-x^2', '-x^{2}'],
+    ['(-x)^2', '\\left(-x\\right)^{2}'],
+    ['2^-2', '2^{-2}'],
+    ['(x^2)^3', '\\left(x^{2}\\right)^{3}'],
+    ['x^2^3', 'x^{2^{3}}'],
+  ])('preserves the meaning of %s in the equation preview', (text, expected) => {
+    expect(toLatex(parseMath(text).ast!)).toBe(expected);
+  });
 });

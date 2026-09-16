@@ -833,6 +833,7 @@ function SceneTab({ activeTab, viewportApi }: { activeTab: SceneTabId; viewportA
             Shadow map resolution
             <select
               value={String(scene.shadow.shadowMapResolution)}
+              title="Maximum shadow resolution. Performance and Balanced quality may use a lower resolution."
               onChange={(e) => updateScene({ shadow: { ...scene.shadow, shadowMapResolution: Number(e.target.value) } })}
             >
               {![512, 1024, 2048, 4096].includes(scene.shadow.shadowMapResolution) ? (

@@ -101,4 +101,73 @@ describe('ObjectListPanel creation buttons', () => {
     const intersectionCard = intersection ? cardFor(intersection.name) : undefined;
     expect(intersectionCard?.querySelector('input[type="checkbox"]')).toBeInstanceOf(HTMLInputElement);
   });
+
+  it('controls light illumination independently of handle visibility for both light types', () => {
+    act(() => {
+      useAppStore.getState().newProject();
+      useAppStore.getState().addPointLight();
+    });
+    const host = document.createElement('div');
+    container = host;
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() => root?.render(<ObjectListPanel />));
+
+    for (const light of useAppStore.getState().objects.filter((object) => object.type === 'point_light' || object.type === 'directional_light')) {
+      const power = host.querySelector<HTMLButtonElement>(`button[aria-label="Enable ${light.name}"]`);
+      const handle = host.querySelector<HTMLInputElement>(`input[aria-label="Show gizmo for ${light.name}"]`);
+      if (!power || !handle) throw new Error(`Missing controls for ${light.name}`);
+      const originallyVisible = handle.checked;
+      expect(power.getAttribute('aria-pressed')).toBe('true');
+      act(() => power.click());
+      let updated = useAppStore.getState().objects.find((object) => object.id === light.id);
+      if (!updated || updated.type === 'plot' || updated.type === 'intersection') throw new Error('Expected light');
+      expect(updated.enabled).toBe(false);
+      expect(updated.visible).toBe(originallyVisible);
+      expect(power.getAttribute('aria-pressed')).toBe('false');
+      expect(handle.checked).toBe(originallyVisible);
+
+      act(() => handle.click());
+      updated = useAppStore.getState().objects.find((object) => object.id === light.id);
+      if (!updated || updated.type === 'plot' || updated.type === 'intersection') throw new Error('Expected light');
+      expect(updated.enabled).toBe(false);
+      expect(updated.visible).toBe(!originallyVisible);
+
+      act(() => power.click());
+      updated = useAppStore.getState().objects.find((object) => object.id === light.id);
+      if (!updated || updated.type === 'plot' || updated.type === 'intersection') throw new Error('Expected light');
+      expect(updated.enabled).toBe(true);
+      expect(updated.visible).toBe(!originallyVisible);
+    }
+  });
+
+  it('exposes working duplicate and delete actions on the selected object', () => {
+    act(() => {
+      useAppStore.getState().newProject();
+      useAppStore.getState().addPlot('graph');
+    });
+    const original = useAppStore.getState().objects.find((object) => object.type === 'plot');
+    if (!original) throw new Error('Expected graph');
+    const host = document.createElement('div');
+    container = host;
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() => root?.render(<ObjectListPanel />));
+    const duplicate = host.querySelector<HTMLButtonElement>(`button[aria-label="Duplicate ${original.name}"]`);
+    if (!duplicate) throw new Error('Missing Duplicate action');
+    act(() => duplicate.click());
+    const copied = useAppStore.getState().objects.find((object) => object.id === useAppStore.getState().selectedId);
+    if (!copied || copied.type !== 'plot') throw new Error('Expected selected duplicate');
+    expect(copied.id).not.toBe(original.id);
+    expect(copied.equation).toEqual(original.equation);
+    expect(useAppStore.getState().objects.filter((object) => object.type === 'plot')).toHaveLength(2);
+    expect(host.querySelectorAll('.object-card__actions')).toHaveLength(1);
+    const remove = host.querySelector<HTMLButtonElement>(`button[aria-label="Delete ${copied.name}"]`);
+    if (!remove) throw new Error('Missing Delete action');
+    act(() => remove.click());
+    expect(useAppStore.getState().objects.find((object) => object.id === copied.id)).toBeUndefined();
+    expect(useAppStore.getState().objects.find((object) => object.id === original.id)).toBeDefined();
+    expect(useAppStore.getState().objects.filter((object) => object.type === 'plot')).toHaveLength(1);
+  });
+
 });

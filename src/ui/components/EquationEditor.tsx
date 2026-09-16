@@ -1,14 +1,16 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
 import { autocompletion, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete';
+import { Decoration, EditorView } from '@codemirror/view';
 import { supportedConstantNames, supportedFunctionNames } from '../../math/evaluator';
-import type { EquationSpec } from '../../types/contracts';
+import type { EquationSpec, PlotJobStatus } from '../../types/contracts';
 import { LatexPreview } from './LatexPreview';
 
 interface EquationEditorProps {
   equation: EquationSpec;
   onChange: (rawText: string) => void;
+  job?: PlotJobStatus;
 }
 
 const FUNCTION_DETAILS: Record<string, string> = {
@@ -44,12 +46,25 @@ function mathCompletionSource(context: CompletionContext): CompletionResult | nu
 const EDITOR_EXTENSIONS = [
   javascript(),
   autocompletion({ override: [mathCompletionSource] }),
+  EditorView.contentAttributes.of({ 'aria-label': 'Equation' }),
 ];
 
-export function EquationEditor({ equation, onChange }: EquationEditorProps) {
+export function EquationEditor({ equation, onChange, job }: EquationEditorProps) {
   const source = equation.source;
   const graphExpression = equation.kind === 'explicit_surface' && equation.graphExpression;
   const [helpOpen, setHelpOpen] = useState(false);
+  const diagnostics = source.parseErrors;
+  const extensions = useMemo(() => {
+    const length = source.rawText.length;
+    const ranges = length ? diagnostics.map((diagnostic) => {
+      const from = Math.max(0, Math.min(length - 1, diagnostic.start));
+      const to = Math.max(from + 1, Math.min(length, diagnostic.end));
+      return Decoration.mark({ class: 'equation-error-underline', attributes: { title: diagnostic.message } }).range(from, to);
+    }) : [];
+    return [...EDITOR_EXTENSIONS, EditorView.decorations.of(Decoration.set(ranges, true))];
+  }, [diagnostics, source.rawText]);
+  const message = diagnostics[0]?.message ?? source.classification?.warning ?? job?.lastError;
+  const invalid = source.parseStatus !== 'ok' || source.classification?.kind === 'unknown' || job?.meshPhase === 'error';
 
   return (
     <div className="equation-editor">
@@ -66,7 +81,7 @@ export function EquationEditor({ equation, onChange }: EquationEditorProps) {
             highlightActiveLineGutter: false,
             autocompletion: false,
           }}
-          extensions={EDITOR_EXTENSIONS}
+          extensions={extensions}
           onChange={(value) => onChange(value)}
         />
         <button
@@ -82,6 +97,12 @@ export function EquationEditor({ equation, onChange }: EquationEditorProps) {
         {helpOpen ? <SyntaxHelp graphExpression={Boolean(graphExpression)} /> : null}
       </div>
       <LatexPreview latex={source.formattedLatex} fallbackText={source.rawText} />
+      {message ? (
+        <div className={`equation-editor__diagnostic equation-editor__diagnostic--${invalid ? 'error' : 'warning'}`} role="status" aria-live="polite">
+          {source.parseStatus === 'partial' ? 'Incomplete equation. ' : ''}{message}
+          {invalid && (job?.meshVersion ?? 0) > 0 ? ' Showing the last valid plot.' : ''}
+        </div>
+      ) : null}
     </div>
   );
 }

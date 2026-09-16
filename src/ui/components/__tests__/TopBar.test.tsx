@@ -1,6 +1,6 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ViewportApi } from '../../../renderer/SceneController';
 import { useAppStore } from '../../../state/store';
 import { TopBar } from '../TopBar';
@@ -11,6 +11,11 @@ describe('TopBar menus', () => {
   let root: Root | null = null;
   let container: HTMLDivElement | null = null;
 
+  beforeEach(() => {
+    vi.stubGlobal('localStorage', { getItem: vi.fn(() => null), setItem: vi.fn() });
+    useAppStore.getState().newProject();
+  });
+
   afterEach(() => {
     if (root) {
       act(() => root?.unmount());
@@ -19,6 +24,78 @@ describe('TopBar menus', () => {
     useAppStore.getState().newProject();
     root = null;
     container = null;
+    delete (window as Window & { showSaveFilePicker?: unknown }).showSaveFilePicker;
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  function renderTopBar(viewportApi: ViewportApi | null = null) {
+    const host = document.createElement('div');
+    container = host;
+    document.body.appendChild(host);
+    root = createRoot(host);
+    act(() => root?.render(
+      <TopBar viewportApi={viewportApi} leftSidebarVisible rightSidebarVisible onToggleLeftSidebar={vi.fn()} onToggleRightSidebar={vi.fn()} />,
+    ));
+    return host;
+  }
+
+  it('shows history controls and protects edited projects from accidental New', () => {
+    const host = renderTopBar();
+    expect(buttonWithText(host, 'Undo').disabled).toBe(true);
+    act(() => useAppStore.getState().addPlot('graph'));
+    const before = useAppStore.getState().exportProjectFile();
+    expect(host.textContent).toContain('Unsaved changes');
+    expect(buttonWithText(host, 'Undo').disabled).toBe(false);
+    act(() => buttonWithText(host, 'File').click());
+    act(() => buttonWithText(host, 'New').click());
+    expect(host.querySelector('[role="alertdialog"]')).not.toBeNull();
+    act(() => buttonWithText(host, 'Cancel').click());
+    expect(useAppStore.getState().exportProjectFile()).toEqual(before);
+    act(() => buttonWithText(host, 'File').click());
+    act(() => buttonWithText(host, 'New').click());
+    act(() => buttonWithText(host, 'Discard changes').click());
+    expect(useAppStore.getState().historyPast).toHaveLength(0);
+    expect(host.textContent).toContain('No unsaved changes');
+  });
+
+  it('keeps the current project and confirmation open when saving is canceled', async () => {
+    const host = renderTopBar();
+    act(() => useAppStore.getState().addPlot('graph'));
+    const before = useAppStore.getState().exportProjectFile();
+    (window as Window & { showSaveFilePicker?: unknown }).showSaveFilePicker = vi.fn().mockRejectedValue(new DOMException('Canceled', 'AbortError'));
+    act(() => buttonWithText(host, 'File').click());
+    act(() => buttonWithText(host, 'New').click());
+    await act(async () => { buttonWithText(host, 'Save and continue').click(); });
+    expect(useAppStore.getState().exportProjectFile()).toEqual(before);
+    expect(host.querySelector('[role="alertdialog"]')).not.toBeNull();
+    expect(host.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it('reports invalid project imports visibly without changing scene or history', async () => {
+    const host = renderTopBar();
+    act(() => useAppStore.getState().addPlot('graph'));
+    const before = useAppStore.getState();
+    const input = host.querySelector('input[type="file"]');
+    if (!(input instanceof HTMLInputElement)) throw new Error('Missing project input');
+    Object.defineProperty(input, 'files', { value: [{ text: async () => '{}' }], configurable: true });
+    await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('not a STEVE project');
+    expect(useAppStore.getState()).toBe(before);
+    expect(host.querySelector('[role="alertdialog"]')).toBeNull();
+  });
+
+  it('shows save failures and warns on leaving an edited project', async () => {
+    const host = renderTopBar();
+    act(() => useAppStore.getState().addPlot('graph'));
+    const event = new Event('beforeunload', { cancelable: true });
+    act(() => window.dispatchEvent(event));
+    expect(event.defaultPrevented).toBe(true);
+    (window as Window & { showSaveFilePicker?: unknown }).showSaveFilePicker = vi.fn().mockRejectedValue(new Error('Disk is full'));
+    act(() => buttonWithText(host, 'File').click());
+    await act(async () => { buttonWithText(host, 'Save').click(); });
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('Disk is full');
+    expect(host.textContent).toContain('Unsaved changes');
   });
 
   it('moves rendering and quality controls into Settings', async () => {

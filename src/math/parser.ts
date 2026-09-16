@@ -76,10 +76,10 @@ class Parser {
   }
 
   private parseMulDiv(): Expression {
-    let expr = this.parsePow();
+    let expr = this.parseUnary();
     while (this.isOp('*') || this.isOp('/')) {
       const op = this.advance();
-      const right = this.parsePow();
+      const right = this.parseUnary();
       const node: BinaryExpression = {
         type: 'binary',
         operator: op.text as BinaryExpression['operator'],
@@ -94,10 +94,13 @@ class Parser {
   }
 
   private parsePow(): Expression {
-    let left = this.parseUnary();
+    let left = this.parsePrimary();
     if (this.isOp('^')) {
       const op = this.advance();
-      const right = this.parsePow();
+      // A power binds more tightly than a sign on its base, but its exponent
+      // may itself start with a sign. Recursing through unary also keeps
+      // powers right associative: -x^2, 2^-2, and 2^3^2 all follow math notation.
+      const right = this.parseUnary();
       const node: BinaryExpression = {
         type: 'binary',
         operator: op.text as BinaryExpression['operator'],
@@ -124,7 +127,7 @@ class Parser {
       };
       return node;
     }
-    return this.parsePrimary();
+    return this.parsePow();
   }
 
   private parsePrimary(): Expression {

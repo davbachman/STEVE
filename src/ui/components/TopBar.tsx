@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { exportPlotAsStl } from '../../persistence/meshExport';
 import { readProjectFile, saveProjectFile } from '../../persistence/projectFile';
+import { projectFingerprint, type ProjectNotice } from '../../persistence/projectRecovery';
+import { useProjectRecovery } from '../../hooks/useProjectRecovery';
 import { useAppStore } from '../../state/store';
 import type { ViewportApi } from '../../renderer/SceneController';
-import type { RenderableObject } from '../../types/contracts';
+import type { ProjectFileV1, RenderableObject } from '../../types/contracts';
 import { isRenderableObject } from '../../types/guards';
 import { RangeField } from './InspectorPanel';
 
@@ -14,6 +16,11 @@ const FEEDBACK_EMAIL = 'bachman@pitzer.edu';
 const FEEDBACK_CATEGORIES = ['Feature Request', 'Bug Report', 'Contact'] as const;
 
 type FeedbackCategory = typeof FEEDBACK_CATEGORIES[number];
+type ReplacementAction = { kind: 'new' } | { kind: 'open'; project: ProjectFileV1 };
+
+function isCanceled(error: unknown): boolean {
+  return !!error && typeof error === 'object' && 'name' in error && error.name === 'AbortError';
+}
 
 interface TopBarProps {
   viewportApi: ViewportApi | null;
@@ -39,6 +46,10 @@ export function TopBar({
   const [feedbackCategories, setFeedbackCategories] = useState<FeedbackCategory[]>([]);
   const [feedbackMessage, setFeedbackMessage] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [notice, setNotice] = useState<ProjectNotice | null>(null);
+  const [pendingAction, setPendingAction] = useState<ReplacementAction | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const recovery = useProjectRecovery();
   const exportProjectFile = useAppStore((s) => s.exportProjectFile);
   const replaceProject = useAppStore((s) => s.replaceProject);
   const newProject = useAppStore((s) => s.newProject);
@@ -46,9 +57,14 @@ export function TopBar({
   const render = useAppStore((s) => s.render);
   const selectedId = useAppStore((s) => s.selectedId);
   const updateRender = useAppStore((s) => s.updateRender);
+  const undo = useAppStore((s) => s.undo);
+  const redo = useAppStore((s) => s.redo);
+  const canUndo = useAppStore((s) => s.historyPast.length > 0);
+  const canRedo = useAppStore((s) => s.historyFuture.length > 0);
   const selectedPlot = selectedId
     ? objects.find((obj): obj is RenderableObject => obj.id === selectedId && isRenderableObject(obj)) ?? null
     : null;
+  const activeNotice = recovery.notice?.kind === 'error' ? recovery.notice : notice ?? recovery.notice;
 
   useEffect(() => {
     if (!activeMenu) return;
@@ -62,31 +78,60 @@ export function TopBar({
   }, [activeMenu]);
 
   useEffect(() => {
-    if (!activeMenu && !aboutOpen && !feedbackOpen && !settingsOpen) return;
+    if (!activeMenu && !aboutOpen && !feedbackOpen && !settingsOpen && !pendingAction) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
       event.stopPropagation();
+      if (pendingAction && busy) return;
       setActiveMenu(null);
       setAboutOpen(false);
       setFeedbackOpen(false);
       setSettingsOpen(false);
+      setPendingAction(null);
     };
     document.addEventListener('keydown', closeOnEscape, true);
     return () => document.removeEventListener('keydown', closeOnEscape, true);
-  }, [aboutOpen, activeMenu, feedbackOpen, settingsOpen]);
+  }, [aboutOpen, activeMenu, feedbackOpen, settingsOpen, pendingAction, busy]);
 
-  const handleSaveProject = () => {
-    void (async () => {
-      try {
-        await saveProjectFile(exportProjectFile());
-      } catch (error) {
-        if (error instanceof DOMException && error.name === 'AbortError') {
-          return;
-        }
-        console.error(error instanceof Error ? error.message : 'Failed to save project');
-      }
-    })();
+  const showError = (error: unknown, fallback: string) => {
+    setNotice({ kind: 'error', message: error instanceof Error ? error.message : fallback });
+  };
+
+  const saveProject = async (): Promise<boolean> => {
+    const project = exportProjectFile();
+    setBusy('Saving project…');
+    try {
+      await saveProjectFile(project);
+      recovery.markSaved(project);
+      const stillCurrent = projectFingerprint(project) === projectFingerprint(useAppStore.getState());
+      setNotice({ kind: 'info', message: stillCurrent ? 'Project saved.' : 'Project saved. Newer changes are still unsaved.' });
+      return stillCurrent;
+    } catch (error) {
+      if (!isCanceled(error)) showError(error, 'Failed to save project');
+      return false;
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const performReplacement = (action: ReplacementAction) => {
+    try {
+      if (action.kind === 'new') newProject();
+      else replaceProject(action.project);
+      recovery.dismissNotice();
+      recovery.markClean();
+      setNotice({ kind: 'info', message: action.kind === 'new' ? 'New project created.' : 'Project opened.' });
+      setPendingAction(null);
+    } catch (error) {
+      setPendingAction(null);
+      showError(error, 'Failed to open project');
+    }
+  };
+
+  const requestReplacement = (action: ReplacementAction) => {
+    if (recovery.hasUnsavedChanges()) setPendingAction(action);
+    else performReplacement(action);
   };
 
   const handleExportPng = () => {
@@ -94,13 +139,17 @@ export function TopBar({
       if (!viewportApi) {
         return;
       }
+      setBusy('Preparing PNG…');
       try {
         await viewportApi.exportPng(undefined, exportScale);
+        setNotice({ kind: 'info', message: 'PNG exported.' });
       } catch (error) {
-        if (error instanceof DOMException && error.name === 'AbortError') {
+        if (isCanceled(error)) {
           return;
         }
-        console.error(error instanceof Error ? error.message : 'Failed to export PNG');
+        showError(error, 'Failed to export PNG');
+      } finally {
+        setBusy(null);
       }
     })();
   };
@@ -109,14 +158,18 @@ export function TopBar({
     if (!selectedPlot) {
       return;
     }
+    setBusy('Preparing STL…');
     void (async () => {
       try {
-        await exportPlotAsStl(selectedPlot);
+        await exportPlotAsStl(selectedPlot, objects);
+        setNotice({ kind: 'info', message: 'STL exported.' });
       } catch (error) {
-        if (error instanceof DOMException && error.name === 'AbortError') {
+        if (isCanceled(error)) {
           return;
         }
-        console.error(error instanceof Error ? error.message : 'Failed to export STL');
+        showError(error, 'Failed to export STL');
+      } finally {
+        setBusy(null);
       }
     })();
   };
@@ -208,14 +261,21 @@ export function TopBar({
             </button>
             {activeMenu === 'file' ? (
               <div className="top-bar__menu-popover" role="menu" aria-label="File menu">
-                <button type="button" role="menuitem" onClick={() => closeMenusThen(newProject)}>New</button>
-                <button type="button" role="menuitem" onClick={() => closeMenusThen(handleSaveProject)}>Save</button>
-                <button type="button" role="menuitem" onClick={() => closeMenusThen(() => fileInputRef.current?.click())}>Open</button>
-                <button type="button" role="menuitem" disabled={!viewportApi} onClick={() => closeMenusThen(handleExportPng)}>Export PNG</button>
-                <button type="button" role="menuitem" disabled={!selectedPlot} onClick={() => closeMenusThen(handleExportStl)}>Export STL</button>
+                <button type="button" role="menuitem" disabled={!!busy} onClick={() => closeMenusThen(() => requestReplacement({ kind: 'new' }))}>New</button>
+                <button type="button" role="menuitem" disabled={!!busy} onClick={() => closeMenusThen(() => { void saveProject(); })}>Save</button>
+                <button type="button" role="menuitem" disabled={!!busy} onClick={() => closeMenusThen(() => fileInputRef.current?.click())}>Open</button>
+                <button type="button" role="menuitem" disabled={!viewportApi || !!busy} onClick={() => closeMenusThen(handleExportPng)}>Export PNG</button>
+                <button type="button" role="menuitem" disabled={!selectedPlot || !!busy} onClick={() => closeMenusThen(handleExportStl)}>Export STL</button>
               </div>
             ) : null}
           </div>
+          <div className="top-bar__history" aria-label="History">
+            <button type="button" disabled={!canUndo} onClick={undo} title="Undo (⌘/Ctrl Z)">Undo</button>
+            <button type="button" disabled={!canRedo} onClick={redo} title="Redo (⌘/Ctrl Shift Z)">Redo</button>
+          </div>
+          <span className="top-bar__save-status" title={recovery.recoveryAvailable ? 'A recovery copy is stored in this browser. Save a file for a permanent copy.' : 'Save a project file to keep your work.'}>
+            {recovery.dirty ? 'Unsaved changes' : 'No unsaved changes'}
+          </span>
         </div>
 
         <div className="top-bar__group top-bar__group--right">
@@ -249,19 +309,46 @@ export function TopBar({
           onChange={(e) => {
             const file = e.target.files?.[0];
             if (!file) return;
+            const input = e.target;
             void (async () => {
               try {
                 const project = await readProjectFile(file);
-                replaceProject(project);
+                requestReplacement({ kind: 'open', project });
               } catch (err) {
-                console.error(err instanceof Error ? err.message : 'Failed to open project');
+                showError(err, 'Failed to open project');
               } finally {
-                e.target.value = '';
+                input.value = '';
               }
             })();
           }}
         />
       </header>
+
+      {busy || activeNotice ? (
+        <div
+          className={`project-notice${activeNotice?.kind === 'error' ? ' project-notice--error' : ''}`}
+          role={activeNotice?.kind === 'error' && !busy ? 'alert' : 'status'}
+        >
+          <span>{busy ?? activeNotice?.message}</span>
+          {!busy ? <button type="button" aria-label="Dismiss notification" onClick={() => { setNotice(null); recovery.dismissNotice(); }}>×</button> : null}
+        </div>
+      ) : null}
+
+      {pendingAction ? (
+        <div className="settings-overlay" role="presentation">
+          <section className="settings-dialog" role="alertdialog" aria-modal="true" aria-labelledby="unsaved-title" aria-describedby="unsaved-description">
+            <header className="settings-dialog__header"><h2 id="unsaved-title">Save your changes?</h2></header>
+            <div className="settings-dialog__body">
+              <p id="unsaved-description">Creating or opening a project replaces this scene and its local recovery copy.</p>
+              <div className="project-confirm-actions">
+                <button type="button" autoFocus disabled={!!busy} onClick={() => setPendingAction(null)}>Cancel</button>
+                <button type="button" disabled={!!busy} onClick={() => performReplacement(pendingAction)}>Discard changes</button>
+                <button type="button" disabled={!!busy} onClick={() => { void saveProject().then((saved) => { if (saved) performReplacement(pendingAction); }); }}>Save and continue</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {aboutOpen ? (
         <div
@@ -492,6 +579,7 @@ export function TopBar({
                     value={render.interactiveQuality}
                     onChange={(e) => updateRender({ interactiveQuality: e.target.value as typeof render.interactiveQuality })}
                     aria-label="Interactive Quality"
+                    title="Adjusts image sharpness, shadows, and reflections. Equation sampling is unchanged."
                   >
                     <option value="performance">Performance</option>
                     <option value="balanced">Balanced</option>

@@ -1,5 +1,28 @@
 import type { ProjectFileV1 } from '../types/contracts';
 
+/** Accept schema-v1 and recognizable legacy projects before any scene is replaced. */
+export function validateProjectFile(value: unknown): asserts value is ProjectFileV1 {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Project file must contain a JSON object');
+  }
+  const project = value as Record<string, unknown>;
+  if (project.schemaVersion != null && project.schemaVersion !== 1) {
+    throw new Error(`Unsupported schema version ${String(project.schemaVersion)}`);
+  }
+  const isRecord = (entry: unknown) => !!entry && typeof entry === 'object' && !Array.isArray(entry);
+  const hasRecognizableObjects = Array.isArray(project.objects) && project.objects.some((entry: unknown) => (
+    isRecord(entry) && ['plot', 'intersection', 'point_light', 'directional_light'].includes(String((entry as Record<string, unknown>).type))
+  ));
+  if (!Array.isArray(project.objects)
+    || (project.schemaVersion == null && !hasRecognizableObjects && (!isRecord(project.scene) || !isRecord(project.render)))) {
+    throw new Error('This is not a STEVE project. Choose a saved .3dplot.json file.');
+  }
+  if ((project.scene != null && !isRecord(project.scene))
+    || (project.render != null && !isRecord(project.render))) {
+    throw new Error('Invalid project settings. Your current scene has not been changed.');
+  }
+}
+
 export interface SaveFilePickerType {
   description?: string;
   accept: Record<string, string[]>;
@@ -91,10 +114,8 @@ export async function readProjectFile(file: File): Promise<ProjectFileV1> {
   const text = await file.text();
   try {
     const parsed = JSON.parse(text) as unknown;
-    if (!parsed || typeof parsed !== 'object') {
-      throw new Error('Project file must contain a JSON object');
-    }
-    return parsed as ProjectFileV1;
+    validateProjectFile(parsed);
+    return parsed;
   } catch (error) {
     if (error instanceof SyntaxError) {
       throw new Error('Invalid project JSON');

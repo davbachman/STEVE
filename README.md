@@ -17,7 +17,7 @@ Created by David Bachman with GPT 5.4, GPT 5.5, GPT 5.6 Sol, and Fable 5. Learn 
 - Derive an intersection curve from any two surface objects; the curve updates when either source surface is edited, moved, or animated.
 - Combine plots, intersection curves, point lights, and directional lights in one scene.
 - Pin point or directional lights to parametric curves, scrub their curve parameter, and animate them with endpoint-aware bounce or loop playback.
-- Edit equations with function autocomplete, an on-demand syntax reference, automatic equation classification, and a live LaTeX preview.
+- Edit equations with function autocomplete, an on-demand syntax reference, automatic equation classification, a live LaTeX preview, and inline error messages.
 - Turn user-defined equation constants into continuous sliders, ping-pong animations, or discrete families of sampled copies.
 - Record full-detail animated-constant loops, curve-pinned light paths, and camera turntable loops as GIF files.
 - Rename and reposition plots and lights, edit curve/surface domains and sampling density, and choose implicit-meshing bounds and quality.
@@ -26,13 +26,13 @@ Created by David Bachman with GPT 5.4, GPT 5.5, GPT 5.6 Sol, and Fable 5. Learn 
 - Configure ambient, point, and directional lighting; soft directional and point-light shadows; solid or gradient backgrounds; an optional reflective ground plane; the XY grid; axes; and numbered axis labels.
 - Choose perspective or orthographic projection, use axis-aligned view presets, frame a selection, or run a continuous turntable animation.
 - Tune ACES, Filmic, or un-tonemapped output, exposure, light halos, and interactive rendering quality.
-- Work with undo/redo, object copy/paste, keyboard deletion, visibility controls, collapsible sidebars, and live mesh-progress/error indicators.
-- Save and reopen scene objects plus scene/render settings, export PNG images at 1×/2×/4×, and export plots or intersection curves as STL meshes.
+- Work with visible undo/redo and duplicate/delete controls, object copy/paste, visibility controls, collapsible sidebars, and live mesh-progress/error indicators.
+- Save and reopen scene objects, camera pose, and scene/render settings, recover the last local session, export PNG images at 1×/2×/4×, and export plots or intersection curves as STL meshes.
 - Keep equation parsing and meshing responsive through browser workers; no application install or server-side renderer is required.
 
 ## Quick Start
 
-1. [Open the live app](https://davbachman.github.io/STEVE/). A new project begins with ambient scene lighting and an unchecked `Directional Light 1`; check its object-row box to show its viewport gizmo, or add mathematical objects and more lights from the left panel.
+1. [Open the live app](https://davbachman.github.io/STEVE/). Your last local session is restored when available. A new project begins with ambient lighting and `Directional Light 1`; its **On/Off** button controls illumination, and **Handle** shows its draggable viewport gizmo.
 2. Under **Curve**, choose `+ Parametric` or `+ Intersection`. Under **Surface**, choose `+ Graph`, `+ Parametric`, or `+ Implicit`. Under **Lights**, choose `+ Point` or `+ Directional`.
 3. Select a plot in the object list, then replace its example equation in the editor across the top. Select a light to edit its controls in the right inspector.
 4. For plots and lights, use the **Object** tab for name, position, domain, sampling, bounds, quality, equation constants, or curve pinning. An intersection's Object tab selects its source surfaces and adjusts its width. Use **Appearance** for material or light properties.
@@ -61,7 +61,13 @@ The equation language supports:
 - Functions: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`, `exp`, `log`, `ln`, `sqrt`, and `abs`. `log` is base 10; `ln` is natural log.
 - Adjustable constants: other letters such as `a`, `b`, or `c` become controls under **Object → Constants**.
 
+Powers bind before a leading sign: `-x^2` means `-(x^2)`, while `(-x)^2` squares the negative value. Negative exponents are supported (`2^-2 = 0.25`), and power chains group from the right (`2^3^2 = 512`).
+
+Curves and parametric/explicit surfaces leave gaps across detected undefined regions and discontinuities, such as the pole of `1/x`, instead of joining them with lines or triangles. Intermediate samples distinguish poles from steep continuous slopes. This is a numerical check: extremely narrow singularities or rapid oscillations can still fall between samples.
+
 Click the `ƒx` button beside the editor for the in-app syntax reference. Numeric inspector fields also accept expressions such as `pi/2` and `sqrt(2)`; press `Enter` or leave the field to apply a typed value.
+
+Incomplete or invalid equations show an explanation beneath the editor and underline the problem. If an earlier valid plot remains visible, the viewport identifies it as **Showing last valid equation**.
 
 ## Constants, Families, and GIFs
 
@@ -98,9 +104,11 @@ Intersections are derived in world space, so they follow source-surface edits, m
 
 The **Appearance** tab provides Matte Plastic, Glossy Plastic, Ceramic, Brushed Metal, Chrome, Neon Yellow, Clear Glass, Frosted Glass, Tinted Glass, Rubber, and Mirror presets. New parametric curves use Ceramic by default, while intersection curves use the emissive Neon Yellow preset. Presets can be customized with the material controls. Refraction takes effect when opacity is below 1. **Surface Decorations** contains grid controls for parametric/explicit surfaces and X/Y/Z contour controls for non-curve plot surfaces.
 
-Point lights provide position, color, intensity, range, and shadow controls. Directional lights provide position, color, intensity, and shadows. Their viewport gizmo is an arrow with a draggable handle at its tail; both the arrow and the light rays always point from that position toward the world origin. Both light types can be pinned to a parametric curve from the Object tab. A light's visibility checkbox hides its editor gizmo only; set its intensity to `0` when you want to turn off its illumination.
+Point lights provide position, color, intensity, range, and shadow controls. Directional lights provide position, color, intensity, and shadows. Their viewport gizmo is an arrow with a draggable handle at its tail; both the arrow and the light rays always point from that position toward the world origin. Both light types can be pinned to a parametric curve from the Object tab. Use a light's **On/Off** button to switch illumination without losing its intensity setting; its separate **Handle** checkbox only shows or hides the editor gizmo.
 
 With nothing selected, **Scene Settings** controls the turntable, ambient light, shadow-map resolution and softness, projection, background, ground plane and reflection, XY grid, axes, and axis labels. **STEVE → Settings** controls tone mapping, exposure, Halos, PNG export scale, GIF maximum size and frame rate, and interactive quality.
+
+Interactive quality adjusts viewport pixel density, shadow resolution, and reflection detail. This selector does not change equation sampling. Stationary scenes stop redrawing once their reflections settle, and unchanged shadows are reused.
 
 ## Viewport Controls
 
@@ -118,7 +126,7 @@ With nothing selected, **Scene Settings** controls the turntable, ambient light,
 | `⌂` | Reset the camera |
 | `?` | Show or hide the viewport control reminder |
 
-The two panel icons in the top-right corner hide or restore the left and right sidebars.
+The two panel icons in the top-right corner hide or restore the left and right sidebars. In smaller windows, the panels open as drawers, one at a time; click the shaded area to close them. **Undo** and **Redo** are beside the File menu, and selecting an object reveals its **Duplicate** and **Delete** buttons.
 
 ## Keyboard Shortcuts
 
@@ -136,16 +144,16 @@ Except for `Esc`, shortcuts apply when focus is not inside a text or number fiel
 
 ## Files and Exports
 
-- **File → Save** writes scene objects plus scene/render settings to `scene.3dplot.json` by default. **Open** accepts `.json` and `.3dplot.json` project files. Camera pose, current selection, and open UI state are not stored.
+- **File → Save** writes scene objects, camera pose, and scene/render settings to `scene.3dplot.json` by default. **Open** accepts `.json` and `.3dplot.json` project files and validates them before replacing the scene. Current selection and open UI state are not stored.
 - **File → Export PNG** saves the current viewport. Choose Standard (1×), High (2×), or Ultra (4×) under **STEVE → Settings**.
 - **Record loop** exports GIF animation from the Scene turntable controls, a playing continuous constant, or an animated curve-pinned light. The current object selection is temporarily cleared while frames are captured and restored when recording finishes or is canceled, keeping selection outlines and light gizmos out of the GIF. GIF maximum size and target frame rate are configured under **STEVE → Settings**.
-- **File → Export STL** is available when a plot or intersection is selected. It exports the current generated triangle mesh in its world position; visual material and lighting settings are not part of STL.
+- **File → Export STL** is available when a plot or intersection is selected. It captures the current equations and settings, then builds a fresh mesh at the requested full sampling/quality in a browser worker. Intersections use the captured source surfaces and their positions. The export preserves world position and discontinuity gaps; visual material and lighting settings are not part of STL. Invalid equations must be fixed before exporting.
 - Parametric curves and intersection curves export their rendered tube/ribbon geometry, not abstract mathematical paths.
 - STL export does not guarantee a closed or watertight solid; inspect open surfaces before using them for 3D printing.
 
 All files stay under your control through the browser's save dialog or download folder.
 
-ST.E.V.E. does not autosave. Save before reloading the page or choosing **File → New**, which resets the project without a confirmation prompt.
+ST.E.V.E. automatically keeps a recovery copy in this browser and restores it on the next visit. The top bar shows whether there are unsaved changes. **New** and **Open** offer **Save and continue**, **Discard changes**, or **Cancel** before replacing unsaved work; leaving the page also requests a browser warning. Use **File → Save** for a permanent copy, since clearing browser storage removes local recovery. File-operation and recovery errors appear onscreen.
 
 ## Practical Limits
 

@@ -23,8 +23,8 @@ const precedence: Record<string, number> = {
   '-': 1,
   '*': 2,
   '/': 2,
-  '^': 3,
-  unary: 4,
+  unary: 3,
+  '^': 4,
   atom: 5,
 };
 
@@ -48,9 +48,9 @@ function format(expr: Expression, parentPrec: number): string {
         return `\\frac{${format(expr.left, 0)}}{${format(expr.right, 0)}}`;
       }
       if (expr.operator === '^') {
-        const base = format(expr.left, precedence['^']);
+        const base = format(expr.left, precedence['^'] + 1);
         const exponent = format(expr.right, 0);
-        return `${base}^{${exponent}}`;
+        return parenthesize(`${base}^{${exponent}}`, precedence['^'], parentPrec);
       }
       const prec = precedence[expr.operator];
       const op = expr.operator === '*' ? ' \\cdot ' : ` ${expr.operator} `;

@@ -42,19 +42,12 @@ function buildSerializedEquationMeshSingle(
       compiled.spec.tDomain.samples,
       (t) => compiled.fn(t),
     );
-    const curvePath = new Float32Array(sample.points.length * 3);
-    for (let i = 0; i < sample.points.length; i += 1) {
-      const point = sample.points[i];
-      const base = i * 3;
-      curvePath[base] = point.x;
-      curvePath[base + 1] = point.y;
-      curvePath[base + 2] = point.z;
-    }
+    const curvePaths = sample.paths.map((path) => new Float32Array(path.flatMap((point) => [point.x, point.y, point.z])));
     return {
       positions: new Float32Array(0),
       indices: new Uint32Array(0),
-      curvePath,
-      bounds: computeMeshBounds(curvePath),
+      ...(curvePaths.length === 1 ? { curvePath: curvePaths[0] } : { curvePaths }),
+      bounds: mergeMeshBounds(curvePaths.map((path) => computeMeshBounds(path))),
       boundaryEdges: new Float32Array(0),
       featureEdges: new Float32Array(0),
       topology: emptyCurveTopology(),

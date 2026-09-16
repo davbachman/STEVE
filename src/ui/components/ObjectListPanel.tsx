@@ -87,6 +87,10 @@ export function ObjectListPanel() {
   const selectedId = useAppStore((s) => s.selectedId);
   const selectObject = useAppStore((s) => s.selectObject);
   const setObjectVisibility = useAppStore((s) => s.setObjectVisibility);
+  const duplicateObject = useAppStore((s) => s.duplicateObject);
+  const deleteObject = useAppStore((s) => s.deleteObject);
+  const updatePointLight = useAppStore((s) => s.updatePointLight);
+  const updateDirectionalLight = useAppStore((s) => s.updateDirectionalLight);
   const plotJobs = useAppStore((s) => s.plotJobs);
 
   return (
@@ -120,24 +124,57 @@ export function ObjectListPanel() {
       </div>
       <div className="object-list object-list--compact">
         {objects.map((obj) => {
-          const activity = !isLightObject(obj) ? jobActivity(plotJobs[obj.id]) : 'idle';
-          const errorDetail = !isLightObject(obj) ? plotJobs[obj.id]?.lastError : undefined;
+          const invalidEquation = obj.type === 'plot' && (obj.equation.source.parseStatus !== 'ok' || obj.equation.source.classification?.kind === 'unknown');
+          const activity = invalidEquation ? 'error' : !isLightObject(obj) ? jobActivity(plotJobs[obj.id]) : 'idle';
+          const errorDetail = obj.type === 'plot'
+            ? obj.equation.source.parseErrors[0]?.message ?? obj.equation.source.classification?.warning ?? plotJobs[obj.id]?.lastError
+            : plotJobs[obj.id]?.lastError;
+          const light = obj.type === 'point_light' || obj.type === 'directional_light' ? obj : null;
           return (
             <div
               key={obj.id}
-              className={`object-card ${selectedId === obj.id ? 'object-card--selected' : ''} ${obj.visible ? '' : 'object-card--hidden'}`.trim()}
+              className={`object-card ${selectedId === obj.id ? 'object-card--selected' : ''} ${(light ? light.enabled !== false : obj.visible) ? '' : 'object-card--hidden'}`.trim()}
             >
               <button className="object-card__select" onClick={() => selectObject(obj.id)} title={`${obj.name} — ${objectKindLabel(obj)}`}>
                 <ObjectCardSummary object={obj} activity={activity} errorDetail={errorDetail} />
               </button>
-              <label className="object-card__toggle" title={isLightObject(obj) ? 'Show light gizmo' : 'Show object'}>
+              {!light ? <label className="object-card__toggle" title="Show object">
                 <input
-                  aria-label={isLightObject(obj) ? `Show gizmo for ${obj.name}` : `Show ${obj.name}`}
+                  aria-label={`Show ${obj.name}`}
                   type="checkbox"
                   checked={obj.visible}
                   onChange={(e) => setObjectVisibility(obj.id, e.target.checked)}
                 />
-              </label>
+              </label> : null}
+              {light ? (
+                <div className="object-card__light-controls">
+                  <button
+                    type="button"
+                    aria-label={`Enable ${light.name}`}
+                    aria-pressed={light.enabled !== false}
+                    title="Turn illumination on or off"
+                    onClick={() => {
+                      const patch = { enabled: light.enabled === false };
+                      if (light.type === 'point_light') updatePointLight(light.id, patch);
+                      else updateDirectionalLight(light.id, patch);
+                    }}
+                  >⏻ {light.enabled === false ? 'Off' : 'On'}</button>
+                  <label title="Show the draggable light handle; illumination is controlled separately">
+                    <input
+                      aria-label={`Show gizmo for ${light.name}`}
+                      type="checkbox"
+                      checked={light.visible}
+                      onChange={(e) => setObjectVisibility(light.id, e.target.checked)}
+                    /> Handle
+                  </label>
+                </div>
+              ) : null}
+              {selectedId === obj.id ? (
+                <div className="object-card__actions">
+                  <button type="button" onClick={() => duplicateObject(obj.id)} aria-label={`Duplicate ${obj.name}`}>Duplicate</button>
+                  <button type="button" onClick={() => deleteObject(obj.id)} aria-label={`Delete ${obj.name}`}>Delete</button>
+                </div>
+              ) : null}
             </div>
           );
         })}

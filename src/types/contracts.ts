@@ -189,6 +189,8 @@ export interface PointLightObject {
   name: string;
   type: 'point_light';
   visible: boolean;
+  /** Illumination is independent of the editor handle's visibility. */
+  enabled?: boolean;
   position: Vec3;
   color: string;
   intensity: number;
@@ -202,6 +204,8 @@ export interface DirectionalLightObject {
   name: string;
   type: 'directional_light';
   visible: boolean;
+  /** Illumination is independent of the editor handle's visibility. */
+  enabled?: boolean;
   /** Positions the editor gizmo and defines a ray aimed from here toward world origin. */
   position: Vec3;
   /** Derived direction in which the light rays travel, always toward world origin. */
@@ -232,8 +236,18 @@ export interface ShadowSettings {
   shadowSoftness: number; // 0..1
 }
 
+export interface CameraState {
+  alpha: number;
+  beta: number;
+  radius: number;
+  target: Vec3;
+  upVector: Vec3;
+}
+
 export interface SceneSettings {
   cameraProjection: 'perspective' | 'orthographic';
+  /** Omitted by legacy files, which use the default view. */
+  camera?: CameraState;
   turntableEnabled: boolean;
   turntableSpeed: number;
   backgroundMode: 'solid' | 'gradient';

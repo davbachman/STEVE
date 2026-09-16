@@ -2,8 +2,10 @@ import { mat3, mat4, vec3, vec4 } from 'gl-matrix';
 import { curveParameterBounds, curveTraversalMode, pinnedCurveForLight } from '../math/curvePinning';
 import { downloadBlobFile } from '../persistence/projectFile';
 import type { AppState } from '../state/store';
+import { defaultCameraState } from '../state/defaults';
 import { useAppStore } from '../state/store';
 import type {
+  CameraState,
   DirectionalLightObject,
   LightObject,
   PlotObject,
@@ -24,6 +26,7 @@ import {
   shouldRenderPointLightGizmo,
 } from './pointLightVisibility';
 import { shadowVisibilityGlsl } from './shadowVisibility';
+import { resolveInteractiveRenderBudget, resolveShadowUpVector } from './renderBudget';
 import {
   buildPlotGeometry,
   intersectRayWithPlotGeometry,
@@ -257,7 +260,6 @@ type DragState =
 const MAX_POINT_LIGHTS = 4;
 const MAX_DIRECTIONAL_LIGHTS = 4;
 const MAX_POINT_SHADOW_LIGHTS = 3;
-const PROBE_REFRESH_INTERVAL = 18;
 const DEFAULT_PROBE_SIZE = 96;
 const MAX_REFLECTION_PROBES = 4;
 const PROBE_REFRESHES_PER_FRAME = 1;
@@ -276,10 +278,11 @@ const POINT_GIZMO_MASK_COLOR = new Float32Array([1, 1, 1]);
 const MAX_POINT_GIZMO_OVERLAY_EXCLUSIONS = 8;
 const ZERO_PROBE_CENTER = vec3.fromValues(0, 0, 0);
 const MAX_EXPORT_DIMENSION = 8192;
-const DEFAULT_CAMERA_ALPHA = -Math.PI / 3;
-const DEFAULT_CAMERA_BETA = 1.1;
-const DEFAULT_CAMERA_RADIUS = 20;
-const DEFAULT_CAMERA_TARGET = vec3.fromValues(0, 0, 1.5);
+const DEFAULT_CAMERA = defaultCameraState();
+const DEFAULT_CAMERA_ALPHA = DEFAULT_CAMERA.alpha;
+const DEFAULT_CAMERA_BETA = DEFAULT_CAMERA.beta;
+const DEFAULT_CAMERA_RADIUS = DEFAULT_CAMERA.radius;
+const DEFAULT_CAMERA_TARGET = vec3.fromValues(DEFAULT_CAMERA.target.x, DEFAULT_CAMERA.target.y, DEFAULT_CAMERA.target.z);
 
 export function resolveOrbitUpVector(alpha: number, beta: number): readonly [number, number, number] {
   return [
@@ -343,8 +346,15 @@ export class SceneController {
   private probeRefreshTotal = 0;
   private probeRefreshesThisFrame = 0;
   private frameIndex = 0;
+  private pendingProbeRefresh = false;
+  private shadowSceneKey = '';
+  private whiteShadowTexture: WebGLTexture | null = null;
+  private whiteShadowCubemap: WebGLTexture | null = null;
+  private lastSavedCamera: CameraState | undefined;
+  private cameraSaveTimer: ReturnType<typeof setTimeout> | undefined;
   private planarReflection: PlanarReflectionTargets = emptyPlanarReflectionTargets();
   private planarReflectionReady = false;
+  private planarReflectionSceneKey = '';
   private orthographicProjection = false;
   private fullscreenVao: WebGLVertexArrayObject | null = null;
   private fullscreenBuffer: WebGLBuffer | null = null;
@@ -432,7 +442,7 @@ export class SceneController {
     this.createFullscreenResources(gl);
     this.attachInputHandlers();
     this.resizeViewport();
-    this.animationFrame = window.requestAnimationFrame(this.renderFrame);
+    this.requestRender();
     useAppStore.getState().setRenderDiagnostics({
       backend: 'webgl2',
       webglReady: true,
@@ -444,6 +454,7 @@ export class SceneController {
 
   dispose(): void {
     this.disposed = true;
+    clearTimeout(this.cameraSaveTimer);
     if (this.dragState) {
       this.dragState = null;
       this.onObjectDragChange?.(false);
@@ -477,6 +488,8 @@ export class SceneController {
       this.deleteProbeResources(gl);
       this.deletePlanarReflectionTargets(gl);
       deleteTexture(gl, this.environmentCubemap);
+      deleteTexture(gl, this.whiteShadowTexture);
+      deleteTexture(gl, this.whiteShadowCubemap);
       if (this.groundMesh) {
         deleteVertexArray(gl, this.groundMesh.vao);
         deleteBuffer(gl, this.groundMesh.indexBuffer);
@@ -537,6 +550,7 @@ export class SceneController {
             this.canvas.height = Math.round(baseHeight * safeScale);
             gl.viewport(0, 0, this.canvas.width, this.canvas.height);
           }
+          this.updateCameraMatrices();
           this.renderScene();
           await exportCanvasPng(gl, this.canvas, this.latestSnapshot?.scene ?? useAppStore.getState().scene, filename);
         } finally {
@@ -571,6 +585,9 @@ export class SceneController {
     const state = useAppStore.getState();
     this.gifSelection.begin(state.selectedId);
     this.recordingGif = true;
+    if (this.animationFrame) cancelAnimationFrame(this.animationFrame);
+    this.animationFrame = 0;
+    this.lastFrameTime = 0;
     this.gifAbortController = abortController;
     this.gifEncoder = encoder;
     setAnimationGifRecording(true);
@@ -588,6 +605,7 @@ export class SceneController {
     this.gifAbortController = null;
     this.gifEncoder = null;
     this.recordingGif = false;
+    this.requestRender();
     setAnimationGifRecording(false);
     const state = useAppStore.getState();
     const selectedId = this.gifSelection.finish(new Set(state.objects.map((object) => object.id)));
@@ -932,6 +950,8 @@ export class SceneController {
       vec3.copy(this.camera.target, DEFAULT_CAMERA_TARGET);
     }
     // Axis views keep the current target and distance so the subject stays framed.
+    this.persistCamera();
+    this.requestRender();
   }
 
   frameObject(objectId: string | null): void {
@@ -952,6 +972,8 @@ export class SceneController {
       this.camera.lowerRadiusLimit,
       this.camera.upperRadiusLimit,
     );
+    this.persistCamera();
+    this.requestRender();
   }
 
   private computeObjectBounds(objectId: string): { center: vec3; radius: number } | null {
@@ -1030,20 +1052,30 @@ export class SceneController {
     if (!gl || this.recordingGif) {
       return;
     }
-    const width = Math.max(1, Math.floor(this.canvas.clientWidth * window.devicePixelRatio));
-    const height = Math.max(1, Math.floor(this.canvas.clientHeight * window.devicePixelRatio));
+    const budget = resolveInteractiveRenderBudget(
+      this.latestSnapshot?.render.interactiveQuality ?? useAppStore.getState().render.interactiveQuality,
+      window.devicePixelRatio,
+    );
+    const width = Math.max(1, Math.floor(this.canvas.clientWidth * budget.pixelRatio));
+    const height = Math.max(1, Math.floor(this.canvas.clientHeight * budget.pixelRatio));
     if (this.canvas.width !== width || this.canvas.height !== height) {
       this.canvas.width = width;
       this.canvas.height = height;
     }
     gl.viewport(0, 0, width, height);
     this.ensureRenderTargets(width, height);
+    this.requestRender();
   }
 
   sync(state: Pick<AppState, 'scene' | 'render' | 'objects' | 'selectedId' | 'plotJobs'>): void {
     if (!this.gl) {
       return;
     }
+    if (state.scene.camera !== this.lastSavedCamera) {
+      this.lastSavedCamera = state.scene.camera;
+      this.restoreCamera(state.scene.camera);
+    }
+    const previousQuality = this.latestSnapshot?.render.interactiveQuality;
     this.orthographicProjection = state.scene.cameraProjection === 'orthographic';
     const snapshot = createRendererSceneSnapshot({
       ...state,
@@ -1053,10 +1085,47 @@ export class SceneController {
     this.syncBackground(snapshot);
     this.syncPointLights(snapshot.objects);
     this.syncPlots(snapshot);
+    if (previousQuality !== snapshot.render.interactiveQuality) this.resizeViewport();
+    this.requestRender();
+  }
+
+  private restoreCamera(saved: CameraState | undefined): void {
+    clearTimeout(this.cameraSaveTimer);
+    this.cameraSaveTimer = undefined;
+    this.camera.alpha = saved?.alpha ?? DEFAULT_CAMERA_ALPHA;
+    this.camera.beta = saved?.beta ?? DEFAULT_CAMERA_BETA;
+    this.camera.radius = saved?.radius ?? DEFAULT_CAMERA_RADIUS;
+    const target = saved?.target;
+    if (target) vec3.set(this.camera.target, target.x, target.y, target.z);
+    else vec3.copy(this.camera.target, DEFAULT_CAMERA_TARGET);
+    const up = saved?.upVector;
+    if (up) vec3.set(this.camera.upVector, up.x, up.y, up.z);
+    else vec3.set(this.camera.upVector, 0, 0, 1);
+    this.turntableTarget = null;
+    this.updateCameraMatrices();
+  }
+
+  private persistCamera(): void {
+    clearTimeout(this.cameraSaveTimer);
+    if (this.recordingGif) return;
+    useAppStore.getState().setCameraState({
+      alpha: this.camera.alpha,
+      beta: this.camera.beta,
+      radius: this.camera.radius,
+      target: { x: this.camera.target[0], y: this.camera.target[1], z: this.camera.target[2] },
+      upVector: { x: this.camera.upVector[0], y: this.camera.upVector[1], z: this.camera.upVector[2] },
+    });
+    this.lastSavedCamera = useAppStore.getState().scene.camera;
+  }
+
+  private requestRender(): void {
+    if (this.disposed || this.recordingGif || !this.gl || this.animationFrame) return;
+    this.animationFrame = window.requestAnimationFrame(this.renderFrame);
   }
 
   private readonly renderFrame = (timestamp: number) => {
-    if (this.disposed || !this.gl || !this.renderPrograms) {
+    this.animationFrame = 0;
+    if (this.disposed || this.recordingGif || !this.gl || !this.renderPrograms) {
       return;
     }
     const elapsedMs = this.lastFrameTime > 0 ? Math.max(1, timestamp - this.lastFrameTime) : 0;
@@ -1069,12 +1138,18 @@ export class SceneController {
     this.updateTurntableCamera(elapsedMs);
     this.updateCameraMatrices();
     this.renderScene();
-    this.animationFrame = window.requestAnimationFrame(this.renderFrame);
+    if (this.latestSnapshot?.scene.turntableEnabled || this.pendingProbeRefresh) {
+      this.requestRender();
+    } else {
+      // An idle interval is not a slow frame when the next input wakes us.
+      this.lastFrameTime = 0;
+    }
   };
 
   private updateTurntableCamera(elapsedMs: number): void {
     const scene = this.latestSnapshot?.scene;
     if (!scene?.turntableEnabled || this.recordingGif) {
+      if (this.turntableTarget && !this.recordingGif) this.persistCamera();
       this.turntableTarget = null;
       return;
     }
@@ -1093,15 +1168,38 @@ export class SceneController {
       return;
     }
     this.ensureRenderTargets(this.canvas.width, this.canvas.height);
-    this.ensureShadowResources(snapshot.scene.shadow.shadowMapResolution);
     this.ensureEnvironmentCubemap(snapshot);
     this.frameIndex += 1;
     this.probeRefreshesThisFrame = 0;
+    this.pendingProbeRefresh = false;
+    const budget = resolveInteractiveRenderBudget(snapshot.render.interactiveQuality, window.devicePixelRatio);
+    this.ensureProbeResources(budget.probeSize);
     this.pruneProbePool(snapshot);
     const pointLights = this.collectRenderablePointLights(snapshot);
     const pointShadowLights = this.collectActivePointShadowLights(snapshot, pointLights);
-    this.renderDirectionalShadowMaps(snapshot);
-    this.renderPointShadowMaps(snapshot, pointShadowLights);
+    const hasTransparentCasters = snapshot.plots.some(({ interactiveShadowMode }) => interactiveShadowMode === 'attenuated');
+    this.ensureShadowResources(
+      Math.min(snapshot.scene.shadow.shadowMapResolution, budget.maxShadowSize),
+      this.directionalShadowsEnabled(snapshot),
+      pointShadowLights.length,
+      hasTransparentCasters,
+    );
+    const shadowSceneKey = JSON.stringify([
+      this.shadowResources.size,
+      this.activeDirectionalShadowLight(snapshot)?.light,
+      pointShadowLights.map(({ light }) => light),
+      snapshot.scene.defaultGraphBounds,
+      snapshot.scene.groundPlaneVisible,
+      snapshot.scene.groundPlaneSize,
+      this.directionalShadowsEnabled(snapshot) ? Array.from(this.camera.target) : null,
+      snapshot.plots.filter(({ castsInteractiveShadows }) => castsInteractiveShadows)
+        .map(({ plot, meshVersion }) => [plot.id, meshVersion, plot.transform, plot.material, curveGeometryStyleKey(plot)]),
+    ]);
+    if (this.shadowSceneKey !== shadowSceneKey) {
+      this.renderDirectionalShadowMaps(snapshot);
+      this.renderPointShadowMaps(snapshot, pointShadowLights);
+      this.shadowSceneKey = shadowSceneKey;
+    }
     this.renderPlanarReflection(snapshot, pointLights);
     this.renderOpaqueScene(snapshot, pointLights, pointShadowLights);
     this.renderTransparentScene(snapshot, pointLights, pointShadowLights);
@@ -1139,7 +1237,7 @@ export class SceneController {
     // Keep on-screen label size during high-resolution PNG exports, where the
     // backing store is temporarily larger than the CSS pixel size.
     const nativeWidth = Math.max(1, Math.floor(this.canvas.clientWidth * window.devicePixelRatio));
-    gl.uniform1f(program.uniforms.u_labelScale, Math.max(1, this.canvas.width / nativeWidth));
+    gl.uniform1f(program.uniforms.u_labelScale, this.canvas.width / nativeWidth);
     bindTexture(gl, labels.texture, 0, gl.TEXTURE_2D);
     gl.uniform1i(program.uniforms.u_atlas, 0);
     gl.enable(gl.BLEND);
@@ -1240,14 +1338,14 @@ export class SceneController {
   private collectRenderablePointLights(snapshot: RendererSceneSnapshot): PointLightObject[] {
     return snapshot.pointLights
       .map((entry) => entry.light)
-      .filter((light) => shouldPointLightContribute(light))
+      .filter((light) => light.enabled !== false && shouldPointLightContribute(light))
       .slice(0, MAX_POINT_LIGHTS);
   }
 
   private collectRenderableDirectionalLights(snapshot: RendererSceneSnapshot): DirectionalLightObject[] {
     return snapshot.directionalLights
       .map(({ light }) => light)
-      .filter((light) => Number.isFinite(light.intensity) && light.intensity > 0)
+      .filter((light) => light.enabled !== false && Number.isFinite(light.intensity) && light.intensity > 0)
       .slice(0, MAX_DIRECTIONAL_LIGHTS);
   }
 
@@ -1384,7 +1482,7 @@ export class SceneController {
       cameraTarget[1] - lightDirection.y * lightDistance,
       cameraTarget[2] - lightDirection.z * lightDistance,
     );
-    mat4.lookAt(this.shadowViewMatrix, lightPosition, cameraTarget, vec3.fromValues(0, 0, 1));
+    mat4.lookAt(this.shadowViewMatrix, lightPosition, cameraTarget, resolveShadowUpVector(lightDirection));
     const frustumSize = resolveDirectionalShadowFrustumSize(scene);
     mat4.ortho(
       this.shadowProjectionMatrix,
@@ -1415,24 +1513,27 @@ export class SceneController {
       this.drawShadowMeshWithMatrix(plotSnapshot.plot, this.renderPrograms!.shadow, this.lightViewProjection);
     }
 
-    gl.bindFramebuffer(gl.FRAMEBUFFER, shadow.directionalTransFramebuffer);
-    gl.colorMask(true, true, true, true);
-    gl.clearColor(1, 1, 1, 1);
-    gl.clearDepth(1);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    gl.useProgram(this.renderPrograms!.transShadow.program);
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.ZERO, gl.SRC_COLOR);
-    gl.blendEquation(gl.FUNC_ADD);
-    gl.disable(gl.CULL_FACE);
-    for (const plotSnapshot of snapshot.plots) {
-      const opacity = clamp01(plotSnapshot.plot.material.opacity);
-      if (opacity >= 0.999 || !plotSnapshot.plot.visible || !plotSnapshot.plot.castShadows) {
-        continue;
+    if (shadow.directionalTransFramebuffer) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, shadow.directionalTransFramebuffer);
+      gl.colorMask(true, true, true, true);
+      gl.clearColor(1, 1, 1, 1);
+      gl.clearDepth(1);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      gl.useProgram(this.renderPrograms!.transShadow.program);
+      gl.enable(gl.BLEND);
+      gl.blendFunc(gl.ZERO, gl.SRC_COLOR);
+      gl.blendEquation(gl.FUNC_ADD);
+      gl.disable(gl.CULL_FACE);
+      for (const plotSnapshot of snapshot.plots) {
+        const opacity = clamp01(plotSnapshot.plot.material.opacity);
+        if (opacity >= 0.999 || !plotSnapshot.plot.visible || !plotSnapshot.plot.castShadows) {
+          continue;
+        }
+        this.drawTransparentShadowMeshWithMatrix(plotSnapshot.plot, this.renderPrograms!.transShadow, this.lightViewProjection);
       }
-      this.drawTransparentShadowMeshWithMatrix(plotSnapshot.plot, this.renderPrograms!.transShadow, this.lightViewProjection);
+      gl.disable(gl.BLEND);
     }
-    gl.disable(gl.BLEND);
+    gl.colorMask(true, true, true, true);
     gl.enable(gl.CULL_FACE);
     gl.cullFace(gl.BACK);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -1445,7 +1546,7 @@ export class SceneController {
   ): void {
     const gl = this.gl!;
     const shadow = this.shadowResources;
-    if (pointShadowLights.length === 0 || !shadow.pointFramebuffer || !shadow.pointTransFramebuffer) {
+    if (pointShadowLights.length === 0 || !shadow.pointFramebuffer) {
       return;
     }
 
@@ -1480,6 +1581,7 @@ export class SceneController {
           0,
         );
         gl.drawBuffers([gl.NONE]);
+        gl.readBuffer(gl.NONE);
         gl.clearDepth(1);
         gl.clear(gl.DEPTH_BUFFER_BIT);
         const faceTarget = vec3.add(vec3.create(), lightPosition, POINT_SHADOW_FACE_VECTORS[face].target);
@@ -1499,6 +1601,7 @@ export class SceneController {
         }
       }
 
+      if (!shadow.pointTransFramebuffer) continue;
       gl.bindFramebuffer(gl.FRAMEBUFFER, shadow.pointTransFramebuffer);
       gl.useProgram(this.renderPrograms!.pointTransShadow.program);
       gl.uniform3f(
@@ -1551,6 +1654,7 @@ export class SceneController {
       gl.disable(gl.BLEND);
     }
 
+    gl.colorMask(true, true, true, true);
     gl.enable(gl.CULL_FACE);
     gl.cullFace(gl.BACK);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -1658,14 +1762,33 @@ export class SceneController {
     const cameraAbovePlane = this.getCameraPosition()[2] > 0.05;
     this.planarReflectionReady = false;
     if (!scene.groundPlaneVisible || !scene.groundPlaneReflective || !cameraAbovePlane) {
+      this.planarReflectionSceneKey = '';
       return;
     }
+    const reflectionScale = resolveInteractiveRenderBudget(snapshot.render.interactiveQuality).planarScale;
     this.ensurePlanarReflectionTargets(
-      Math.max(1, Math.floor(this.renderTargets.width / 2)),
-      Math.max(1, Math.floor(this.renderTargets.height / 2)),
+      Math.max(1, Math.floor(this.renderTargets.width * reflectionScale)),
+      Math.max(1, Math.floor(this.renderTargets.height * reflectionScale)),
     );
     const targets = this.planarReflection;
     if (!targets.framebuffer) {
+      return;
+    }
+    const reflectionKey = JSON.stringify([
+      scene,
+      snapshot.render.interactiveQuality,
+      targets.width,
+      targets.height,
+      Array.from(this.viewMatrix),
+      Array.from(this.projectionMatrix),
+      pointLights,
+      this.collectRenderableDirectionalLights(snapshot),
+      snapshot.plots.map(({ plot, meshVersion }) => [
+        plot.id, plot.visible, meshVersion, plot.transform, plot.material, curveGeometryStyleKey(plot),
+      ]),
+    ]);
+    if (this.planarReflectionSceneKey === reflectionKey) {
+      this.planarReflectionReady = true;
       return;
     }
     gl.bindFramebuffer(gl.FRAMEBUFFER, targets.framebuffer);
@@ -1703,6 +1826,7 @@ export class SceneController {
     }
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     this.planarReflectionReady = true;
+    this.planarReflectionSceneKey = reflectionKey;
   }
 
   private ensurePlanarReflectionTargets(width: number, height: number): void {
@@ -1746,6 +1870,7 @@ export class SceneController {
   }
 
   private deletePlanarReflectionTargets(gl: WebGL2RenderingContext): void {
+    this.planarReflectionSceneKey = '';
     deleteFramebuffer(gl, this.planarReflection.framebuffer);
     deleteTexture(gl, this.planarReflection.colorTexture);
     if (this.planarReflection.depthRenderbuffer) {
@@ -3143,16 +3268,16 @@ export class SceneController {
     gl.uniform1f(program.uniforms.u_ior, 1.45);
     gl.uniform1i(program.uniforms.u_pointGizmoCorrectionEnabled, 0);
     gl.uniform2f(program.uniforms.u_pointGizmoCorrectionOrigin, 0, 0);
-    bindTexture(gl, this.shadowResources.directionalDepthTexture, 0, gl.TEXTURE_2D);
-    bindTexture(gl, this.shadowResources.directionalTransDepthTexture, 1, gl.TEXTURE_2D);
-    bindTexture(gl, this.shadowResources.directionalTransColorTexture, 2, gl.TEXTURE_2D);
+    bindTexture(gl, this.shadowResources.directionalDepthTexture ?? this.whiteShadowTexture, 0, gl.TEXTURE_2D);
+    bindTexture(gl, this.shadowResources.directionalTransDepthTexture ?? this.whiteShadowTexture, 1, gl.TEXTURE_2D);
+    bindTexture(gl, this.shadowResources.directionalTransColorTexture ?? this.whiteShadowTexture, 2, gl.TEXTURE_2D);
     bindTexture(gl, this.environmentCubemap, 3, gl.TEXTURE_CUBE_MAP);
     // Unit 4 holds the per-plot probe; bind the environment as a safe default
     // so the sampler always sees a complete cube texture.
     bindTexture(gl, this.environmentCubemap, 4, gl.TEXTURE_CUBE_MAP);
     bindTexture(gl, this.renderTargets.refractionTexture, REFRACTION_TEXTURE_UNIT, gl.TEXTURE_2D);
     gl.uniform1i(program.uniforms.u_refractionSource, REFRACTION_TEXTURE_UNIT);
-    bindTexture(gl, this.planarReflection.colorTexture, PLANAR_REFLECTION_TEXTURE_UNIT, gl.TEXTURE_2D);
+    bindTexture(gl, this.planarReflection.colorTexture ?? this.whiteShadowTexture, PLANAR_REFLECTION_TEXTURE_UNIT, gl.TEXTURE_2D);
     gl.uniform1i(program.uniforms.u_planarReflection, PLANAR_REFLECTION_TEXTURE_UNIT);
     gl.uniform1i(program.uniforms.u_usePlanarReflection, 0);
     gl.uniform1f(
@@ -3163,9 +3288,9 @@ export class SceneController {
     const supportedPointShadowSlots = this.supportedPointShadowLightCount();
     for (let shadowSlot = 0; shadowSlot < supportedPointShadowSlots; shadowSlot += 1) {
       const unitBase = POINT_SHADOW_TEXTURE_UNIT_BASE + shadowSlot * POINT_SHADOW_TEXTURE_UNIT_STRIDE;
-      bindTexture(gl, this.shadowResources.pointDepthCubemaps[shadowSlot], unitBase, gl.TEXTURE_CUBE_MAP);
-      bindTexture(gl, this.shadowResources.pointTransDepthCubemaps[shadowSlot], unitBase + 1, gl.TEXTURE_CUBE_MAP);
-      bindTexture(gl, this.shadowResources.pointTransColorCubemaps[shadowSlot], unitBase + 2, gl.TEXTURE_CUBE_MAP);
+      bindTexture(gl, this.shadowResources.pointDepthCubemaps[shadowSlot] ?? this.whiteShadowCubemap, unitBase, gl.TEXTURE_CUBE_MAP);
+      bindTexture(gl, this.shadowResources.pointTransDepthCubemaps[shadowSlot] ?? this.whiteShadowCubemap, unitBase + 1, gl.TEXTURE_CUBE_MAP);
+      bindTexture(gl, this.shadowResources.pointTransColorCubemaps[shadowSlot] ?? this.whiteShadowCubemap, unitBase + 2, gl.TEXTURE_CUBE_MAP);
     }
     gl.uniform1i(program.uniforms.u_shadowDepth, 0);
     gl.uniform1i(program.uniforms.u_transShadowDepth, 1);
@@ -3234,13 +3359,12 @@ export class SceneController {
       plot.transform.position.z,
     );
     const moved = vec3.distance(probe.center, nextCenter) > 0.05;
-    const interval = probeRefreshInterval(snapshot.render.interactiveQuality);
-    const stale = this.frameIndex - probe.lastRefreshFrame >= interval;
-    const needsRefresh = probe.refreshCount === 0 || probe.sceneKey !== nextSceneKey || moved || stale;
+    const needsRefresh = probe.refreshCount === 0 || probe.sceneKey !== nextSceneKey || moved;
     if (!needsRefresh) {
       return { useProbe: true, refreshed: false, texture: probe.cubemap, center: probe.center };
     }
     if (this.probeRefreshesThisFrame >= PROBE_REFRESHES_PER_FRAME) {
+      this.pendingProbeRefresh = true;
       // Out of refresh budget this frame; a previously rendered probe stays
       // usable while slightly stale, an empty one falls back to the environment.
       if (probe.refreshCount > 0) {
@@ -3338,7 +3462,8 @@ export class SceneController {
         round3(clamp01(plot.material.opacity)),
         round3(clamp01(plot.material.reflectiveness)),
         round3(clamp(plot.material.roughness, 0, 1)),
-        plot.material.baseColor,
+        JSON.stringify(plot.material),
+        curveGeometryStyleKey(plot),
       ].join(':'))
       .join('|');
     return [
@@ -3354,7 +3479,7 @@ export class SceneController {
       scene.ambient.enabled ? 1 : 0,
       scene.ambient.color,
       round3(scene.ambient.intensity),
-      snapshot.directionalLights.map(({ light }) => [
+      snapshot.directionalLights.filter(({ light }) => light.enabled !== false).map(({ light }) => [
         light.id,
         light.color,
         round3(light.intensity),
@@ -3458,7 +3583,7 @@ export class SceneController {
     bindTexture(gl, this.environmentCubemap, 3, gl.TEXTURE_CUBE_MAP);
     bindTexture(gl, this.environmentCubemap, 4, gl.TEXTURE_CUBE_MAP);
     bindTexture(gl, this.renderTargets.refractionTexture, REFRACTION_TEXTURE_UNIT, gl.TEXTURE_2D);
-    bindTexture(gl, this.planarReflection.colorTexture, PLANAR_REFLECTION_TEXTURE_UNIT, gl.TEXTURE_2D);
+    bindTexture(gl, this.planarReflection.colorTexture ?? this.whiteShadowTexture, PLANAR_REFLECTION_TEXTURE_UNIT, gl.TEXTURE_2D);
     gl.uniform1i(program.uniforms.u_environment, 3);
     gl.uniform1i(program.uniforms.u_probe, 4);
     gl.uniform1i(program.uniforms.u_refractionSource, REFRACTION_TEXTURE_UNIT);
@@ -3570,7 +3695,7 @@ export class SceneController {
       transparentPlotCount: snapshot.plots.filter(({ plot }) => clamp01(plot.material.opacity) < 0.999).length,
       frameTimeMs: this.frameTimeMs,
       fps: this.fps,
-      shadowMapResolution: snapshot.scene.shadow.shadowMapResolution,
+      shadowMapResolution: this.shadowResources.size,
       shadowAtlasUsage: clamp(directionalUsage + pointUsage, 0, 1),
       opaqueShadowCasters,
       transmittanceShadowCasters,
@@ -3667,6 +3792,9 @@ export class SceneController {
       if (this.recordingGif) return;
       this.camera.radius *= Math.exp(event.deltaY * 0.0015);
       this.camera.radius = clamp(this.camera.radius, this.camera.lowerRadiusLimit, this.camera.upperRadiusLimit);
+      this.requestRender();
+      clearTimeout(this.cameraSaveTimer);
+      this.cameraSaveTimer = setTimeout(() => this.persistCamera(), 150);
     };
     this.resizeListener = () => this.resizeViewport();
     this.canvas.addEventListener('pointerdown', this.pointerDownListener);
@@ -3799,6 +3927,7 @@ export class SceneController {
         vec3.scaleAndAdd(this.camera.target, this.camera.target, right, -dx * scale);
         vec3.scaleAndAdd(this.camera.target, this.camera.target, up, dy * scale);
       }
+      this.requestRender();
       return;
     }
     if (!this.dragState) {
@@ -3833,6 +3962,7 @@ export class SceneController {
   private handlePointerUp(event: PointerEvent): void {
     if (this.cameraDrag && this.cameraDrag.pointerId === event.pointerId) {
       this.cameraDrag = null;
+      this.persistCamera();
       this.releasePointer(event.pointerId);
     }
     if (this.dragState) {
@@ -4070,41 +4200,69 @@ export class SceneController {
     this.renderTargets = emptyRenderTargets();
   }
 
-  private ensureShadowResources(size: number): void {
+  private ensureShadowResources(size: number, directional: boolean, pointCount: number, transparent: boolean): void {
     const gl = this.gl!;
     const targetSize = clamp(Math.round(size), 256, 4096);
-    if (this.shadowResources.size === targetSize && this.shadowResources.directionalFramebuffer) {
-      return;
+    if (this.shadowResources.size !== targetSize) {
+      this.deleteShadowResources(gl);
+      this.shadowResources.size = targetSize;
+      this.shadowSceneKey = '';
     }
-    this.deleteShadowResources(gl);
-    const directionalDepthTexture = createDepthTexture(gl, targetSize, targetSize);
-    const directionalFramebuffer = createFramebuffer(gl, [
-      { attachment: gl.DEPTH_ATTACHMENT, texture: directionalDepthTexture, target: gl.TEXTURE_2D },
-    ]);
-    const directionalTransDepthTexture = createDepthTexture(gl, targetSize, targetSize);
-    const directionalTransColorTexture = createColorTexture(gl, targetSize, targetSize, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
-    const directionalTransFramebuffer = createFramebuffer(gl, [
-      { attachment: gl.COLOR_ATTACHMENT0, texture: directionalTransColorTexture, target: gl.TEXTURE_2D },
-      { attachment: gl.DEPTH_ATTACHMENT, texture: directionalTransDepthTexture, target: gl.TEXTURE_2D },
-    ]);
-    const pointFramebuffer = gl.createFramebuffer();
-    const pointTransFramebuffer = gl.createFramebuffer();
-    if (!pointFramebuffer || !pointTransFramebuffer) {
-      throw new Error('Failed to create point shadow framebuffers');
+    const shadow = this.shadowResources;
+    if (directional && !shadow.directionalFramebuffer) {
+      shadow.directionalDepthTexture = createDepthTexture(gl, targetSize, targetSize);
+      shadow.directionalFramebuffer = createFramebuffer(gl, [
+        { attachment: gl.DEPTH_ATTACHMENT, texture: shadow.directionalDepthTexture, target: gl.TEXTURE_2D },
+      ]);
+      this.shadowSceneKey = '';
+    } else if (!directional && shadow.directionalFramebuffer) {
+      deleteFramebuffer(gl, shadow.directionalFramebuffer);
+      deleteTexture(gl, shadow.directionalDepthTexture);
+      shadow.directionalFramebuffer = null;
+      shadow.directionalDepthTexture = null;
     }
-    this.shadowResources = {
-      directionalFramebuffer,
-      directionalDepthTexture,
-      directionalTransFramebuffer,
-      directionalTransDepthTexture,
-      directionalTransColorTexture,
-      pointFramebuffer,
-      pointTransFramebuffer,
-      pointDepthCubemaps: Array.from({ length: MAX_POINT_SHADOW_LIGHTS }, () => createDepthCubemap(gl, targetSize)),
-      pointTransDepthCubemaps: Array.from({ length: MAX_POINT_SHADOW_LIGHTS }, () => createDepthCubemap(gl, targetSize)),
-      pointTransColorCubemaps: Array.from({ length: MAX_POINT_SHADOW_LIGHTS }, () => createColorCubemap(gl, targetSize, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE)),
-      size: targetSize,
+    if (directional && transparent && !shadow.directionalTransFramebuffer) {
+      shadow.directionalTransDepthTexture = createDepthTexture(gl, targetSize, targetSize);
+      shadow.directionalTransColorTexture = createColorTexture(gl, targetSize, targetSize, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+      shadow.directionalTransFramebuffer = createFramebuffer(gl, [
+        { attachment: gl.COLOR_ATTACHMENT0, texture: shadow.directionalTransColorTexture, target: gl.TEXTURE_2D },
+        { attachment: gl.DEPTH_ATTACHMENT, texture: shadow.directionalTransDepthTexture, target: gl.TEXTURE_2D },
+      ]);
+      this.shadowSceneKey = '';
+    } else if ((!directional || !transparent) && shadow.directionalTransFramebuffer) {
+      deleteFramebuffer(gl, shadow.directionalTransFramebuffer);
+      deleteTexture(gl, shadow.directionalTransDepthTexture);
+      deleteTexture(gl, shadow.directionalTransColorTexture);
+      shadow.directionalTransFramebuffer = null;
+      shadow.directionalTransDepthTexture = null;
+      shadow.directionalTransColorTexture = null;
+    }
+
+    const resizeCubemaps = (textures: Array<WebGLTexture | null>, count: number, create: () => WebGLTexture) => {
+      while (textures.length > count) deleteTexture(gl, textures.pop() ?? null);
+      while (textures.length < count) {
+        textures.push(create());
+        this.shadowSceneKey = '';
+      }
     };
+    resizeCubemaps(shadow.pointDepthCubemaps, pointCount, () => createDepthCubemap(gl, targetSize));
+    resizeCubemaps(shadow.pointTransDepthCubemaps, transparent ? pointCount : 0, () => createDepthCubemap(gl, targetSize));
+    resizeCubemaps(shadow.pointTransColorCubemaps, transparent ? pointCount : 0,
+      () => createColorCubemap(gl, targetSize, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE));
+    if (pointCount > 0 && !shadow.pointFramebuffer) {
+      shadow.pointFramebuffer = gl.createFramebuffer();
+      if (!shadow.pointFramebuffer) throw new Error('Failed to create point shadow framebuffer');
+    } else if (pointCount === 0 && shadow.pointFramebuffer) {
+      deleteFramebuffer(gl, shadow.pointFramebuffer);
+      shadow.pointFramebuffer = null;
+    }
+    if (pointCount > 0 && transparent && !shadow.pointTransFramebuffer) {
+      shadow.pointTransFramebuffer = gl.createFramebuffer();
+      if (!shadow.pointTransFramebuffer) throw new Error('Failed to create transparent point shadow framebuffer');
+    } else if ((pointCount === 0 || !transparent) && shadow.pointTransFramebuffer) {
+      deleteFramebuffer(gl, shadow.pointTransFramebuffer);
+      shadow.pointTransFramebuffer = null;
+    }
   }
 
   private deleteShadowResources(gl: WebGL2RenderingContext): void {
@@ -4146,6 +4304,27 @@ export class SceneController {
     this.environmentFacePixelCache.clear();
   }
 
+  private ensureProbeResources(size: number): void {
+    if (this.probeRenderResources.size === size && this.probeRenderResources.framebuffer) return;
+    const gl = this.gl!;
+    this.deleteProbeResources(gl);
+    const probeFramebuffer = gl.createFramebuffer();
+    const probeDepth = gl.createRenderbuffer();
+    if (!probeFramebuffer || !probeDepth) {
+      throw new Error('Failed to create probe resources');
+    }
+    gl.bindRenderbuffer(gl.RENDERBUFFER, probeDepth);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, size, size);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, probeFramebuffer);
+    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, probeDepth);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.probeRenderResources = {
+      framebuffer: probeFramebuffer,
+      depthRenderbuffer: probeDepth,
+      size: size,
+    };
+  }
+
   private createFullscreenResources(gl: WebGL2RenderingContext): void {
     this.fullscreenVao = gl.createVertexArray();
     this.fullscreenBuffer = gl.createBuffer();
@@ -4155,21 +4334,8 @@ export class SceneController {
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
     gl.bindVertexArray(null);
-    const probeFramebuffer = gl.createFramebuffer();
-    const probeDepth = gl.createRenderbuffer();
-    if (!probeFramebuffer || !probeDepth) {
-      throw new Error('Failed to create probe resources');
-    }
-    gl.bindRenderbuffer(gl.RENDERBUFFER, probeDepth);
-    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, DEFAULT_PROBE_SIZE, DEFAULT_PROBE_SIZE);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, probeFramebuffer);
-    gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, probeDepth);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    this.probeRenderResources = {
-      framebuffer: probeFramebuffer,
-      depthRenderbuffer: probeDepth,
-      size: DEFAULT_PROBE_SIZE,
-    };
+    this.whiteShadowTexture = createWhiteShadowTexture(gl, false);
+    this.whiteShadowCubemap = createWhiteShadowTexture(gl, true);
     this.groundMesh = createGroundMesh(gl);
   }
 }
@@ -5302,6 +5468,9 @@ function createFramebuffer(
     .map((attachment) => attachment.attachment);
   if (colorAttachments.length > 0) {
     gl.drawBuffers(colorAttachments);
+  } else {
+    gl.drawBuffers([gl.NONE]);
+    gl.readBuffer(gl.NONE);
   }
   if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -5360,6 +5529,20 @@ function createColorTexture(
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   gl.bindTexture(gl.TEXTURE_2D, null);
+  return texture;
+}
+
+function createWhiteShadowTexture(gl: WebGL2RenderingContext, cube: boolean): WebGLTexture {
+  const texture = cube
+    ? createColorCubemap(gl, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE)
+    : createColorTexture(gl, 1, 1, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE);
+  const target = cube ? gl.TEXTURE_CUBE_MAP : gl.TEXTURE_2D;
+  gl.bindTexture(target, texture);
+  const white = new Uint8Array([255, 255, 255, 255]);
+  for (let face = 0; face < (cube ? 6 : 1); face += 1) {
+    gl.texSubImage2D(cube ? gl.TEXTURE_CUBE_MAP_POSITIVE_X + face : target, 0, 0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, white);
+  }
+  gl.bindTexture(target, null);
   return texture;
 }
 
@@ -6305,10 +6488,6 @@ function toneMappingMode(mode: AppState['render']['toneMapping']): number {
   return mode === 'aces' ? 1 : mode === 'filmic' ? 2 : 0;
 }
 
-function probeRefreshInterval(quality: AppState['render']['interactiveQuality']): number {
-  return quality === 'quality' ? PROBE_REFRESH_INTERVAL : quality === 'balanced' ? PROBE_REFRESH_INTERVAL * 2 : PROBE_REFRESH_INTERVAL * 4;
-}
-
 function emptyRenderTargets(): RenderTargets {
   return {
     width: 0,
@@ -6345,9 +6524,9 @@ function emptyShadowResources(): ShadowResources {
     directionalTransColorTexture: null,
     pointFramebuffer: null,
     pointTransFramebuffer: null,
-    pointDepthCubemaps: Array(MAX_POINT_SHADOW_LIGHTS).fill(null),
-    pointTransDepthCubemaps: Array(MAX_POINT_SHADOW_LIGHTS).fill(null),
-    pointTransColorCubemaps: Array(MAX_POINT_SHADOW_LIGHTS).fill(null),
+    pointDepthCubemaps: [],
+    pointTransDepthCubemaps: [],
+    pointTransColorCubemaps: [],
     size: 0,
   };
 }

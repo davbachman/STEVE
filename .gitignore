@@ -28,3 +28,4 @@ playwright/.cache
 artifacts/
 output/
 .playwright-cli/
+.playwright-mcp/

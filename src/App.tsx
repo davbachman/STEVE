@@ -14,8 +14,9 @@ import { handleEscapeShortcut } from './ui/keyboardShortcuts';
 
 export default function App() {
   const [viewportApi, setViewportApi] = useState<ViewportApi | null>(null);
-  const [leftSidebarVisible, setLeftSidebarVisible] = useState(true);
-  const [rightSidebarVisible, setRightSidebarVisible] = useState(true);
+  const [compactLayout, setCompactLayout] = useState(() => window.matchMedia('(max-width: 1080px)').matches);
+  const [leftSidebarVisible, setLeftSidebarVisible] = useState(() => !window.matchMedia('(max-width: 1080px)').matches);
+  const [rightSidebarVisible, setRightSidebarVisible] = useState(() => !window.matchMedia('(max-width: 1080px)').matches);
   const deleteSelected = useAppStore((s) => s.deleteSelected);
   const copySelected = useAppStore((s) => s.copySelectedToClipboard);
   const pasteClipboard = useAppStore((s) => s.pasteClipboard);
@@ -26,9 +27,21 @@ export default function App() {
   const objects = useAppStore((s) => s.objects);
   const selectedId = useAppStore((s) => s.selectedId);
   const updatePlotEquationText = useAppStore((s) => s.updatePlotEquationText);
+  const plotJobs = useAppStore((s) => s.plotJobs);
 
   useWorkerPipeline();
   useParameterAnimation();
+
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 1080px)');
+    const onChange = () => {
+      setCompactLayout(query.matches);
+      setLeftSidebarVisible(!query.matches);
+      setRightSidebarVisible(!query.matches);
+    };
+    query.addEventListener('change', onChange);
+    return () => query.removeEventListener('change', onChange);
+  }, []);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -48,6 +61,7 @@ export default function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (document.querySelector('[aria-modal="true"]')) return;
       const target = event.target as HTMLElement | null;
       const isTypingTarget = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
       const metaOrCtrl = event.metaKey || event.ctrlKey;
@@ -104,14 +118,21 @@ export default function App() {
         viewportApi={viewportApi}
         leftSidebarVisible={leftSidebarVisible}
         rightSidebarVisible={rightSidebarVisible}
-        onToggleLeftSidebar={() => setLeftSidebarVisible((v) => !v)}
-        onToggleRightSidebar={() => setRightSidebarVisible((v) => !v)}
+        onToggleLeftSidebar={() => {
+          setLeftSidebarVisible((v) => !v);
+          if (compactLayout) setRightSidebarVisible(false);
+        }}
+        onToggleRightSidebar={() => {
+          setRightSidebarVisible((v) => !v);
+          if (compactLayout) setLeftSidebarVisible(false);
+        }}
       />
       <section className="equation-dock" aria-label="Selected equation editor">
         <div className="equation-dock__inner">
           {selectedEquationPlot ? (
             <EquationEditor
               equation={selectedEquationPlot.equation}
+              job={plotJobs[selectedEquationPlot.id]}
               onChange={(rawText) => updatePlotEquationText(selectedEquationPlot.id, rawText)}
             />
           ) : (
@@ -126,6 +147,14 @@ export default function App() {
           rightSidebarVisible ? '' : 'app-body--hide-right',
         ].filter(Boolean).join(' ')}
       >
+        {compactLayout && (leftSidebarVisible || rightSidebarVisible) ? (
+          <button
+            type="button"
+            className="drawer-backdrop"
+            aria-label="Close side panel"
+            onClick={() => { setLeftSidebarVisible(false); setRightSidebarVisible(false); }}
+          />
+        ) : null}
         {leftSidebarVisible ? <ObjectListPanel /> : null}
         <main className="viewport-panel">
           <Viewport3D onApiReady={setViewportApi} />

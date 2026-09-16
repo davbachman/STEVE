@@ -31,6 +31,12 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
   const objects = useAppStore((s) => s.objects);
   const selectedId = useAppStore((s) => s.selectedId);
   const plotJobs = useAppStore((s) => s.plotJobs);
+  const selectedPlot = objects.find((object) => object.id === selectedId && object.type === 'plot');
+  const showingPreviousPlot = selectedPlot?.type === 'plot'
+    && (selectedPlot.equation.source.parseStatus !== 'ok'
+      || selectedPlot.equation.source.classification?.kind === 'unknown'
+      || plotJobs[selectedPlot.id]?.meshPhase === 'error')
+    && (plotJobs[selectedPlot.id]?.meshVersion ?? 0) > 0;
   const intersectionSourcePick = useAppStore((s) => s.ui.intersectionSourcePick);
   const cancelIntersectionSourcePick = useAppStore((s) => s.cancelIntersectionSourcePick);
   const lightCurveSourcePick = useAppStore((s) => s.ui.lightCurveSourcePick);
@@ -57,7 +63,9 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
       .then(() => {
         if (disposed) return;
         setControllerReady(true);
-        controller.sync({ scene, render, objects, selectedId, plotJobs } as Pick<AppState, 'scene' | 'render' | 'objects' | 'selectedId' | 'plotJobs'>);
+        // Recovery/import may have replaced the initial scene while the GPU
+        // initialized. Always render the current document and saved camera.
+        controller.sync(useAppStore.getState());
         onApiReady?.(controller.getApi());
       })
       .catch((err) => {
@@ -143,7 +151,10 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
       ref={shellRef}
       className={`viewport-shell${intersectionSourcePick || lightCurveSourcePick ? ' viewport-shell--surface-pick' : ''}`}
     >
-      <canvas ref={canvasRef} className="viewport-canvas" />
+      <canvas ref={canvasRef} className="viewport-canvas" aria-label="3D equation plot" />
+      {!error && controllerReady && showingPreviousPlot ? (
+        <div className="viewport-previous-plot" role="status">Showing last valid equation</div>
+      ) : null}
       {!error && controllerReady && intersectionSourcePick ? (
         <div className="viewport-pick-prompt" role="status" aria-live="polite">
           Click a surface for Surface {intersectionSourcePick.slot + 1} · Esc to cancel

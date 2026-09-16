@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import type {
   Bounds3D,
+  CameraState,
   IntersectionObject,
   MaterialParams,
   PlotObject,
@@ -262,7 +263,16 @@ export const materialPresets: Record<string, MaterialParams> = {
 
 export const defaultMaterial = (): MaterialParams => ({ ...materialPresets['Glossy Plastic'] });
 
+export const defaultCameraState = (): CameraState => ({
+  alpha: -Math.PI / 3,
+  beta: 1.1,
+  radius: 20,
+  target: { x: 0, y: 0, z: 1.5 },
+  upVector: { x: 0, y: 0, z: 1 },
+});
+
 export const defaultSceneSettings = (): SceneSettings => ({
+  camera: defaultCameraState(),
   cameraProjection: 'perspective',
   turntableEnabled: false,
   turntableSpeed: DEFAULT_TURNTABLE_SPEED,

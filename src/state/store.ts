@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { produce } from 'immer';
 import { v4 as uuidv4 } from 'uuid';
 import type {
+  CameraState,
   EquationSpec,
   DirectionalLightObject,
   HistorySnapshot,
@@ -18,6 +19,7 @@ import type {
   RenderSettings,
   UUID,
 } from '../types/contracts';
+import { validateProjectFile } from '../persistence/projectFile';
 import { analyzeEquationText, analyzeGraphExpression } from '../math/classifier';
 import {
   clampCurveParameter,
@@ -119,6 +121,7 @@ interface AppActions {
   updatePointLight: (id: UUID, patch: Partial<PointLightObject>) => void;
   updateDirectionalLight: (id: UUID, patch: Partial<DirectionalLightObject>) => void;
   updateScene: (patch: Partial<SceneSettings>) => void;
+  setCameraState: (camera: CameraState) => void;
   updateRender: (patch: Partial<RenderSettings>) => void;
   setObjectName: (id: UUID, name: string) => void;
   setObjectVisibility: (id: UUID, visible: boolean) => void;
@@ -561,6 +564,7 @@ function asProjectFile(state: AppStateShape): ProjectFileV1 {
 }
 
 function normalizeImportedProject(project: ProjectFileV1): ProjectFileV1 {
+  validateProjectFile(project);
   const projectRecord = asRecord(project);
   if (!projectRecord) {
     throw new Error('Invalid project file: expected object');
@@ -585,6 +589,9 @@ function normalizeImportedProject(project: ProjectFileV1): ProjectFileV1 {
     .map((obj, index) => normalizeSceneObjectImport(obj, index))
     .filter((result): result is { object: SceneObject } => !!result)
     .map((result) => result.object)));
+  if (objectInputs.length > 0 && normalizedObjects.length === 0) {
+    throw new Error('No recognizable objects were found in this project. Your current scene has not been changed.');
+  }
   if (!normalizedObjects.some((object) => object.type === 'directional_light') && normalizedScene.directional.enabled) {
     const migrated = createDirectionalLight(`Directional Light ${countDirectionalLights(normalizedObjects) + 1}`);
     migrated.color = normalizedScene.directional.color;
@@ -1066,6 +1073,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       historyPast: [...state.historyPast, snapshotOf(state)],
       historyFuture: [],
     })),
+
+  // View gestures are saved with the document without filling the undo stack.
+  setCameraState: (camera) => set((state) => ({ scene: { ...state.scene, camera } })),
 
   updateRender: (patch) =>
     set((state) => ({
@@ -1562,6 +1572,19 @@ function positionsEqual(
   return !!a && !!b && a.x === b.x && a.y === b.y && a.z === b.z;
 }
 
+function normalizeCameraState(input: unknown): CameraState | undefined {
+  const record = asRecord(input);
+  const target = asRecord(record?.target);
+  const up = asRecord(record?.upVector);
+  if (!record || !target || !up) return undefined;
+  const values = [record.alpha, record.beta, record.radius, target.x, target.y, target.z, up.x, up.y, up.z];
+  if (!values.every((value) => typeof value === 'number' && Number.isFinite(value))) return undefined;
+  const [alpha, beta, radius, tx, ty, tz, ux, uy, uz] = values as number[];
+  const upLength = Math.hypot(ux, uy, uz);
+  if (radius <= 0 || upLength < 1e-8) return undefined;
+  return { alpha, beta, radius, target: { x: tx, y: ty, z: tz }, upVector: { x: ux / upLength, y: uy / upLength, z: uz / upLength } };
+}
+
 function normalizeSceneSettingsImport(
   sceneInput: Record<string, unknown>,
   ambientInput: Record<string, unknown>,
@@ -1572,6 +1595,7 @@ function normalizeSceneSettingsImport(
   return {
     ...defaults,
     cameraProjection: asEnum(sceneInput.cameraProjection, ['perspective', 'orthographic']) ?? defaults.cameraProjection,
+    camera: normalizeCameraState(sceneInput.camera) ?? defaults.camera,
     turntableEnabled: asBoolean(sceneInput.turntableEnabled) ?? defaults.turntableEnabled,
     turntableSpeed: clampNumber(
       asFiniteNumber(sceneInput.turntableSpeed) ?? defaults.turntableSpeed,
@@ -1715,6 +1739,7 @@ function normalizePointLightObjectImport(record: Record<string, unknown>, index:
     id: asNonEmptyString(record.id) ?? fallback.id,
     name: asNonEmptyString(record.name) ?? fallback.name,
     visible: asBoolean(record.visible) ?? fallback.visible,
+    enabled: asBoolean(record.enabled) ?? true,
     position: normalizeVec3(record.position, fallback.position),
     color: asNonEmptyString(record.color) ?? fallback.color,
     intensity: Math.max(0, asFiniteNumber(record.intensity) ?? fallback.intensity),
@@ -1732,6 +1757,7 @@ function normalizeDirectionalLightObjectImport(record: Record<string, unknown>, 
     id: asNonEmptyString(record.id) ?? fallback.id,
     name: asNonEmptyString(record.name) ?? fallback.name,
     visible: asBoolean(record.visible) ?? fallback.visible,
+    enabled: asBoolean(record.enabled) ?? true,
     position,
     direction: directionTowardOrigin(position),
     color: asNonEmptyString(record.color) ?? fallback.color,

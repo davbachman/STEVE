@@ -5,6 +5,7 @@ import {
   createDefaultGraph,
   createDirectionalLight,
   createPointLight,
+  defaultSceneSettings,
 } from '../defaults';
 import { useAppStore } from '../store';
 
@@ -100,6 +101,43 @@ describe('project import normalization', () => {
 
     useAppStore.getState().replaceProject(project as never);
     expect(useAppStore.getState().exportProjectFile().schemaVersion).toBe(1);
+  });
+
+  it('preserves recognizable legacy object-only files', () => {
+    const graph = createDefaultGraph('Legacy graph');
+    useAppStore.getState().replaceProject({ objects: [graph] } as never);
+    expect(useAppStore.getState().objects[0]?.name).toBe('Legacy graph');
+    expect(useAppStore.getState().exportProjectFile().schemaVersion).toBe(1);
+  });
+
+  it.each([{}, [], { schemaVersion: 1 }, { objects: [] }, { schemaVersion: 1, objects: [{ type: 'unknown' }] }])(
+    'rejects unrelated or unusable JSON without changing the scene or undo history: %j',
+    (project) => {
+      useAppStore.getState().addPlot('graph');
+      const before = useAppStore.getState();
+      expect(() => before.replaceProject(project as never)).toThrow();
+      expect(useAppStore.getState()).toBe(before);
+      expect(useAppStore.getState().historyPast).toHaveLength(1);
+    },
+  );
+
+  it('preserves a saved camera view and independent light illumination', () => {
+    const camera = { alpha: 0.6, beta: 1.2, radius: 15, target: { x: 1, y: 2, z: 3 }, upVector: { x: 0, y: 0, z: 1 } };
+    const light = { ...createPointLight('Hidden handle'), visible: false, enabled: true };
+    const disabled = { ...createDirectionalLight('Disabled light'), enabled: false };
+    useAppStore.getState().replaceProject(baseProject({ scene: { camera }, objects: [light, disabled] }) as never);
+    expect(useAppStore.getState().exportProjectFile().scene.camera).toEqual(camera);
+    expect(useAppStore.getState().objects[0]).toMatchObject({ visible: false, enabled: true });
+    expect(useAppStore.getState().objects[1]).toMatchObject({ enabled: false });
+  });
+
+  it('resets a malformed camera view and saves view gestures without undo entries', () => {
+    useAppStore.getState().replaceProject(baseProject({ scene: { camera: { radius: -1 } } }) as never);
+    expect(useAppStore.getState().scene.camera).toEqual(defaultSceneSettings().camera);
+    const camera = { alpha: 0.6, beta: 1.2, radius: 15, target: { x: 1, y: 2, z: 3 }, upVector: { x: 0, y: 0, z: 1 } };
+    useAppStore.getState().setCameraState(camera);
+    expect(useAppStore.getState().historyPast).toHaveLength(0);
+    expect(useAppStore.getState().exportProjectFile().scene.camera).toEqual(camera);
   });
 
   it('normalizes imported bloom settings', () => {
