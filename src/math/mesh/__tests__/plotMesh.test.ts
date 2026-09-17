@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ExplicitSurfaceSpec, ParametricSurfaceSpec } from '../../../types/contracts';
-import { createDefaultGraph } from '../../../state/defaults';
+import { createDefaultGraph, createDefaultImplicit } from '../../../state/defaults';
 import { analyzeEquationText } from '../../classifier';
 import { buildSerializedEquationMesh } from '../plotMesh';
 
@@ -57,6 +57,53 @@ function explicitSurfaceSpec(): ExplicitSurfaceSpec {
     compileAsParametric: true,
   };
 }
+
+describe('implicit equation meshes', () => {
+  it.each(['medium', 'high'] as const)('builds the unit sphere from equation text at %s quality', (quality) => {
+    const analyzed = analyzeEquationText('x^2+y^2+z^2=1');
+    expect(analyzed.source.parseStatus).toBe('ok');
+    expect(analyzed.inferredKind).toBe('implicit_surface');
+    expect(analyzed.parameterNames).toEqual([]);
+
+    const defaultSpec = createDefaultImplicit().equation;
+    expect(defaultSpec.kind).toBe('implicit_surface');
+    if (defaultSpec.kind !== 'implicit_surface') return;
+
+    // A default high-quality plot first builds a medium preview, then its final mesh.
+    const mesh = buildSerializedEquationMesh({ ...defaultSpec, source: analyzed.source, quality });
+    expect(mesh.indices.length).toBeGreaterThan(0);
+    expect(mesh.topology?.isClosedManifold).toBe(true);
+    expect(mesh.topology?.boundaryEdgeCount).toBe(0);
+    expect(mesh.normals?.length).toBe(mesh.positions.length);
+
+    const normals = mesh.normals!;
+    for (let offset = 0; offset < mesh.positions.length; offset += 3) {
+      const x = mesh.positions[offset];
+      const y = mesh.positions[offset + 1];
+      const z = mesh.positions[offset + 2];
+      const radius = Math.hypot(x, y, z);
+      const nx = normals[offset];
+      const ny = normals[offset + 1];
+      const nz = normals[offset + 2];
+      expect([x, y, z, nx, ny, nz].every(Number.isFinite)).toBe(true);
+      expect(Math.abs(radius - 1)).toBeLessThan(0.03);
+      expect(Math.hypot(nx, ny, nz)).toBeCloseTo(1, 5);
+      expect((x * nx + y * ny + z * nz) / radius).toBeGreaterThan(0.99);
+    }
+
+    const edgeCounts = new Map<string, number>();
+    for (let offset = 0; offset < mesh.indices.length; offset += 3) {
+      const triangle = mesh.indices.subarray(offset, offset + 3);
+      for (let edge = 0; edge < 3; edge += 1) {
+        const a = triangle[edge];
+        const b = triangle[(edge + 1) % 3];
+        const key = a < b ? `${a}|${b}` : `${b}|${a}`;
+        edgeCounts.set(key, (edgeCounts.get(key) ?? 0) + 1);
+      }
+    }
+    expect([...edgeCounts.values()].every((count) => count === 2)).toBe(true);
+  });
+});
 
 describe('plot mesh families', () => {
   it('shows one snapped discrete copy until playback merges the full family', () => {

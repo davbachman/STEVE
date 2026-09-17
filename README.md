@@ -126,7 +126,7 @@ Interactive quality adjusts viewport pixel density, shadow resolution, and refle
 | `⌂` | Reset the camera |
 | `?` | Show or hide the viewport control reminder |
 
-The two panel icons in the top-right corner hide or restore the left and right sidebars. In smaller windows, the panels open as drawers, one at a time; click the shaded area to close them. **Undo** and **Redo** are beside the File menu, and selecting an object reveals its **Duplicate** and **Delete** buttons.
+The two panel icons in the top-right corner hide or restore the left and right sidebars. In smaller windows, the panels open as drawers, one at a time; click the shaded area to close them. **Undo** and **Redo** are beside the File menu and retain the latest 100 document changes. Selecting an object reveals its **Duplicate** and **Delete** buttons.
 
 ## Keyboard Shortcuts
 
@@ -161,6 +161,7 @@ ST.E.V.E. automatically keeps a recovery copy in this browser and restores it on
 - Up to four objects use live per-object reflection probes at once. PNG output is capped at 8,192 pixels on its longest side, so the requested scale can be reduced for an already-large viewport.
 - GIF recording is capped at 360 turntable frames or 180 parameter/light frames. Long, slow loops preserve their duration and may therefore run below the selected target frame rate. Higher GIF dimensions and frame rates take longer to encode and create larger files.
 - Large implicit bounds and higher implicit quality take longer to mesh. The inspector warns about invalid or unusually large bounds.
+- Meshing workers start on demand and release their memory after 30 seconds of inactivity. If a worker stops during an equation calculation, the app retries that calculation once in a fresh worker.
 - Large discrete families, dense surface sampling, reflections, refraction, shadows, and Halos can all increase rendering cost. Use **Performance** or **Balanced** interactive quality while editing a heavy scene.
 
 ## Run Locally

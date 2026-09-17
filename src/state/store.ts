@@ -209,6 +209,13 @@ function initialState(): AppStateShape {
   };
 }
 
+// Each entry is a whole-document snapshot; bound retention during long sessions.
+const MAX_HISTORY_STEPS = 100;
+
+function appendHistory(history: HistorySnapshot[], snapshot: HistorySnapshot): HistorySnapshot[] {
+  return [...history.slice(-(MAX_HISTORY_STEPS - 1)), snapshot];
+}
+
 function snapshotOf(state: AppStateShape): HistorySnapshot {
   return {
     scene: structuredClone(state.scene),
@@ -640,7 +647,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   addPlot: (template) =>
     set((state) => {
-      const past = [...state.historyPast, snapshotOf(state)];
+      const past = appendHistory(state.historyPast, snapshotOf(state));
       const actualPlot =
         template === 'curve'
           ? createDefaultCurve(`Curve ${countPlotsByKind(state.objects, 'curve') + 1}`)
@@ -669,7 +676,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         objects: [...state.objects, intersection],
         selectedId: intersection.id,
         ui: { ...state.ui, inspectorTab: 'object', intersectionSourcePick: null, lightCurveSourcePick: null },
-        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
         historyFuture: [],
       };
     }),
@@ -682,7 +689,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         objects: [...state.objects, light],
         selectedId: light.id,
         ui: { ...state.ui, intersectionSourcePick: null, lightCurveSourcePick: null },
-        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
         historyFuture: [],
       };
     }),
@@ -695,7 +702,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         objects: [...state.objects, light],
         selectedId: light.id,
         ui: { ...state.ui, inspectorTab: 'object', intersectionSourcePick: null, lightCurveSourcePick: null },
-        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
         historyFuture: [],
       };
     }),
@@ -756,7 +763,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         ...next,
         ui: clearsActivePick ? { ...next.ui, intersectionSourcePick: null } : next.ui,
-        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
         historyFuture: [],
       };
     }),
@@ -785,7 +792,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           ...next.ui,
           lightCurveSourcePick: enabled ? next.ui.lightCurveSourcePick : null,
         },
-        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
         historyFuture: [],
       };
     }),
@@ -841,7 +848,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         ...next,
         ui: clearsActivePick ? { ...next.ui, lightCurveSourcePick: null } : next.ui,
-        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
         historyFuture: [],
       };
     }),
@@ -873,7 +880,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         ...state,
         activeLightCurveParameterDrag: null,
-        historyPast: [...state.historyPast, active.before],
+        historyPast: appendHistory(state.historyPast, active.before),
         historyFuture: [],
       };
     }),
@@ -897,7 +904,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (state.activeLightCurveParameterDrag?.lightId === lightId) return next;
       return {
         ...next,
-        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
         historyFuture: [],
       };
     }),
@@ -957,7 +964,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       return {
         ...next,
-        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
         historyFuture: [],
       };
     }),
@@ -973,7 +980,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         ...next,
         objects: clearInvalidIntersectionSources(next.objects, state.objects),
-        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
         historyFuture: [],
       };
     }),
@@ -995,7 +1002,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       return {
         ...nextWithValidReferences,
-        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
         historyFuture: [],
       };
     }),
@@ -1010,7 +1017,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       return {
         ...next,
-        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
         historyFuture: [],
       };
     }),
@@ -1030,7 +1037,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       return {
         ...next,
-        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
         historyFuture: [],
       };
     }),
@@ -1045,7 +1052,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       return {
         ...next,
-        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
         historyFuture: [],
       };
     }),
@@ -1061,7 +1068,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       return {
         ...next,
-        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
         historyFuture: [],
       };
     }),
@@ -1070,7 +1077,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({
       ...state,
       scene: { ...state.scene, ...patch },
-      historyPast: [...state.historyPast, snapshotOf(state)],
+      historyPast: appendHistory(state.historyPast, snapshotOf(state)),
       historyFuture: [],
     })),
 
@@ -1081,7 +1088,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({
       ...state,
       render: { ...state.render, ...patch },
-      historyPast: [...state.historyPast, snapshotOf(state)],
+      historyPast: appendHistory(state.historyPast, snapshotOf(state)),
       historyFuture: [],
     })),
 
@@ -1097,7 +1104,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       return {
         ...next,
-        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
         historyFuture: [],
         activeObjectDragHistory: null,
       };
@@ -1113,7 +1120,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       return {
         ...next,
-        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
         historyFuture: [],
       };
     }),
@@ -1127,7 +1134,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       return {
         ...next,
-        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
         historyFuture: [],
       };
     }),
@@ -1192,7 +1199,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         ...state,
         activeObjectDragHistory: null,
-        historyPast: [...state.historyPast, active.before],
+        historyPast: appendHistory(state.historyPast, active.before),
         historyFuture: [],
       };
     }),
@@ -1238,7 +1245,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         ...state,
         activeEquationParameterDrag: null,
-        historyPast: [...state.historyPast, active.before],
+        historyPast: appendHistory(state.historyPast, active.before),
         historyFuture: [],
       };
     }),
@@ -1292,7 +1299,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         objects,
         selectedId: null,
         ui: { ...state.ui, intersectionSourcePick: null, lightCurveSourcePick: null },
-        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
         historyFuture: [],
       };
     }),
@@ -1317,7 +1324,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             ? null
             : state.ui.lightCurveSourcePick,
         },
-        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
         historyFuture: [],
       };
     }),
@@ -1333,7 +1340,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...state,
         objects,
         selectedId: cloned.id,
-        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
         historyFuture: [],
       };
     }),
@@ -1362,7 +1369,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...s,
         objects: clearInvalidIntersectionSources([...s.objects, cloned]),
         selectedId: cloned.id,
-        historyPast: [...s.historyPast, snapshotOf(s)],
+        historyPast: appendHistory(s.historyPast, snapshotOf(s)),
         historyFuture: [],
       }));
     };
@@ -1437,7 +1444,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         clipboardObject: state.clipboardObject,
         ui: { ...state.ui, intersectionSourcePick: null, lightCurveSourcePick: null },
         historyPast: state.historyPast.slice(0, -1),
-        historyFuture: [snapshotOf(state), ...state.historyFuture],
+        historyFuture: [snapshotOf(state), ...state.historyFuture.slice(0, MAX_HISTORY_STEPS - 1)],
         activeObjectDragHistory: null,
         activeEquationParameterDrag: null,
         activeLightCurveParameterDrag: null,
@@ -1453,7 +1460,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...base,
         clipboardObject: state.clipboardObject,
         ui: { ...state.ui, intersectionSourcePick: null, lightCurveSourcePick: null },
-        historyPast: [...state.historyPast, snapshotOf(state)],
+        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
         historyFuture: state.historyFuture.slice(1),
         activeObjectDragHistory: null,
         activeEquationParameterDrag: null,

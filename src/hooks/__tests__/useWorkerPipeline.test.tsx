@@ -103,7 +103,8 @@ describe('worker pipeline scheduling', () => {
     expect(getRuntimePlotMesh(plotId)).toBeUndefined();
     expect(useAppStore.getState().plotJobs[plotId]).toBeUndefined();
     act(() => vi.advanceTimersByTime(1000));
-    expect(ControlledWorker.instances.at(-1)?.requests).toHaveLength(0);
+    expect(ControlledWorker.instances).toHaveLength(2);
+    expect(worker.requests).toHaveLength(1);
   });
 
   it('rebuilds after reopening a project with the same object IDs and equations', () => {

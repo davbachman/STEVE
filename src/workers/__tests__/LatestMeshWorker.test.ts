@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LatestMeshWorker, type MeshWorkerTransport } from '../LatestMeshWorker';
 import type { WorkerRequest, WorkerResponse } from '../../types/contracts';
 import { createDefaultCurve } from '../../state/defaults';
@@ -29,6 +29,17 @@ function harness() {
 }
 
 describe('latest mesh worker', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('starts workers only when a plot needs meshing', () => {
+    const h = harness();
+    expect(h.workers).toHaveLength(0);
+    h.queue.postMessage({ type: 'cancel_jobs', jobId: 'cancel', objectId: 'plot' });
+    expect(h.workers).toHaveLength(0);
+    h.queue.postMessage(request('first'));
+    expect(h.workers).toHaveLength(1);
+  });
+
   it('finishes the running animation frame and replaces all obsolete pending frames', () => {
     const h = harness();
     h.queue.postMessage(request('first'));
@@ -63,14 +74,89 @@ describe('latest mesh worker', () => {
     expect(h.onMessage).not.toHaveBeenCalled();
   });
 
-  it('reports a worker crash and continues pending work on a replacement', () => {
+  it('retries an interrupted equation once and then continues pending work', () => {
     const h = harness();
     h.queue.postMessage(request('old'));
     h.queue.postMessage(request('new'));
     h.workers[0].onerror?.({ preventDefault: vi.fn() } as unknown as ErrorEvent);
-    expect(h.onMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'job_error', jobId: 'old' }));
+    expect(h.onMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'job_error' }));
     expect(h.workers).toHaveLength(2);
-    expect(h.onStart.mock.calls.map(([req]) => req.jobId)).toEqual(['old', 'new']);
+    expect(h.workers[0].terminate).toHaveBeenCalledTimes(1);
+    expect(h.workers[1].postMessage).toHaveBeenCalledWith(request('old'), undefined);
+    h.finish('old');
+    expect(h.onStart.mock.calls.map(([req]) => req.jobId)).toEqual(['old', 'old', 'new']);
+  });
+
+  it('stops retrying persistent failures and preserves the browser error', () => {
+    const h = harness();
+    h.queue.postMessage(request('failed'));
+    const failure = { preventDefault: vi.fn(), message: 'Worker script failed to load' } as unknown as ErrorEvent;
+    h.workers[0].onerror?.(failure);
+    h.workers[1].onerror?.(failure);
+    expect(h.workers).toHaveLength(2);
+    expect(h.onMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'job_error', jobId: 'failed', message: expect.stringContaining('Worker script failed to load'),
+    }));
+    h.queue.postMessage(request('later'));
+    expect(h.workers).toHaveLength(3);
+    h.finish('later');
+  });
+
+  it('does not respawn an idle worker after it fails', () => {
+    const h = harness();
+    h.queue.postMessage(request('first'));
+    h.finish('first');
+    h.workers[0].onerror?.({ preventDefault: vi.fn() } as unknown as ErrorEvent);
+    expect(h.workers).toHaveLength(1);
+    expect(h.workers[0].terminate).toHaveBeenCalledTimes(1);
+    h.queue.postMessage(request('next'));
+    expect(h.workers).toHaveLength(2);
+  });
+
+  it('releases the idle heap, but never terminates an active calculation', () => {
+    vi.useFakeTimers();
+    const h = harness();
+    h.queue.postMessage(request('first'));
+    h.finish('first');
+    vi.advanceTimersByTime(29_000);
+    expect(h.workers[0].terminate).not.toHaveBeenCalled();
+    h.queue.postMessage(request('long-build'));
+    vi.advanceTimersByTime(60_000);
+    expect(h.workers[0].terminate).not.toHaveBeenCalled();
+    h.finish('long-build');
+    vi.advanceTimersByTime(30_000);
+    expect(h.workers[0].terminate).toHaveBeenCalledTimes(1);
+    h.queue.postMessage(request('next'));
+    expect(h.workers).toHaveLength(2);
+  });
+
+  it('handles worker constructor failures without throwing or retrying indefinitely', () => {
+    const onMessage = vi.fn();
+    const createWorker = vi.fn(() => { throw new Error('Worker limit reached'); });
+    const queue = new LatestMeshWorker(createWorker, onMessage, vi.fn(), vi.fn());
+    const buffer = new ArrayBuffer(1024);
+    const source = { positions: new Float32Array(buffer), indices: new Uint32Array(), translation: { x: 0, y: 0, z: 0 } };
+    const req: WorkerRequest = { type: 'build_surface_intersection_mesh', jobId: 'first', objectId: 'plot', sourceA: source, sourceB: source, priority: 'refine' };
+    expect(() => queue.postMessage(req, [buffer])).not.toThrow();
+    expect(createWorker).toHaveBeenCalledTimes(2);
+    expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'job_error', message: expect.stringContaining('Worker limit reached'),
+    }));
+    expect(buffer.byteLength).toBe(1024);
+    // Failed startup must release unsent buffers, rather than retaining them for
+    // the entire session after the failed request has left the queue.
+    expect(queue['transfers'].size).toBe(0);
+  });
+
+  it('never retries requests whose transferred buffers were detached', () => {
+    const h = harness();
+    const sourceA = { positions: new Float32Array([0, 0, 0]), indices: new Uint32Array([0]), translation: { x: 0, y: 0, z: 0 } };
+    const sourceB = { positions: new Float32Array([1, 0, 0]), indices: new Uint32Array([0]), translation: { x: 0, y: 0, z: 0 } };
+    const req: WorkerRequest = { type: 'build_surface_intersection_mesh', jobId: 'intersection', objectId: 'plot', sourceA, sourceB, priority: 'refine' };
+    h.queue.postMessage(req, [sourceA.positions.buffer, sourceA.indices.buffer, sourceB.positions.buffer, sourceB.indices.buffer]);
+    h.workers[0].onerror?.({ preventDefault: vi.fn() } as unknown as ErrorEvent);
+    expect(h.workers).toHaveLength(1);
+    expect(h.onMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'job_error', jobId: 'intersection' }));
   });
 
   it('does not resurrect workers or queued work after disposal', () => {

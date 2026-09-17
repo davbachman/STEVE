@@ -20,6 +20,28 @@ describe('implicit mesher', () => {
     expect(Math.abs(bb.min.x + 3)).toBeLessThan(1.0);
   });
 
+  it('limits unit-sphere sampling to grid corners and surface normal estimates', () => {
+    let scalarSamples = 0;
+    const mesh = buildImplicitMeshFromScalarField(
+      { min: { x: -5, y: -5, z: -5 }, max: { x: 5, y: 5, z: 5 } },
+      (x, y, z) => {
+        scalarSamples += 1;
+        return x * x + y * y + z * z - 1;
+      },
+      'high',
+    );
+
+    // High quality uses 48 cells per axis. Each surface vertex needs at most
+    // six extra evaluations for its central-difference normal.
+    const gridCornerCount = 49 ** 3;
+    expect(scalarSamples).toBeGreaterThanOrEqual(gridCornerCount);
+    expect(scalarSamples).toBeLessThanOrEqual(gridCornerCount + 2 * mesh.positions.length);
+    expectClosedWatertight(mesh);
+    expect(mesh.topology?.isClosedManifold).toBe(true);
+    expect(mesh.bounds?.min.x).toBeCloseTo(-1, 2);
+    expect(mesh.bounds?.max.x).toBeCloseTo(1, 2);
+  });
+
   it('quality presets increase mesh detail monotonically for a sphere', () => {
     const sphere = (x: number, y: number, z: number) => x * x + y * y + z * z;
     const draft = buildImplicitMeshFromScalarField(bounds, sphere, 'draft', 9);

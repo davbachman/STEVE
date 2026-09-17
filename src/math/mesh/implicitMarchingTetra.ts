@@ -62,8 +62,6 @@ interface QualityConfig {
 }
 
 interface CubeCell {
-  min: V3;
-  max: V3;
   corners: V3[];
   values: number[];
 }
@@ -140,7 +138,7 @@ function polygonizeUniformLeafGrid(ctx: MeshBuildContext): void {
         const x0 = ctx.bounds.min.x + (xSpan * i) / div;
         const x1 = ctx.bounds.min.x + (xSpan * (i + 1)) / div;
         const cell = sampleCell(ctx, { x: x0, y: y0, z: z0 }, { x: x1, y: y1, z: z1 });
-        if (!cellMightContainSurface(ctx, cell)) {
+        if (!cellMightContainSurface(cell)) {
           continue;
         }
         polygonizeCube(ctx.rawTriangles, cell.corners, cell.values);
@@ -156,10 +154,10 @@ function sampleCell(ctx: MeshBuildContext, min: V3, max: V3): CubeCell {
     z: cz ? max.z : min.z,
   }));
   const values = corners.map((p) => sampleScalar(ctx, p.x, p.y, p.z));
-  return { min, max, corners, values };
+  return { corners, values };
 }
 
-function cellMightContainSurface(ctx: MeshBuildContext, cell: CubeCell): boolean {
+function cellMightContainSurface(cell: CubeCell): boolean {
   const finiteCornerValues = cell.values.filter(Number.isFinite);
   if (finiteCornerValues.length < 2) {
     return false;
@@ -178,29 +176,9 @@ function cellMightContainSurface(ctx: MeshBuildContext, cell: CubeCell): boolean
     }
   }
 
-  // Heuristic probe pass to catch surfaces that pass through the cell interior
-  // without flipping any corner sign (small centered features / tangencies).
-  const cx = (cell.min.x + cell.max.x) * 0.5;
-  const cy = (cell.min.y + cell.max.y) * 0.5;
-  const cz = (cell.min.z + cell.max.z) * 0.5;
-  const probes: V3[] = [
-    { x: cx, y: cy, z: cz },
-    { x: cx, y: cell.min.y, z: cz },
-    { x: cx, y: cell.max.y, z: cz },
-    { x: cell.min.x, y: cy, z: cz },
-    { x: cell.max.x, y: cy, z: cz },
-    { x: cx, y: cy, z: cell.min.z },
-    { x: cx, y: cy, z: cell.max.z },
-  ];
-  for (const p of probes) {
-    const v = sampleScalar(ctx, p.x, p.y, p.z);
-    if (!Number.isFinite(v)) continue;
-    if (Math.abs(v) < 1e-12) return true;
-    if ((v > 0 && hasNegative) || (v < 0 && hasPositive)) {
-      return true;
-    }
-  }
-
+  // Polygonization uses only these corner values. Interior probes cannot add
+  // triangles to a same-sign cell without subdivision, and caching those unused
+  // probes substantially increases the worker's transient memory use.
   return false;
 }
 
