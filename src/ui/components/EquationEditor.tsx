@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
 import { autocompletion } from '@codemirror/autocomplete';
@@ -24,6 +24,9 @@ export function EquationEditor({ equation, onChange, job }: EquationEditorProps)
   const source = equation.source;
   const graphExpression = equation.kind === 'explicit_surface' && equation.graphExpression;
   const [helpOpen, setHelpOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const contentId = useId();
+  const lineCount = source.rawText.split('\n').length;
   const diagnostics = source.parseErrors;
   const extensions = useMemo(() => {
     const length = source.rawText.length;
@@ -38,36 +41,51 @@ export function EquationEditor({ equation, onChange, job }: EquationEditorProps)
   const invalid = source.parseStatus !== 'ok' || source.classification?.kind === 'unknown' || job?.meshPhase === 'error';
 
   return (
-    <div className="equation-editor">
-      <div className="equation-editor__input">
-        <CodeMirror
-          value={source.rawText}
-          minHeight="46px"
-          theme="dark"
-          basicSetup={{
-            lineNumbers: source.rawText.includes('\n'),
-            foldGutter: false,
-            highlightActiveLine: false,
-            highlightSelectionMatches: true,
-            highlightActiveLineGutter: false,
-            autocompletion: false,
-          }}
-          extensions={extensions}
-          onChange={(value) => onChange(value)}
-        />
+    <div className={`equation-editor${collapsed ? ' equation-editor--collapsed' : ''}`}>
+      <div className="equation-editor__toolbar">
+        <span>Equation{lineCount > 1 ? ` · ${lineCount} lines` : ''}</span>
         <button
           type="button"
-          className="equation-editor__help-toggle"
-          onClick={() => setHelpOpen((open) => !open)}
-          title="Equation syntax reference"
-          aria-label="Toggle equation syntax reference"
-          aria-expanded={helpOpen}
+          className="equation-editor__collapse-toggle"
+          aria-label={collapsed ? 'Expand equation editor' : 'Collapse equation editor'}
+          aria-expanded={!collapsed}
+          aria-controls={contentId}
+          onClick={() => setCollapsed((value) => !value)}
         >
-          ƒx
+          <span aria-hidden="true">{collapsed ? '▾' : '▴'}</span> {collapsed ? 'Expand' : 'Collapse'}
         </button>
-        {helpOpen ? <SyntaxHelp graphExpression={Boolean(graphExpression)} /> : null}
       </div>
-      <LatexPreview latex={source.formattedLatex} fallbackText={source.rawText} />
+      <div id={contentId} className="equation-editor__content" hidden={collapsed}>
+        <div className="equation-editor__input">
+          <CodeMirror
+            value={source.rawText}
+            minHeight="46px"
+            theme="dark"
+            basicSetup={{
+              lineNumbers: source.rawText.includes('\n'),
+              foldGutter: false,
+              highlightActiveLine: false,
+              highlightSelectionMatches: true,
+              highlightActiveLineGutter: false,
+              autocompletion: false,
+            }}
+            extensions={extensions}
+            onChange={(value) => onChange(value)}
+          />
+          <button
+            type="button"
+            className="equation-editor__help-toggle"
+            onClick={() => setHelpOpen((open) => !open)}
+            title="Equation syntax reference"
+            aria-label="Toggle equation syntax reference"
+            aria-expanded={helpOpen}
+          >
+            ƒx
+          </button>
+          {helpOpen ? <SyntaxHelp graphExpression={Boolean(graphExpression)} /> : null}
+        </div>
+        <LatexPreview latex={source.formattedLatex} fallbackText={source.rawText} />
+      </div>
       {message ? (
         <div className={`equation-editor__diagnostic equation-editor__diagnostic--${invalid ? 'error' : 'warning'}`} role="status" aria-live="polite">
           {source.parseStatus === 'partial' ? 'Incomplete equation. ' : ''}{message}

@@ -93,6 +93,47 @@ input[type='color'] {
   min-height: var(--equation-dock-content-height);
 }
 
+.equation-dock .equation-editor--collapsed {
+  min-height: 0;
+}
+
+.equation-editor__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  color: #aab9ce;
+  font-size: 0.78rem;
+}
+
+.equation-editor__collapse-toggle {
+  padding: 0.18rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+.equation-editor__content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.26rem;
+  min-width: 0;
+  max-height: min(42vh, 28rem);
+  overflow: auto;
+}
+
+.equation-editor__content[hidden] {
+  display: none;
+}
+
+.equation-editor__content > * {
+  flex-shrink: 0;
+}
+
+.equation-editor--collapsed .equation-editor__diagnostic {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .equation-dock .latex-preview {
   min-height: 1.7rem;
   padding: 0.2rem 0.45rem;
@@ -741,11 +782,11 @@ input[type='color'] {
 }
 
 .equation-help {
-  position: absolute;
-  top: calc(100% + 0.35rem);
-  right: 0;
+  position: relative;
+  margin-top: 0.35rem;
+  margin-left: auto;
   z-index: 30;
-  width: min(34rem, 90vw);
+  width: min(34rem, 100%);
   display: grid;
   gap: 0.4rem;
   padding: 0.65rem 0.8rem;
