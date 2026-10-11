@@ -1,10 +1,13 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
+import { EditorState } from '@codemirror/state';
+import { CompletionContext } from '@codemirror/autocomplete';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { analyzeGraphExpression } from '../../../math/classifier';
 import { createDefaultGraph } from '../../../state/defaults';
 import type { EquationSpec, PlotJobStatus } from '../../../types/contracts';
 import { EquationEditor } from '../EquationEditor';
+import { mathCompletionSource } from '../equationCompletions';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -82,5 +85,37 @@ describe('EquationEditor diagnostics and accessibility', () => {
     expect(diagnostic?.textContent).toContain('Mesh could not be built at this resolution');
     expect(diagnostic?.textContent).toContain('Showing the last valid plot.');
     expect(diagnostic?.textContent).not.toContain('Incomplete equation.');
+  });
+
+  it('shows multiline definitions, line numbers, an aligned preview, and syntax help', () => {
+    const host = renderEditor(graphEquation('A = x^2 + y^2\nsin(A)'));
+    expect(host.querySelectorAll('.cm-line')).toHaveLength(2);
+    expect(host.querySelector('.cm-lineNumbers')).not.toBeNull();
+    expect(host.querySelector('.katex .mtable')).not.toBeNull();
+    expect(host.querySelector('.katex-error')).toBeNull();
+    expect(host.querySelector('.equation-editor__diagnostic')).toBeNull();
+    act(() => (host.querySelector('.equation-editor__help-toggle') as HTMLButtonElement).click());
+    expect(host.querySelector('.equation-help')?.textContent).toContain('earlier definitions');
+    expect(host.querySelector('.equation-help')?.textContent).toContain('no slider');
+  });
+
+  it('underlines invalid references on their actual line', () => {
+    const host = renderEditor(graphEquation('A = x^2\nB = C\nC = y^2\nA+B'));
+    const underline = host.querySelector('.equation-error-underline');
+    expect(underline?.textContent).toBe('C');
+    expect(underline?.closest('.cm-line')?.textContent).toBe('B = C');
+  });
+
+  it('completes earlier local names with underscores and digits, including on an empty line', () => {
+    for (const suffix of ['R_', '']) {
+      const doc = `R_1 = x^2\n${suffix}`;
+      const state = EditorState.create({ doc });
+      const result = mathCompletionSource(new CompletionContext(state, doc.length, true));
+      expect(result?.options).toContainEqual({ label: 'R_1', type: 'variable', detail: 'local definition' });
+    }
+    const doc = 'A = x\nB = y\nA+B';
+    const state = EditorState.create({ doc });
+    const result = mathCompletionSource(new CompletionContext(state, 0, true));
+    expect(result?.options.some((option) => option.label === 'A' || option.label === 'B')).toBe(false);
   });
 });

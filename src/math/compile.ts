@@ -9,7 +9,9 @@ import type {
 import type { Expression } from './ast';
 import { compileNumericExpression, compileTuple3, normalizeEqualityToImplicit } from './evaluator';
 import { applyEquationParameterContext, equationParameterContext, equationParameterValueContexts } from './parameters';
-import { parseMath } from './parser';
+import { compileBlockContext, parseEquationBlock } from './equationBlock';
+
+type PrepareContext = ReturnType<typeof compileBlockContext>;
 
 export interface CompiledCurve {
   kind: 'curve';
@@ -36,35 +38,36 @@ export function compilePlotObject(plot: PlotObject): CompiledPlot {
 }
 
 export function compileEquationSpec(spec: EquationSpec): CompiledPlot {
-  const parsed = parseMath(spec.source.rawText);
+  const parsed = parseEquationBlock(spec.source.rawText);
   if (!parsed.ast || parsed.status === 'error') {
     throw new Error(parsed.diagnostics[0]?.message ?? 'Invalid equation');
   }
 
+  const prepareContext = compileBlockContext(parsed.ast, parsed.definitions);
   switch (spec.kind) {
     case 'parametric_curve':
       return {
         kind: 'curve',
         spec,
-        fn: compileCurveFunction(spec, parsed.ast),
+        fn: compileCurveFunction(spec, parsed.ast, prepareContext),
       };
     case 'parametric_surface':
       return {
         kind: 'surface',
         spec,
-        fn: compileParametricSurfaceFunction(spec, parsed.ast),
+        fn: compileParametricSurfaceFunction(spec, parsed.ast, prepareContext),
       };
     case 'explicit_surface':
       return {
         kind: 'surface',
         spec,
-        fn: compileExplicitSurfaceFunction(spec, parsed.ast),
+        fn: compileExplicitSurfaceFunction(spec, parsed.ast, prepareContext),
       };
     case 'implicit_surface':
       return {
         kind: 'implicit',
         spec,
-        fn: compileImplicitSurfaceFunction(spec, parsed.ast),
+        fn: compileImplicitSurfaceFunction(spec, parsed.ast, prepareContext),
       };
   }
 }
@@ -77,24 +80,26 @@ export function expandEquationSpecVariants(spec: EquationSpec): EquationSpec[] {
   }));
 }
 
-function compileCurveFunction(_spec: ParametricCurveSpec, ast: Expression): (t: number) => [number, number, number] {
+function compileCurveFunction(_spec: ParametricCurveSpec, ast: Expression, prepareContext: PrepareContext): (t: number) => [number, number, number] {
   const tuple = compileTuple3(ast);
   const parameterVars = equationParameterContext(_spec.parameters);
-  return (t) => tuple({ ...parameterVars, t });
+  return (t) => tuple(prepareContext({ ...parameterVars, t }));
 }
 
 function compileParametricSurfaceFunction(
   _spec: ParametricSurfaceSpec,
   ast: Expression,
+  prepareContext: PrepareContext,
 ): (u: number, v: number) => [number, number, number] {
   const tuple = compileTuple3(ast);
   const parameterVars = equationParameterContext(_spec.parameters);
-  return (u, v) => tuple({ ...parameterVars, u, v });
+  return (u, v) => tuple(prepareContext({ ...parameterVars, u, v }));
 }
 
 function compileExplicitSurfaceFunction(
   spec: ExplicitSurfaceSpec,
   ast: Expression,
+  prepareContext: PrepareContext,
 ): (u: number, v: number) => [number, number, number] {
   if (!spec.graphExpression && ast.type !== 'equality') {
     throw new Error('Explicit surface must be an equality');
@@ -112,7 +117,7 @@ function compileExplicitSurfaceFunction(
       [a1]: u,
       [a2]: v,
     };
-    const solved = rhs(vars);
+    const solved = rhs(prepareContext(vars));
 
     if (spec.solvedAxis === 'x') {
       return [solved, vars.y, vars.z];
@@ -127,9 +132,10 @@ function compileExplicitSurfaceFunction(
 function compileImplicitSurfaceFunction(
   spec: ImplicitSurfaceSpec,
   ast: Expression,
+  prepareContext: PrepareContext,
 ): (x: number, y: number, z: number) => number {
   const normalized = normalizeEqualityToImplicit(ast);
   const scalar = compileNumericExpression(normalized);
   const parameterVars = equationParameterContext(spec.parameters);
-  return (x, y, z) => scalar({ ...parameterVars, x, y, z });
+  return (x, y, z) => scalar(prepareContext({ ...parameterVars, x, y, z }));
 }

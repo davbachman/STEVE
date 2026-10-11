@@ -939,6 +939,7 @@ input[type='color'] {
 }
 
 .latex-preview__fallback {
+  white-space: pre-wrap;
   color: #8ea3c2;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.82rem;

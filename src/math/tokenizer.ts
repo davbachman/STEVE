@@ -10,6 +10,12 @@ export interface Token {
 const numberPattern = /^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/;
 const identPattern = /^[A-Za-z_][A-Za-z0-9_]*/;
 
+export class TokenizeError extends Error {
+  constructor(message: string, public readonly position: number) {
+    super(message);
+  }
+}
+
 export function tokenize(input: string): Token[] {
   const tokens: Token[] = [];
   let index = 0;
@@ -69,7 +75,7 @@ export function tokenize(input: string): Token[] {
       continue;
     }
 
-    throw new Error(`Unexpected character '${ch}' at ${index}`);
+    throw new TokenizeError(`Unexpected character '${ch}'`, index);
   }
 
   tokens.push({ type: 'eof', text: '', start: input.length, end: input.length });

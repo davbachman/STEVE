@@ -9,7 +9,7 @@ import type {
   TupleExpression,
   UnaryExpression,
 } from './ast';
-import { tokenize, type Token } from './tokenizer';
+import { tokenize, TokenizeError, type Token } from './tokenizer';
 
 export interface ParseResult {
   ast?: Expression;
@@ -252,16 +252,18 @@ class Parser {
   }
 }
 
-export function parseMath(input: string): ParseResult {
+export function parseMath(input: string, offset = 0): ParseResult {
   if (!input.trim()) {
     return {
       status: 'partial',
-      diagnostics: [{ message: 'Enter an equation', start: 0, end: 0, severity: 'warning' }],
+      diagnostics: [{ message: 'Enter an equation', start: offset, end: offset, severity: 'warning' }],
     };
   }
 
   try {
-    const tokens = tokenize(input);
+    const tokens = tokenize(input).map((token) => ({
+      ...token, start: token.start + offset, end: token.end + offset,
+    }));
     const parser = new Parser(tokens);
     const ast = parser.parse();
     return { ast, status: 'ok', diagnostics: [] };
@@ -277,6 +279,13 @@ export function parseMath(input: string): ParseResult {
             severity: error.partial ? 'warning' : 'error',
           },
         ],
+      };
+    }
+    if (error instanceof TokenizeError) {
+      const start = offset + error.position;
+      return {
+        status: 'error',
+        diagnostics: [{ message: error.message, start, end: start + 1, severity: 'error' }],
       };
     }
     if (error instanceof Error) {

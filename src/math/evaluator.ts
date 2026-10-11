@@ -42,10 +42,10 @@ export function evaluateNumericExpression(expr: Expression, vars: EvalContext): 
     case 'number':
       return expr.value;
     case 'identifier': {
-      if (expr.name in vars) {
+      if (Object.hasOwn(vars, expr.name)) {
         return vars[expr.name] as number;
       }
-      if (expr.name in constants) {
+      if (Object.hasOwn(constants, expr.name)) {
         return constants[expr.name] as number;
       }
       throw new Error(`Unknown variable or constant: ${expr.name}`);
@@ -58,7 +58,7 @@ export function evaluateNumericExpression(expr: Expression, vars: EvalContext): 
       return evalBinary(expr, vars);
     case 'call': {
       const fn = unaryFns[expr.callee.name];
-      if (!fn) {
+      if (!Object.hasOwn(unaryFns, expr.callee.name)) {
         throw new Error(`Unsupported function: ${expr.callee.name}`);
       }
       if (expr.args.length !== 1) {

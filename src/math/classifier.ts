@@ -1,8 +1,7 @@
 import type { Axis, EquationClassification, ParseClassifyResult } from '../types/contracts';
-import { collectIdentifiers, type Expression } from './ast';
+import type { Expression } from './ast';
 import { explicitAxesFor } from './evaluator';
-import { toLatex } from './latex';
-import { parseMath } from './parser';
+import { blockIdentifierCollector, equationBlockLatex, parseEquationBlock, type EquationDefinition } from './equationBlock';
 
 const CONSTANT_NAMES = new Set(['pi', 'e']);
 const AXES: Axis[] = ['x', 'y', 'z'];
@@ -26,14 +25,14 @@ type ClassificationInfo = {
 
 function analyzeText(
   rawText: string,
-  classify: (ast: Expression) => ClassificationInfo,
+  classify: (ast: Expression, collect: (expr: Expression) => Set<string>) => ClassificationInfo,
 ): ParseClassifyResult {
-  const parsed = parseMath(rawText);
+  const parsed = parseEquationBlock(rawText);
   const source = {
     rawText,
     parseStatus: parsed.status,
     parseErrors: parsed.diagnostics,
-    formattedLatex: parsed.ast ? safeLatex(parsed.ast) : undefined,
+    formattedLatex: parsed.ast ? safeLatex(parsed.ast, parsed.definitions) : undefined,
   };
 
   if (!parsed.ast) {
@@ -47,7 +46,17 @@ function analyzeText(
     };
   }
 
-  const classificationInfo = classify(parsed.ast);
+  const collect = blockIdentifierCollector(parsed.definitions);
+  const classificationInfo = classify(parsed.ast, collect);
+  if (classificationInfo.kind === 'unknown' && parsed.ast.type === 'equality'
+    && parsed.ast.left.type === 'identifier' && !['x', 'y', 'z'].includes(parsed.ast.left.name)
+    && (pickNames(collect(parsed.ast), AXES).size === 0 || classify === classifyGraphAst)) {
+    source.parseStatus = 'partial';
+    source.parseErrors = [{
+      message: 'Add a final plot expression after the definitions.',
+      start: parsed.ast.end, end: parsed.ast.end, severity: 'warning',
+    }];
+  }
   const classification: EquationClassification = {
     kind: classificationInfo.kind,
     label: classificationInfo.label,
@@ -64,15 +73,15 @@ function analyzeText(
   };
 }
 
-function safeLatex(ast: Expression): string | undefined {
+function safeLatex(ast: Expression, definitions: EquationDefinition[]): string | undefined {
   try {
-    return toLatex(ast);
+    return equationBlockLatex(ast, definitions);
   } catch {
     return undefined;
   }
 }
 
-function classifyAst(ast: Expression): ClassificationInfo {
+function classifyAst(ast: Expression, collectIdentifiers: (expr: Expression) => Set<string>): ClassificationInfo {
   const identifiers = nonConstantNames(collectIdentifiers(ast));
 
   if (ast.type === 'tuple' && ast.items.length === 3) {
@@ -140,7 +149,7 @@ function classifyAst(ast: Expression): ClassificationInfo {
   };
 }
 
-function classifyGraphAst(ast: Expression): ClassificationInfo {
+function classifyGraphAst(ast: Expression, collectIdentifiers: (expr: Expression) => Set<string>): ClassificationInfo {
   const identifiers = nonConstantNames(collectIdentifiers(ast));
   const reservedVars = pickNames(identifiers, ['x', 'y', 'z', 't', 'u', 'v']);
   if (ast.type === 'equality' || ast.type === 'tuple' || !isSubset(reservedVars, ['x', 'y'])) {

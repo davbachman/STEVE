@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
-import { autocompletion, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete';
+import { autocompletion } from '@codemirror/autocomplete';
 import { Decoration, EditorView } from '@codemirror/view';
 import { supportedConstantNames, supportedFunctionNames } from '../../math/evaluator';
+import { mathCompletionSource } from './equationCompletions';
 import type { EquationSpec, PlotJobStatus } from '../../types/contracts';
 import { LatexPreview } from './LatexPreview';
 
@@ -11,36 +12,6 @@ interface EquationEditorProps {
   equation: EquationSpec;
   onChange: (rawText: string) => void;
   job?: PlotJobStatus;
-}
-
-const FUNCTION_DETAILS: Record<string, string> = {
-  log: 'log base 10',
-  ln: 'natural log',
-  asin: 'inverse sine',
-  acos: 'inverse cosine',
-  atan: 'inverse tangent',
-};
-
-const MATH_COMPLETIONS = [
-  ...supportedFunctionNames.map((name) => ({
-    label: name,
-    type: 'function',
-    apply: `${name}(`,
-    detail: FUNCTION_DETAILS[name],
-  })),
-  ...supportedConstantNames.map((name) => ({ label: name, type: 'constant' })),
-];
-
-function mathCompletionSource(context: CompletionContext): CompletionResult | null {
-  const word = context.matchBefore(/[a-zA-Z]+$/);
-  if (!word || (word.from === word.to && !context.explicit)) {
-    return null;
-  }
-  return {
-    from: word.from,
-    options: MATH_COMPLETIONS,
-    validFor: /^[a-zA-Z]*$/,
-  };
 }
 
 const EDITOR_EXTENSIONS = [
@@ -74,7 +45,7 @@ export function EquationEditor({ equation, onChange, job }: EquationEditorProps)
           minHeight="46px"
           theme="dark"
           basicSetup={{
-            lineNumbers: false,
+            lineNumbers: source.rawText.includes('\n'),
             foldGutter: false,
             highlightActiveLine: false,
             highlightSelectionMatches: true,
@@ -132,9 +103,19 @@ function SyntaxHelp({ graphExpression }: { graphExpression: boolean }) {
         </span>
       </div>
       <div className="equation-help__row">
+        <span className="equation-help__label">Definitions</span>
+        <span>
+          Write <code>A = x^2 + y^2</code> on its own line, then {graphExpression ? <code>sin(A)</code> : <code>z = sin(A)</code>} on the final line.
+          {' '}Definitions are local to this plot and may use earlier definitions. Names are case-sensitive;
+          {' '}coordinate names (<code>x, y, z, t, u, v</code>), functions, <code>pi</code>, and <code>e</code> are reserved.
+          {' '}Use parentheses to wrap an expression across lines.
+        </span>
+      </div>
+      <div className="equation-help__row">
         <span className="equation-help__label">Operators</span>
         <span>
-          <code>+ − * / ^</code>; other letters (<code>a</code>, <code>b</code>, …) become adjustable constants with sliders
+          <code>+ − * / ^</code>; undefined names (<code>a</code>, <code>b</code>, …) become adjustable constants with sliders.
+          {' '}Defined names are calculated from their expressions and have no slider.
         </span>
       </div>
     </div>

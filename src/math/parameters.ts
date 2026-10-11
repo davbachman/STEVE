@@ -104,7 +104,7 @@ export function syncEquationParameters(
 }
 
 export function equationParameterContext(parameters: readonly EquationParameter[]): Record<string, number> {
-  const values: Record<string, number> = {};
+  const values: Record<string, number> = Object.create(null);
   for (const parameter of parameters) {
     values[parameter.name] = parameter.value;
   }
