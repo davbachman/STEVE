@@ -8,182 +8,25 @@ ST.E.V.E. is a desktop-first, browser-only 3D graphing studio. Build multi-objec
 
 ST.E.V.E. requires a modern desktop browser with WebGL2. Floating-point color-buffer support is recommended for the full rendering path; the app provides a compatibility fallback when it is unavailable.
 
+## Table of Contents
+
+| Guide | What you will find |
+| --- | --- |
+| [Getting Started](docs/getting-started.md) | First scene, object types, and feature overview |
+| [Equations and Local Definitions](docs/equations.md) | Equation syntax, multiline definitions, examples, sliders, and Collapse/Expand controls |
+| [Constants, Animation, and GIFs](docs/animation.md) | Continuous animation, discrete families, camera loops, and lights pinned to curves |
+| [Surface Intersections](docs/intersections.md) | Create a curve from two surfaces |
+| [Appearance, Lighting, and Scene Controls](docs/appearance.md) | Materials, lights, shadows, reflections, and rendering quality |
+| [Viewport Controls and Keyboard Shortcuts](docs/controls.md) | Navigate, select, move, copy, undo, and manage panels |
+| [Files, Recovery, and Exports](docs/files-and-exports.md) | Save/open projects, recover a session, and export PNG, GIF, or STL |
+| [Practical Limits](docs/practical-limits.md) | Rendering limits, sampling, and performance |
+| [Running and Developing Locally](docs/development.md) | Install, run, build, and test the app |
+
+For long formulas, start with [multiline definitions](docs/equations.md#multiline-definitions) and [collapsing the editor](docs/equations.md#collapsing-the-editor). The app's **STEVE → Instructions** menu opens this documentation home page.
+
+## About
+
 Created by David Bachman with GPT 5.4, GPT 5.5, GPT 5.6 Sol, and Fable 5. Learn more at [David Bachman Design](https://davidbachmandesign.com) and subscribe to the AI newsletter [Entropy Bonus](https://profbachman.substack.com).
-
-## Features
-
-- Plot parametric curves `(x(t), y(t), z(t))`, parametric surfaces `(x(u,v), y(u,v), z(u,v))`, implicit surfaces `F(x,y,z)=0`, and explicit surfaces solved for `x`, `y`, or `z`.
-- Use the streamlined Graph workflow for `z=f(x,y)` by entering only `f(x,y)`.
-- Derive an intersection curve from any two surface objects; the curve updates when either source surface is edited, moved, or animated.
-- Combine plots, intersection curves, point lights, and directional lights in one scene.
-- Pin point or directional lights to parametric curves, scrub their curve parameter, and animate them with endpoint-aware bounce or loop playback.
-- Edit equations with function autocomplete, an on-demand syntax reference, automatic equation classification, a live LaTeX preview, and inline error messages.
-- Turn user-defined equation constants into continuous sliders, ping-pong animations, or discrete families of sampled copies.
-- Record full-detail animated-constant loops, curve-pinned light paths, and camera turntable loops as GIF files.
-- Rename and reposition plots and lights, edit curve/surface domains and sampling density, and choose implicit-meshing bounds and quality.
-- Style objects with material presets, color, opacity, reflectiveness, roughness, refraction, index of refraction, and emissive color/strength.
-- Add a UV-style grid to parametric and explicit surfaces, or add independently colored and spaced X/Y/Z contour lines to surfaces.
-- Configure ambient, point, and directional lighting; soft directional and point-light shadows; solid or gradient backgrounds; an optional reflective ground plane; the XY grid; axes; and numbered axis labels.
-- Choose perspective or orthographic projection, use axis-aligned view presets, frame a selection, or run a continuous turntable animation.
-- Tune ACES, Filmic, or un-tonemapped output, exposure, light halos, and interactive rendering quality.
-- Work with visible undo/redo and duplicate/delete controls, object copy/paste, visibility controls, collapsible sidebars, and live mesh-progress/error indicators.
-- Save and reopen scene objects, camera pose, and scene/render settings, recover the last local session, export PNG images at 1×/2×/4×, and export plots or intersection curves as STL meshes.
-- Keep equation parsing and meshing responsive through browser workers; no application install or server-side renderer is required.
-
-## Quick Start
-
-1. [Open the live app](https://davbachman.github.io/STEVE/). Your last local session is restored when available. A new project begins with ambient lighting and `Directional Light 1`; its **On/Off** button controls illumination, and **Handle** shows its draggable viewport gizmo.
-2. Under **Curve**, choose `+ Parametric` or `+ Intersection`. Under **Surface**, choose `+ Graph`, `+ Parametric`, or `+ Implicit`. Under **Lights**, choose `+ Point` or `+ Directional`.
-3. Select a plot in the object list, then replace its example equation in the editor across the top. Select a light to edit its controls in the right inspector.
-4. For plots and lights, use the **Object** tab for name, position, domain, sampling, bounds, quality, equation constants, or curve pinning. An intersection's Object tab selects its source surfaces and adjusts its width. Use **Appearance** for material or light properties.
-5. Click empty viewport space or press `Esc` to clear the selection and show **Scene Settings** in the right panel.
-6. Move around the viewport with right-drag to orbit, `Shift` + right-drag to pan, and the scroll wheel to zoom. Left-drag a selected plot or unpinned light to move it in the XY plane; hold `Shift` while left-dragging to change its Z position.
-7. Use **File** to start a new project, save/open a project, export a PNG, or export the selected plot/intersection as STL. Use **STEVE → Settings** for rendering and export-quality controls.
-
-The **STEVE** menu also contains the About dialog, this Instructions page, and a Feedback form. Sending feedback opens a draft in your default email app.
-
-## Equation Input
-
-| Object or form | What to enter | Example |
-| --- | --- | --- |
-| Curve → Parametric | A 3-tuple using `t` | `(cos(t), sin(t), 0.2*t)` |
-| Surface → Graph | A function of `x` and `y`; `z=` is supplied | `x^2 - y^2` |
-| Surface → Parametric | A 3-tuple using `u` and `v` | `((2+0.7*cos(v))*cos(u), (2+0.7*cos(v))*sin(u), 0.7*sin(v))` |
-| Surface → Implicit | An equality involving `x`, `y`, and/or `z` | `x^2 + y^2 + z^2 = 4` |
-| Explicit surface | An equality solved for one axis | `x = y^2 + z^2`, `y = sin(x) + z`, or `z = x*y` |
-
-Graph objects intentionally accept only the `f(x,y)` shorthand. To enter a full `x=`, `y=`, or `z=` equation, start with a non-Graph plot—for example **Surface → Parametric**—and replace its equation. ST.E.V.E. reclassifies the object automatically.
-
-The equation language supports:
-
-- Operators: `+`, `-`, `*`, `/`, and `^`.
-- Constants: `pi` and `e`.
-- Functions: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `sinh`, `cosh`, `tanh`, `exp`, `log`, `ln`, `sqrt`, and `abs`. `log` is base 10; `ln` is natural log.
-- Adjustable constants: other letters such as `a`, `b`, or `c` become controls under **Object → Constants**.
-
-Powers bind before a leading sign: `-x^2` means `-(x^2)`, while `(-x)^2` squares the negative value. Negative exponents are supported (`2^-2 = 0.25`), and power chains group from the right (`2^3^2 = 512`).
-
-Curves and parametric/explicit surfaces leave gaps across detected undefined regions and discontinuities, such as the pole of `1/x`, instead of joining them with lines or triangles. Intermediate samples distinguish poles from steep continuous slopes. This is a numerical check: extremely narrow singularities or rapid oscillations can still fall between samples.
-
-Click the `ƒx` button beside the editor for the in-app syntax reference. Numeric inspector fields also accept expressions such as `pi/2` and `sqrt(2)`; press `Enter` or leave the field to apply a typed value.
-
-Incomplete or invalid equations show an explanation beneath the editor and underline the problem. If an earlier valid plot remains visible, the viewport identifies it as **Showing last valid equation**.
-
-## Constants, Families, and GIFs
-
-Every user-defined constant starts in **Continuous** mode:
-
-1. Drag **Value** to evaluate the object at a particular value.
-2. Put the slider at its minimum or maximum and type a new endpoint into the number field to change that end of the range.
-3. Press play to sweep continuously between the endpoints. While it is playing, adjust the constant's speed or choose **Record loop** to export one full ping-pong cycle as a GIF.
-
-Switch the mode button to **Discrete** to sample equally spaced levels instead. Set **num copies**, use the value slider to show one level, or press play to show all levels at once. Multiple discrete constants that are showing all copies produce every combination of their sampled values, so high copy counts can make a scene expensive to mesh and draw.
-
-To record a camera orbit, clear the object selection, enable **Turntable animation** in Scene Settings, set **Orbit speed**, and choose **Record loop**. GIF exports preserve the viewport aspect ratio. Under **STEVE → Settings**, choose a maximum longest edge of 480, 720, or 1,080 pixels and a target frame rate of 10, 15, or 20 fps.
-
-## Pinning Lights to Parametric Curves
-
-1. Select a point or directional light and enable **Pin to curve** on its **Object** tab.
-2. Click **Click here, and then click parameterized curve to pin light to**, then click a parametric curve in the viewport. Press `Esc` to cancel picking. The selected curve's card replaces the prompt.
-3. Use the `t` slider to place the light anywhere between the curve's current parameter bounds. The light follows edits to the curve, its transform, its bounds, and its equation constants.
-4. Press the triangle beside the slider to animate. Curves with different endpoint positions bounce from one end to the other; curves whose endpoints meet advance continuously and wrap around as a loop.
-5. While playback is active, adjust **t speed** or choose **Record loop** to export one complete light-path GIF. Recording restores the light's prior parameter value when it finishes.
-
-A pinned light's independent position control is hidden and its viewport handle cannot be dragged. Disable **Pin to curve** to detach it at its current curve position. A directional light remains aimed from its moving tail toward the world origin throughout playback.
-
-## Surface Intersections
-
-1. Choose **Curve → + Intersection** and select the new intersection object.
-2. Click **Surface 1**, then click the first source surface in the viewport.
-3. Click **Surface 2**, then click a different source surface. Press `Esc` to cancel surface picking.
-4. Adjust **Width** on the Object tab and the curve material on the Appearance tab.
-
-Intersections are derived in world space, so they follow source-surface edits, movement, and animation and do not have an independent position control. Their accuracy follows the source meshes; increase the source surfaces' sample counts or implicit quality when a more detailed intersection is needed.
-
-## Appearance, Lighting, and Scene Controls
-
-The **Appearance** tab provides Matte Plastic, Glossy Plastic, Ceramic, Brushed Metal, Chrome, Neon Yellow, Clear Glass, Frosted Glass, Tinted Glass, Rubber, and Mirror presets. New parametric curves use Ceramic by default, while intersection curves use the emissive Neon Yellow preset. Presets can be customized with the material controls. Refraction takes effect when opacity is below 1. **Surface Decorations** contains grid controls for parametric/explicit surfaces and X/Y/Z contour controls for non-curve plot surfaces.
-
-Point lights provide position, color, intensity, range, and shadow controls. Directional lights provide position, color, intensity, and shadows. Their viewport gizmo is an arrow with a draggable handle at its tail; both the arrow and the light rays always point from that position toward the world origin. Both light types can be pinned to a parametric curve from the Object tab. Use a light's **On/Off** button to switch illumination without losing its intensity setting; its separate **Handle** checkbox only shows or hides the editor gizmo.
-
-With nothing selected, **Scene Settings** controls the turntable, ambient light, shadow-map resolution and softness, projection, background, ground plane and reflection, XY grid, axes, and axis labels. **STEVE → Settings** controls tone mapping, exposure, Halos, PNG export scale, GIF maximum size and frame rate, and interactive quality.
-
-Interactive quality adjusts viewport pixel density, shadow resolution, and reflection detail. This selector does not change equation sampling. Stationary scenes stop redrawing once their reflections settle, and unchanged shadows are reused.
-
-## Viewport Controls
-
-| Input | Action |
-| --- | --- |
-| Click an object | Select it |
-| Left-drag a selected plot or unpinned light | Move in XY |
-| `Shift` + left-drag | Move along Z |
-| Right-drag | Orbit |
-| `Shift` + right-drag | Pan |
-| Scroll | Zoom |
-| Double-click | Frame the selection, or the scene when nothing is selected |
-| `Top`, `Front`, `Side` | Use an axis-aligned view |
-| `⛶` | Frame the selection/scene |
-| `⌂` | Reset the camera |
-| `?` | Show or hide the viewport control reminder |
-
-The two panel icons in the top-right corner hide or restore the left and right sidebars. In smaller windows, the panels open as drawers, one at a time; click the shaded area to close them. **Undo** and **Redo** are beside the File menu and retain the latest 100 document changes. Selecting an object reveals its **Duplicate** and **Delete** buttons.
-
-## Keyboard Shortcuts
-
-Except for `Esc`, shortcuts apply when focus is not inside a text or number field.
-
-| Shortcut | Action |
-| --- | --- |
-| `Esc` | Cancel an in-progress GIF recording, cancel intersection-surface/light-curve picking, or clear the selection |
-| `Delete` or `Backspace` | Delete the selected object |
-| `Command/Ctrl` + `C` | Copy the selected object and all of its settings |
-| `Command/Ctrl` + `V` | Paste an object; pasting a full tuple or equality creates a new classified plot |
-| `Command/Ctrl` + `Z` | Undo |
-| `Command/Ctrl` + `Shift` + `Z` | Redo |
-| `Command/Ctrl` + `Y` | Redo |
-
-## Files and Exports
-
-- **File → Save** writes scene objects, camera pose, and scene/render settings to `scene.3dplot.json` by default. **Open** accepts `.json` and `.3dplot.json` project files and validates them before replacing the scene. Current selection and open UI state are not stored.
-- **File → Export PNG** saves the current viewport. Choose Standard (1×), High (2×), or Ultra (4×) under **STEVE → Settings**.
-- **Record loop** exports GIF animation from the Scene turntable controls, a playing continuous constant, or an animated curve-pinned light. The current object selection is temporarily cleared while frames are captured and restored when recording finishes or is canceled, keeping selection outlines and light gizmos out of the GIF. GIF maximum size and target frame rate are configured under **STEVE → Settings**.
-- **File → Export STL** is available when a plot or intersection is selected. It captures the current equations and settings, then builds a fresh mesh at the requested full sampling/quality in a browser worker. Intersections use the captured source surfaces and their positions. The export preserves world position and discontinuity gaps; visual material and lighting settings are not part of STL. Invalid equations must be fixed before exporting.
-- Parametric curves and intersection curves export their rendered tube/ribbon geometry, not abstract mathematical paths.
-- STL export does not guarantee a closed or watertight solid; inspect open surfaces before using them for 3D printing.
-
-All files stay under your control through the browser's save dialog or download folder.
-
-ST.E.V.E. automatically keeps a recovery copy in this browser and restores it on the next visit. The top bar shows whether there are unsaved changes. **New** and **Open** offer **Save and continue**, **Discard changes**, or **Cancel** before replacing unsaved work; leaving the page also requests a browser warning. Use **File → Save** for a permanent copy, since clearing browser storage removes local recovery. File-operation and recovery errors appear onscreen.
-
-## Practical Limits
-
-- The renderer uses up to four point lights and four directional lights. Up to three point lights can cast shadows, subject to available graphics hardware; the first eligible directional light supplies the directional shadow map.
-- Up to four objects use live per-object reflection probes at once. PNG output is capped at 8,192 pixels on its longest side, so the requested scale can be reduced for an already-large viewport.
-- GIF recording is capped at 360 turntable frames or 180 parameter/light frames. Long, slow loops preserve their duration and may therefore run below the selected target frame rate. Higher GIF dimensions and frame rates take longer to encode and create larger files.
-- Large implicit bounds and higher implicit quality take longer to mesh. The inspector warns about invalid or unusually large bounds.
-- Meshing workers start on demand and release their memory after 30 seconds of inactivity. If a worker stops during an equation calculation, the app retries that calculation once in a fresh worker.
-- Large discrete families, dense surface sampling, reflections, refraction, shadows, and Halos can all increase rendering cost. Use **Performance** or **Balanced** interactive quality while editing a heavy scene.
-
-## Run Locally
-
-Use Node.js `^20.19.0` or `>=22.12.0`.
-
-```bash
-npm ci
-npm run dev
-```
-
-Vite prints the local URL to open in your browser. Additional repository checks are:
-
-```bash
-npm run build
-npm run lint
-npm run test:run
-npm run test:e2e:install
-npm run test:e2e
-```
-
-The app is built with React, TypeScript, Vite, raw WebGL2, Zustand, CodeMirror, KaTeX, browser workers, Vitest, and Playwright.
 
 ## License
 
