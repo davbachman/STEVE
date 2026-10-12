@@ -119,18 +119,6 @@ export function shouldPlotCastInteractiveShadows(plot: RenderableObject): boolea
   return classifyInteractiveShadowMode(plot) !== 'none';
 }
 
-export function resolveDirectionalShadowFrustumSize(scene: AppState['scene']): number {
-  const graphBounds = scene.defaultGraphBounds;
-  const graphSpanX = Math.abs(graphBounds.max.x - graphBounds.min.x);
-  const graphSpanY = Math.abs(graphBounds.max.y - graphBounds.min.y);
-  return Math.max(
-    12,
-    graphSpanX * 1.8,
-    graphSpanY * 1.8,
-    scene.groundPlaneVisible ? scene.groundPlaneSize * 2.4 : 0,
-  );
-}
-
 export function createRendererSceneSnapshot(
   state: Pick<AppState, 'scene' | 'render' | 'objects' | 'selectedId' | 'plotJobs'>,
   camera: RendererCameraLike | null,

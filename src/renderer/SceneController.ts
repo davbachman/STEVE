@@ -17,7 +17,6 @@ import { isParametricCurvePlot, isRenderableObject, isSurfacePlot } from '../typ
 import {
   classifyInteractiveShadowMode,
   createRendererSceneSnapshot,
-  resolveDirectionalShadowFrustumSize,
   type RendererCameraLike,
   type RendererSceneSnapshot,
 } from './renderSnapshot';
@@ -26,7 +25,8 @@ import {
   shouldRenderPointLightGizmo,
 } from './pointLightVisibility';
 import { shadowVisibilityGlsl } from './shadowVisibility';
-import { resolveInteractiveRenderBudget, resolveShadowUpVector } from './renderBudget';
+import { resolveInteractiveRenderBudget, resolvePngExportBudget, type RenderBudget } from './renderBudget';
+import { fitDirectionalShadow, type ShadowBounds } from './shadowFrustum';
 import {
   buildPlotGeometry,
   intersectRayWithPlotGeometry,
@@ -348,8 +348,12 @@ export class SceneController {
   private frameIndex = 0;
   private pendingProbeRefresh = false;
   private shadowSceneKey = '';
+  private pngExportBudget: RenderBudget | null = null;
+  private directionalShadowTexelDepth = 0;
   private whiteShadowTexture: WebGLTexture | null = null;
   private whiteShadowCubemap: WebGLTexture | null = null;
+  private whiteComparisonTexture: WebGLTexture | null = null;
+  private whiteComparisonCubemap: WebGLTexture | null = null;
   private lastSavedCamera: CameraState | undefined;
   private cameraSaveTimer: ReturnType<typeof setTimeout> | undefined;
   private planarReflection: PlanarReflectionTargets = emptyPlanarReflectionTargets();
@@ -402,8 +406,6 @@ export class SceneController {
   private readonly viewMatrix = mat4.create();
   private readonly projectionMatrix = mat4.create();
   private readonly lightViewProjection = mat4.create();
-  private readonly shadowViewMatrix = mat4.create();
-  private readonly shadowProjectionMatrix = mat4.create();
   private readonly pointShadowViewMatrix = mat4.create();
   private readonly pointShadowProjectionMatrix = mat4.create();
   private readonly pointShadowViewProjection = mat4.create();
@@ -490,6 +492,8 @@ export class SceneController {
       deleteTexture(gl, this.environmentCubemap);
       deleteTexture(gl, this.whiteShadowTexture);
       deleteTexture(gl, this.whiteShadowCubemap);
+      deleteTexture(gl, this.whiteComparisonTexture);
+      deleteTexture(gl, this.whiteComparisonCubemap);
       if (this.groundMesh) {
         deleteVertexArray(gl, this.groundMesh.vao);
         deleteBuffer(gl, this.groundMesh.indexBuffer);
@@ -543,24 +547,34 @@ export class SceneController {
         this.resizeViewport();
         const baseWidth = this.canvas.width;
         const baseHeight = this.canvas.height;
-        const safeScale = Math.max(1, Math.min(scale, MAX_EXPORT_DIMENSION / Math.max(baseWidth, baseHeight)));
+        const maxDimension = Math.min(MAX_EXPORT_DIMENSION, gl.getParameter(gl.MAX_TEXTURE_SIZE), gl.getParameter(gl.MAX_RENDERBUFFER_SIZE));
+        const safeScale = Math.max(1, Math.min(scale, maxDimension / Math.max(baseWidth, baseHeight)));
+        const snapshot = this.latestSnapshot;
+        let encoding: Promise<void>;
         try {
-          if (safeScale > 1) {
-            this.canvas.width = Math.round(baseWidth * safeScale);
-            this.canvas.height = Math.round(baseHeight * safeScale);
-            gl.viewport(0, 0, this.canvas.width, this.canvas.height);
+          if (snapshot) {
+            const pointCount = this.collectActivePointShadowLights(snapshot, this.collectRenderablePointLights(snapshot)).length;
+            this.pngExportBudget = resolvePngExportBudget(safeScale, snapshot.scene.shadow.shadowMapResolution,
+              this.directionalShadowsEnabled(snapshot), pointCount,
+              snapshot.plots.some(({ interactiveShadowMode }) => interactiveShadowMode === 'attenuated'),
+              Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE), gl.getParameter(gl.MAX_CUBE_MAP_TEXTURE_SIZE)));
           }
+          this.canvas.width = Math.round(baseWidth * safeScale);
+          this.canvas.height = Math.round(baseHeight * safeScale);
           this.updateCameraMatrices();
           this.renderScene();
-          await exportCanvasPng(gl, this.canvas, this.latestSnapshot?.scene ?? useAppStore.getState().scene, filename);
+          // Pixel readback happens synchronously before encoding yields. Restore
+          // preview resources immediately, including for 1x exports and failures.
+          encoding = exportCanvasPng(gl, this.canvas, snapshot?.scene ?? useAppStore.getState().scene, filename);
         } finally {
-          if (this.canvas.width !== baseWidth || this.canvas.height !== baseHeight) {
-            this.canvas.width = baseWidth;
-            this.canvas.height = baseHeight;
-            gl.viewport(0, 0, baseWidth, baseHeight);
-            this.renderScene();
-          }
+          this.pngExportBudget = null;
+          this.canvas.width = baseWidth;
+          this.canvas.height = baseHeight;
+          this.updateCameraMatrices();
+          this.renderScene();
+          if (this.pendingProbeRefresh) this.requestRender();
         }
+        await encoding;
       },
       recordTurntableGif: (onProgress) => this.recordTurntableLoop(onProgress),
       recordParameterGif: (plotId, parameterName, onProgress) => (
@@ -1172,14 +1186,14 @@ export class SceneController {
     this.frameIndex += 1;
     this.probeRefreshesThisFrame = 0;
     this.pendingProbeRefresh = false;
-    const budget = resolveInteractiveRenderBudget(snapshot.render.interactiveQuality, window.devicePixelRatio);
+    const budget = this.pngExportBudget ?? resolveInteractiveRenderBudget(snapshot.render.interactiveQuality, window.devicePixelRatio);
     this.ensureProbeResources(budget.probeSize);
     this.pruneProbePool(snapshot);
     const pointLights = this.collectRenderablePointLights(snapshot);
     const pointShadowLights = this.collectActivePointShadowLights(snapshot, pointLights);
     const hasTransparentCasters = snapshot.plots.some(({ interactiveShadowMode }) => interactiveShadowMode === 'attenuated');
     this.ensureShadowResources(
-      Math.min(snapshot.scene.shadow.shadowMapResolution, budget.maxShadowSize),
+      this.pngExportBudget ? budget.maxShadowSize : Math.min(snapshot.scene.shadow.shadowMapResolution, budget.maxShadowSize),
       this.directionalShadowsEnabled(snapshot),
       pointShadowLights.length,
       hasTransparentCasters,
@@ -1188,12 +1202,10 @@ export class SceneController {
       this.shadowResources.size,
       this.activeDirectionalShadowLight(snapshot)?.light,
       pointShadowLights.map(({ light }) => light),
-      snapshot.scene.defaultGraphBounds,
       snapshot.scene.groundPlaneVisible,
       snapshot.scene.groundPlaneSize,
-      this.directionalShadowsEnabled(snapshot) ? Array.from(this.camera.target) : null,
-      snapshot.plots.filter(({ castsInteractiveShadows }) => castsInteractiveShadows)
-        .map(({ plot, meshVersion }) => [plot.id, meshVersion, plot.transform, plot.material, curveGeometryStyleKey(plot)]),
+      snapshot.plots.filter(({ plot, isRenderable }) => plot.visible && isRenderable)
+        .map(({ plot, meshVersion }) => [plot.id, meshVersion, plot.transform, plot.castShadows, plot.material, curveGeometryStyleKey(plot)]),
     ]);
     if (this.shadowSceneKey !== shadowSceneKey) {
       this.renderDirectionalShadowMaps(snapshot);
@@ -1475,25 +1487,21 @@ export class SceneController {
     const shadow = this.shadowResources;
     const shadowSize = shadow.size;
     const lightDirection = normalizeVec3(activeShadowLight.light.direction, { x: -0.6, y: -0.4, z: -1 });
-    const cameraTarget = this.camera.target;
-    const lightDistance = 24;
-    const lightPosition = vec3.fromValues(
-      cameraTarget[0] - lightDirection.x * lightDistance,
-      cameraTarget[1] - lightDirection.y * lightDistance,
-      cameraTarget[2] - lightDirection.z * lightDistance,
-    );
-    mat4.lookAt(this.shadowViewMatrix, lightPosition, cameraTarget, resolveShadowUpVector(lightDirection));
-    const frustumSize = resolveDirectionalShadowFrustumSize(scene);
-    mat4.ortho(
-      this.shadowProjectionMatrix,
-      -frustumSize,
-      frustumSize,
-      -frustumSize,
-      frustumSize,
-      0.1,
-      Math.max(60, frustumSize * 4),
-    );
-    mat4.multiply(this.lightViewProjection, this.shadowProjectionMatrix, this.shadowViewMatrix);
+    const bounds: ShadowBounds[] = [];
+    for (const { plot, isRenderable } of snapshot.plots) {
+      const geometry = this.plotVisuals.get(plot.id)?.geometry;
+      if (!plot.visible || !isRenderable || !geometry) continue;
+      const { min, max } = geometry.bounds;
+      const p = plot.transform.position;
+      bounds.push({
+        min: { x: min.x + p.x, y: min.y + p.y, z: min.z + p.z },
+        max: { x: max.x + p.x, y: max.y + p.y, z: max.z + p.z },
+      });
+    }
+    const fit = fitDirectionalShadow(bounds, lightDirection, shadowSize,
+      scene.groundPlaneVisible ? scene.groundPlaneSize : undefined);
+    mat4.copy(this.lightViewProjection, fit.matrix);
+    this.directionalShadowTexelDepth = fit.texelDepth;
 
     gl.viewport(0, 0, shadowSize, shadowSize);
     gl.bindFramebuffer(gl.FRAMEBUFFER, shadow.directionalFramebuffer);
@@ -1765,7 +1773,7 @@ export class SceneController {
       this.planarReflectionSceneKey = '';
       return;
     }
-    const reflectionScale = resolveInteractiveRenderBudget(snapshot.render.interactiveQuality).planarScale;
+    const reflectionScale = (this.pngExportBudget ?? resolveInteractiveRenderBudget(snapshot.render.interactiveQuality)).planarScale;
     this.ensurePlanarReflectionTargets(
       Math.max(1, Math.floor(this.renderTargets.width * reflectionScale)),
       Math.max(1, Math.floor(this.renderTargets.height * reflectionScale)),
@@ -3251,6 +3259,8 @@ export class SceneController {
     });
     gl.uniform1iv(program.uniforms.u_pointShadowSlot, pointShadowSlots);
     gl.uniform1f(program.uniforms.u_shadowSoftness, clamp(scene.shadow.shadowSoftness, 0, 1));
+    gl.uniform1f(program.uniforms.u_shadowTexelDepth, this.directionalShadowTexelDepth);
+    gl.uniform1i(program.uniforms.u_shadowFilterRadius, this.pngExportBudget ? 2 : 1);
     gl.uniform1i(program.uniforms.u_enableShadows, enableShadows && this.directionalShadowsEnabled(snapshot) ? 1 : 0);
     gl.uniform1i(program.uniforms.u_enableReflections, enableReflections ? 1 : 0);
     gl.uniform1f(program.uniforms.u_probeMaxLod, Math.max(0, Math.log2(this.probeRenderResources.size || DEFAULT_PROBE_SIZE) - 1));
@@ -3268,7 +3278,7 @@ export class SceneController {
     gl.uniform1f(program.uniforms.u_ior, 1.45);
     gl.uniform1i(program.uniforms.u_pointGizmoCorrectionEnabled, 0);
     gl.uniform2f(program.uniforms.u_pointGizmoCorrectionOrigin, 0, 0);
-    bindTexture(gl, this.shadowResources.directionalDepthTexture ?? this.whiteShadowTexture, 0, gl.TEXTURE_2D);
+    bindTexture(gl, this.shadowResources.directionalDepthTexture ?? this.whiteComparisonTexture, 0, gl.TEXTURE_2D);
     bindTexture(gl, this.shadowResources.directionalTransDepthTexture ?? this.whiteShadowTexture, 1, gl.TEXTURE_2D);
     bindTexture(gl, this.shadowResources.directionalTransColorTexture ?? this.whiteShadowTexture, 2, gl.TEXTURE_2D);
     bindTexture(gl, this.environmentCubemap, 3, gl.TEXTURE_CUBE_MAP);
@@ -3288,7 +3298,7 @@ export class SceneController {
     const supportedPointShadowSlots = this.supportedPointShadowLightCount();
     for (let shadowSlot = 0; shadowSlot < supportedPointShadowSlots; shadowSlot += 1) {
       const unitBase = POINT_SHADOW_TEXTURE_UNIT_BASE + shadowSlot * POINT_SHADOW_TEXTURE_UNIT_STRIDE;
-      bindTexture(gl, this.shadowResources.pointDepthCubemaps[shadowSlot] ?? this.whiteShadowCubemap, unitBase, gl.TEXTURE_CUBE_MAP);
+      bindTexture(gl, this.shadowResources.pointDepthCubemaps[shadowSlot] ?? this.whiteComparisonCubemap, unitBase, gl.TEXTURE_CUBE_MAP);
       bindTexture(gl, this.shadowResources.pointTransDepthCubemaps[shadowSlot] ?? this.whiteShadowCubemap, unitBase + 1, gl.TEXTURE_CUBE_MAP);
       bindTexture(gl, this.shadowResources.pointTransColorCubemaps[shadowSlot] ?? this.whiteShadowCubemap, unitBase + 2, gl.TEXTURE_CUBE_MAP);
     }
@@ -3363,7 +3373,7 @@ export class SceneController {
     if (!needsRefresh) {
       return { useProbe: true, refreshed: false, texture: probe.cubemap, center: probe.center };
     }
-    if (this.probeRefreshesThisFrame >= PROBE_REFRESHES_PER_FRAME) {
+    if (this.probeRefreshesThisFrame >= (this.pngExportBudget ? MAX_REFLECTION_PROBES : PROBE_REFRESHES_PER_FRAME)) {
       this.pendingProbeRefresh = true;
       // Out of refresh budget this frame; a previously rendered probe stays
       // usable while slightly stale, an empty one falls back to the environment.
@@ -4210,7 +4220,7 @@ export class SceneController {
     }
     const shadow = this.shadowResources;
     if (directional && !shadow.directionalFramebuffer) {
-      shadow.directionalDepthTexture = createDepthTexture(gl, targetSize, targetSize);
+      shadow.directionalDepthTexture = createDepthTexture(gl, targetSize, targetSize, true);
       shadow.directionalFramebuffer = createFramebuffer(gl, [
         { attachment: gl.DEPTH_ATTACHMENT, texture: shadow.directionalDepthTexture, target: gl.TEXTURE_2D },
       ]);
@@ -4245,7 +4255,7 @@ export class SceneController {
         this.shadowSceneKey = '';
       }
     };
-    resizeCubemaps(shadow.pointDepthCubemaps, pointCount, () => createDepthCubemap(gl, targetSize));
+    resizeCubemaps(shadow.pointDepthCubemaps, pointCount, () => createDepthCubemap(gl, targetSize, true));
     resizeCubemaps(shadow.pointTransDepthCubemaps, transparent ? pointCount : 0, () => createDepthCubemap(gl, targetSize));
     resizeCubemaps(shadow.pointTransColorCubemaps, transparent ? pointCount : 0,
       () => createColorCubemap(gl, targetSize, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE));
@@ -4336,6 +4346,8 @@ export class SceneController {
     gl.bindVertexArray(null);
     this.whiteShadowTexture = createWhiteShadowTexture(gl, false);
     this.whiteShadowCubemap = createWhiteShadowTexture(gl, true);
+    this.whiteComparisonTexture = createWhiteComparisonTexture(gl, false);
+    this.whiteComparisonCubemap = createWhiteComparisonTexture(gl, true);
     this.groundMesh = createGroundMesh(gl);
   }
 }
@@ -4376,6 +4388,8 @@ function createPrograms(gl: WebGL2RenderingContext): RenderPrograms {
     'u_pointRange',
     'u_pointShadowSlot',
     'u_shadowSoftness',
+    'u_shadowTexelDepth',
+    'u_shadowFilterRadius',
     'u_shadowDepth',
     'u_transShadowDepth',
     'u_transShadowColor',
@@ -4608,16 +4622,18 @@ uniform float u_pointIntensity[${MAX_POINT_LIGHTS}];
 uniform float u_pointRange[${MAX_POINT_LIGHTS}];
 uniform int u_pointShadowSlot[${MAX_POINT_LIGHTS}];
 uniform float u_shadowSoftness;
-uniform sampler2D u_shadowDepth;
+uniform float u_shadowTexelDepth;
+uniform int u_shadowFilterRadius;
+uniform highp sampler2DShadow u_shadowDepth;
 uniform sampler2D u_transShadowDepth;
 uniform sampler2D u_transShadowColor;
-uniform samplerCube u_pointShadowDepth0;
+uniform highp samplerCubeShadow u_pointShadowDepth0;
 uniform samplerCube u_pointShadowTransDepth0;
 uniform samplerCube u_pointShadowTransColor0;
-uniform samplerCube u_pointShadowDepth1;
+uniform highp samplerCubeShadow u_pointShadowDepth1;
 uniform samplerCube u_pointShadowTransDepth1;
 uniform samplerCube u_pointShadowTransColor1;
-uniform samplerCube u_pointShadowDepth2;
+uniform highp samplerCubeShadow u_pointShadowDepth2;
 uniform samplerCube u_pointShadowTransDepth2;
 uniform samplerCube u_pointShadowTransColor2;
 uniform samplerCube u_environment;
@@ -4651,15 +4667,15 @@ float sampleDepthTexture(sampler2D tex, vec2 uv) {
   return texture(tex, uv).r;
 }
 
-float samplePointShadowDepth(int shadowSlot, vec3 direction) {
+float samplePointShadowComparison(int shadowSlot, vec3 direction, float referenceDepth) {
   if (shadowSlot == 0) {
-    return texture(u_pointShadowDepth0, direction).r;
+    return texture(u_pointShadowDepth0, vec4(direction, referenceDepth));
   }
   if (shadowSlot == 1) {
-    return texture(u_pointShadowDepth1, direction).r;
+    return texture(u_pointShadowDepth1, vec4(direction, referenceDepth));
   }
   if (shadowSlot == 2) {
-    return texture(u_pointShadowDepth2, direction).r;
+    return texture(u_pointShadowDepth2, vec4(direction, referenceDepth));
   }
   return 1.0;
 }
@@ -4695,20 +4711,38 @@ ${shadowVisibilityGlsl}
 float sampleShadow() {
   vec3 projected = v_shadowPosition.xyz / max(v_shadowPosition.w, 0.0001);
   projected = projected * 0.5 + 0.5;
+  // Compare each tap against the receiver plane at that tap, not the depth at
+  // the kernel center. Otherwise a sloping surface can falsely shadow itself.
+  vec3 dx = dFdx(projected);
+  vec3 dy = dFdy(projected);
+  float determinant = dx.x * dy.y - dx.y * dy.x;
+  vec2 depthGradient = abs(determinant) > 0.0000000001
+    ? clamp(vec2(dy.y * dx.z - dx.y * dy.z, dx.x * dy.z - dy.x * dx.z) / determinant, -10.0, 10.0)
+    : vec2(0.0);
   if (projected.x < 0.0 || projected.x > 1.0 || projected.y < 0.0 || projected.y > 1.0 || projected.z < 0.0 || projected.z > 1.0) {
     return 1.0;
   }
-  float bias = 0.0018 + max(0.0, 1.0 - abs(dot(normalize(v_worldNormal), normalize(-u_shadowDirDirection)))) * 0.003;
-  float softness = mix(0.65, 2.25, clamp(u_shadowSoftness, 0.0, 1.0));
+  float slope = 1.0 - abs(dot(normalize(v_worldNormal), normalize(-u_shadowDirDirection)));
+  float bias = max(0.000002, u_shadowTexelDepth * (0.35 + 1.5 * slope));
+  vec2 texel = 1.0 / vec2(textureSize(u_shadowDepth, 0));
+  bias += min(2.0 * u_shadowTexelDepth, 0.5 * dot(abs(depthGradient), texel));
+  // Keep softness stable when export increases the map's resolution.
+  float softness = mix(0.0, 2.25, clamp(u_shadowSoftness, 0.0, 1.0))
+    * float(textureSize(u_shadowDepth, 0).x) / 1024.0;
+  int radius = max(1, u_shadowFilterRadius);
   float visibility = 0.0;
-  for (int y = -1; y <= 1; y += 1) {
-    for (int x = -1; x <= 1; x += 1) {
-      vec2 offset = vec2(float(x), float(y)) * softness / vec2(textureSize(u_shadowDepth, 0));
-      float depth = sampleDepthTexture(u_shadowDepth, projected.xy + offset);
-      visibility += projected.z - bias <= depth ? 1.0 : 0.0;
+  float weightSum = 0.0;
+  for (int y = -2; y <= 2; y += 1) {
+    for (int x = -2; x <= 2; x += 1) {
+      if (abs(x) > radius || abs(y) > radius) continue;
+      vec2 offset = vec2(float(x), float(y)) * softness * texel / float(radius);
+      float weight = float((radius + 1 - abs(x)) * (radius + 1 - abs(y)));
+      float receiverDepth = projected.z + dot(depthGradient, offset) - bias;
+      visibility += weight * texture(u_shadowDepth, vec3(projected.xy + offset, receiverDepth));
+      weightSum += weight;
     }
   }
-  visibility /= 9.0;
+  visibility /= weightSum;
   float transDepth = sampleDepthTexture(u_transShadowDepth, projected.xy);
   vec3 transColor = texture(u_transShadowColor, projected.xy).rgb;
   if (projected.z - bias > transDepth && transDepth > 0.0 && transDepth < 1.0) {
@@ -4731,25 +4765,21 @@ float samplePointShadow(int shadowSlot, vec3 N, vec3 pointDirection, vec3 lightV
   vec3 referenceAxis = abs(sampleDirection.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
   vec3 tangent = normalize(cross(referenceAxis, sampleDirection));
   vec3 bitangent = cross(sampleDirection, tangent);
-  float cubeTexel = 1.0 / float(textureSize(u_pointShadowDepth0, 0).x);
-  float angularRadius = cubeTexel * mix(0.0, 1.35, clamp(u_shadowSoftness, 0.0, 1.0));
+  float angularRadius = mix(0.0, 2.0, clamp(u_shadowSoftness, 0.0, 1.0)) / 1024.0;
+  int radius = max(1, u_shadowFilterRadius);
   float visibility = 0.0;
-  for (int sampleIndex = 0; sampleIndex < 5; sampleIndex += 1) {
-    vec2 offset = vec2(0.0);
-    if (sampleIndex == 1) {
-      offset = vec2(angularRadius, 0.0);
-    } else if (sampleIndex == 2) {
-      offset = vec2(-angularRadius, 0.0);
-    } else if (sampleIndex == 3) {
-      offset = vec2(0.0, angularRadius);
-    } else if (sampleIndex == 4) {
-      offset = vec2(0.0, -angularRadius);
+  float weightSum = 0.0;
+  for (int y = -2; y <= 2; y += 1) {
+    for (int x = -2; x <= 2; x += 1) {
+      if (abs(x) > radius || abs(y) > radius) continue;
+      vec2 offset = vec2(float(x), float(y)) * angularRadius / float(radius);
+      vec3 direction = normalize(sampleDirection + tangent * offset.x + bitangent * offset.y);
+      float weight = float((radius + 1 - abs(x)) * (radius + 1 - abs(y)));
+      visibility += weight * samplePointShadowComparison(shadowSlot, direction, currentDepth - bias);
+      weightSum += weight;
     }
-    vec3 jitteredDirection = normalize(sampleDirection + tangent * offset.x + bitangent * offset.y);
-    float depth = samplePointShadowDepth(shadowSlot, jitteredDirection);
-    visibility += currentDepth - bias <= depth ? 1.0 : 0.0;
   }
-  visibility /= 5.0;
+  visibility /= weightSum;
   float transDepth = samplePointTransShadowDepth(shadowSlot, lightVector);
   vec3 transColor = samplePointTransShadowColor(shadowSlot, lightVector);
   if (currentDepth - bias > transDepth && transDepth > 0.0 && transDepth < 1.0) {
@@ -5546,17 +5576,33 @@ function createWhiteShadowTexture(gl: WebGL2RenderingContext, cube: boolean): We
   return texture;
 }
 
-function createDepthTexture(gl: WebGL2RenderingContext, width: number, height: number): WebGLTexture {
+function createWhiteComparisonTexture(gl: WebGL2RenderingContext, cube: boolean): WebGLTexture {
+  const texture = cube ? createDepthCubemap(gl, 1, true) : createDepthTexture(gl, 1, 1, true);
+  const target = cube ? gl.TEXTURE_CUBE_MAP : gl.TEXTURE_2D;
+  gl.bindTexture(target, texture);
+  for (let face = 0; face < (cube ? 6 : 1); face += 1) {
+    gl.texSubImage2D(cube ? gl.TEXTURE_CUBE_MAP_POSITIVE_X + face : target, 0, 0, 0, 1, 1,
+      gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, new Uint32Array([0xffffffff]));
+  }
+  gl.bindTexture(target, null);
+  return texture;
+}
+
+function createDepthTexture(gl: WebGL2RenderingContext, width: number, height: number, comparison = false): WebGLTexture {
   const texture = gl.createTexture();
   if (!texture) {
     throw new Error('Failed to create depth texture');
   }
   gl.bindTexture(gl.TEXTURE_2D, texture);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, width, height, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, comparison ? gl.LINEAR : gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, comparison ? gl.LINEAR : gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  if (comparison) {
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL);
+  }
   gl.bindTexture(gl.TEXTURE_2D, null);
   return texture;
 }
@@ -5595,7 +5641,7 @@ function createColorCubemap(
   return texture;
 }
 
-function createDepthCubemap(gl: WebGL2RenderingContext, size: number): WebGLTexture {
+function createDepthCubemap(gl: WebGL2RenderingContext, size: number, comparison = false): WebGLTexture {
   const texture = gl.createTexture();
   if (!texture) {
     throw new Error('Failed to create depth cubemap');
@@ -5614,11 +5660,15 @@ function createDepthCubemap(gl: WebGL2RenderingContext, size: number): WebGLText
       null,
     );
   }
-  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, comparison ? gl.LINEAR : gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MAG_FILTER, comparison ? gl.LINEAR : gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+  if (comparison) {
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_COMPARE_MODE, gl.COMPARE_REF_TO_TEXTURE);
+    gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL);
+  }
   gl.bindTexture(gl.TEXTURE_CUBE_MAP, null);
   return texture;
 }

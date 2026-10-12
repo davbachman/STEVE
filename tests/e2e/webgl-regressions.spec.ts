@@ -2,6 +2,16 @@ import { expect, test } from '@playwright/test';
 
 test.describe('WebGL Regressions', () => {
   test.beforeEach(async ({ page }) => {
+    // These tests read pixels after the renderer goes idle. Preserve the test
+    // drawing buffer so the browser does not discard it after compositing.
+    await page.addInitScript(() => {
+      const original = HTMLCanvasElement.prototype.getContext;
+      HTMLCanvasElement.prototype.getContext = function (contextId: string, options?: WebGLContextAttributes) {
+        return original.call(this, contextId, contextId === 'webgl2'
+          ? { ...options, preserveDrawingBuffer: true }
+          : options);
+      } as typeof original;
+    });
     await page.route('https://cloudflareinsights.com/**', (route) => route.fulfill({
       status: 204,
       headers: { 'access-control-allow-origin': '*' },
@@ -60,7 +70,7 @@ test.describe('WebGL Regressions', () => {
   test('occludes point-light gizmos according to object opacity and depth', async ({ page }) => {
     await page.goto('/?testScene=point-light-gizmo-occlusion');
     await expect(page.getByRole('button', { name: /Gizmo Occluder/i })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Occlusion Test Light/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Occlusion Test Light', exact: true })).toBeVisible();
 
     const webGlGate = page.getByRole('heading', { name: 'WebGL2 Required' });
     if (await webGlGate.isVisible().catch(() => false)) {
@@ -83,7 +93,7 @@ test.describe('WebGL Regressions', () => {
     expect(contrastByOpacity['1']).toBeLessThan(contrastByOpacity['0'] * 0.25);
 
     await setRangeField(page, 'Opacity', '0.5');
-    await page.getByRole('button', { name: /Occlusion Test Light/i }).click();
+    await page.getByRole('button', { name: 'Occlusion Test Light', exact: true }).click();
     await page.getByRole('button', { name: 'Object' }).click();
     const positionY = page.getByRole('textbox', { name: 'Position y' });
     await positionY.fill('-2');
@@ -100,7 +110,7 @@ test.describe('WebGL Regressions', () => {
   test('keeps a pinned point-light gizmo in front of its source curve', async ({ page }) => {
     await page.goto('/?testScene=pinned-light-gizmo-curve');
     await expect(page.getByRole('button', { name: /Pinned Gizmo Curve/i })).toBeVisible();
-    await expect(page.getByRole('button', { name: /Pinned Test Light/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Pinned Test Light', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: /Pinned Gizmo Occluder/i })).toBeVisible();
 
     const webGlGate = page.getByRole('heading', { name: 'WebGL2 Required' });

@@ -18,7 +18,6 @@ import {
   classifyPlotOpacity,
   createRendererSceneSnapshot,
   plotSupportsWireframe,
-  resolveDirectionalShadowFrustumSize,
   shouldPlotCastInteractiveShadows,
   shouldShowPlotWireframe,
 } from '../renderSnapshot';
@@ -242,12 +241,4 @@ describe('renderSnapshot helpers', () => {
     });
   });
 
-  it('keeps hidden helper extents out of the directional shadow frustum', () => {
-    const scene = defaultSceneSettings();
-
-    expect(resolveDirectionalShadowFrustumSize(scene)).toBe(18);
-
-    scene.groundPlaneVisible = true;
-    expect(resolveDirectionalShadowFrustumSize(scene)).toBeCloseTo(38.4);
-  });
 });

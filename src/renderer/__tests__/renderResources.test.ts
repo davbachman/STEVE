@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mat4, vec3 } from 'gl-matrix';
 import { SceneController } from '../SceneController';
-import { resolveInteractiveRenderBudget, resolveShadowUpVector } from '../renderBudget';
+import { resolveInteractiveRenderBudget, resolvePngExportBudget, resolveShadowUpVector, type RenderBudget } from '../renderBudget';
 import { createRendererSceneSnapshot, type RendererSceneSnapshot } from '../renderSnapshot';
 import { createDefaultGraph, createDirectionalLight, createPointLight, defaultRenderSettings, defaultSceneSettings } from '../../state/defaults';
 import type { CameraState } from '../../types/contracts';
@@ -12,6 +12,7 @@ function mockGl() {
   let id = 0;
   return {
     FRAMEBUFFER_COMPLETE: 1,
+    getParameter: vi.fn(() => 4096),
     COLOR_ATTACHMENT0: 100,
     COLOR_ATTACHMENT15: 115,
     DEPTH_ATTACHMENT: 200,
@@ -35,6 +36,7 @@ type ControllerInternals = {
   renderPrograms: object;
   latestSnapshot: RendererSceneSnapshot;
   pendingProbeRefresh: boolean;
+  pngExportBudget: RenderBudget | null;
   recordingGif: boolean;
   camera: { alpha: number; beta: number; radius: number; target: vec3; upVector: vec3 };
   restoreCamera: (state: CameraState | undefined) => void;
@@ -53,10 +55,11 @@ type ControllerInternals = {
 
 function controllerFixture() {
   const gl = mockGl();
-  const controller = new SceneController(document.createElement('canvas'));
+  const canvas = document.createElement('canvas');
+  const controller = new SceneController(canvas);
   const internal = controller as unknown as ControllerInternals;
   internal.gl = gl as unknown as WebGL2RenderingContext;
-  return { gl, internal };
+  return { gl, internal, controller, canvas };
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -182,7 +185,7 @@ describe('interactive quality budgets', () => {
 
 
 describe('render invalidation and saved camera', () => {
-  it('reuses shadows across selection and orbit changes, but refreshes after panning or remeshing', () => {
+  it('reuses shadows across selection, orbit, and pan changes, but refreshes after geometry changes', () => {
     const { internal } = controllerFixture();
     const object = createDefaultGraph();
     const light = createDirectionalLight();
@@ -211,10 +214,16 @@ describe('render invalidation and saved camera', () => {
     expect(stubs.renderSelectionOutline).toHaveBeenCalledTimes(2);
     internal.camera.target[0] += 1;
     internal.renderScene();
-    expect(stubs.renderDirectionalShadowMaps).toHaveBeenCalledTimes(2);
+    expect(stubs.renderDirectionalShadowMaps).toHaveBeenCalledTimes(1);
     internal.latestSnapshot.plots[0].meshVersion += 1;
     internal.renderScene();
+    expect(stubs.renderDirectionalShadowMaps).toHaveBeenCalledTimes(2);
+    object.castShadows = false;
+    internal.renderScene();
     expect(stubs.renderDirectionalShadowMaps).toHaveBeenCalledTimes(3);
+    object.transform.position.x += 4;
+    internal.renderScene();
+    expect(stubs.renderDirectionalShadowMaps).toHaveBeenCalledTimes(4);
   });
 
   it('excludes powered-off lights from lighting while preserving their visible handles', () => {
@@ -296,4 +305,52 @@ describe('render invalidation and saved camera', () => {
     }
   });
 
+});
+
+describe('PNG export quality', () => {
+  it('raises shadow and reflection detail independently of preview quality', () => {
+    const standard = resolvePngExportBudget(1, 1024, true, 0, false);
+    const high = resolvePngExportBudget(2, 1024, true, 0, false);
+    expect(standard.maxShadowSize).toBe(2048);
+    expect(high.maxShadowSize).toBe(4096);
+    expect(high.probeSize).toBeGreaterThan(standard.probeSize);
+    expect(high.planarScale).toBe(1);
+    expect(resolvePngExportBudget(1, 4096, true, 0, false).maxShadowSize).toBe(4096);
+  });
+
+  it('bounds shadow memory for point lights and transparent casters, and respects hardware limits', () => {
+    for (const pointCount of [0, 1, 2, 3]) {
+      for (const transparent of [false, true]) {
+        const budget = resolvePngExportBudget(4, 4096, true, pointCount, transparent);
+        const bytes = budget.maxShadowSize ** 2 * 4 * (1 + pointCount * 6) * (transparent ? 3 : 1);
+        expect(bytes).toBeLessThanOrEqual(256 * 1024 * 1024);
+        expect(budget.maxShadowSize).toBeGreaterThanOrEqual(1024);
+      }
+    }
+    expect(resolvePngExportBudget(4, 4096, true, 0, false, 1024).maxShadowSize).toBe(1024);
+    expect(resolvePngExportBudget(4, 1536, true, 1, true).maxShadowSize).toBe(1536);
+  });
+
+  it.each([1, 4])('restores preview dimensions and quality if a %sx export render fails', async (scale) => {
+    const { internal, controller, canvas } = controllerFixture();
+    canvas.width = 200;
+    canvas.height = 100;
+    internal.latestSnapshot = createRendererSceneSnapshot({
+      scene: defaultSceneSettings(), render: defaultRenderSettings(), objects: [createDirectionalLight()],
+      selectedId: null, plotJobs: {},
+    }, null);
+    vi.spyOn(controller, 'resizeViewport').mockImplementation(() => {});
+    const budgets: Array<RenderBudget | null> = [];
+    internal.renderScene = vi.fn(() => {
+      budgets.push(internal.pngExportBudget);
+      if (internal.pngExportBudget) throw new Error('capture failed');
+    });
+    await expect(controller.getApi().exportPng('test.png', scale)).rejects.toThrow('capture failed');
+    expect(budgets).toHaveLength(2);
+    expect(budgets[0]?.probeSize).toBeGreaterThan(128);
+    expect(budgets[1]).toBeNull();
+    expect([canvas.width, canvas.height]).toEqual([200, 100]);
+    expect(internal.pngExportBudget).toBeNull();
+    expect(internal.latestSnapshot.render.interactiveQuality).toBe('balanced');
+  });
 });

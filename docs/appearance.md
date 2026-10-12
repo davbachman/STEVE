@@ -8,7 +8,7 @@ Point lights provide position, color, intensity, range, and shadow controls. Dir
 
 With nothing selected, **Scene Settings** controls the turntable, ambient light, shadow-map resolution and softness, projection, background, ground plane and reflection, XY grid, axes, and axis labels. **STEVE → Settings** controls tone mapping, exposure, Halos, PNG export scale, GIF maximum size and frame rate, and interactive quality.
 
-Interactive quality adjusts viewport pixel density, shadow resolution, and reflection detail. This selector does not change equation sampling. Stationary scenes stop redrawing once their reflections settle, and unchanged shadows are reused.
+Interactive quality adjusts viewport pixel density, shadow resolution, and reflection detail. This selector does not change equation sampling. Stationary scenes stop redrawing once their reflections settle, and unchanged shadows are reused. Directional shadow coverage follows visible meshes rather than graph bounds or camera framing; a large ground plane does not spread the shadow pixels across empty space. Shadow softness is preserved when changing shadow-map resolution.
 
 ---
 
