@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import './index.css';
 import { Viewport3D } from './renderer/Viewport3D';
 import type { ViewportApi } from './renderer/SceneController';
@@ -6,11 +6,12 @@ import { useParameterAnimation } from './hooks/useParameterAnimation';
 import { useWorkerPipeline } from './hooks/useWorkerPipeline';
 import { useAppStore } from './state/store';
 import { createBuiltInTestScene } from './testing/testScenes';
-import { EquationEditor } from './ui/components/EquationEditor';
 import { ObjectListPanel } from './ui/components/ObjectListPanel';
 import { InspectorPanel } from './ui/components/InspectorPanel';
 import { TopBar } from './ui/components/TopBar';
 import { handleEscapeShortcut } from './ui/keyboardShortcuts';
+
+const EquationEditor = lazy(() => import('./ui/components/EquationEditor').then((module) => ({ default: module.EquationEditor })));
 
 export default function App() {
   const [viewportApi, setViewportApi] = useState<ViewportApi | null>(null);
@@ -130,11 +131,13 @@ export default function App() {
       <section className="equation-dock" aria-label="Selected equation editor">
         <div className="equation-dock__inner">
           {selectedEquationPlot ? (
-            <EquationEditor
-              equation={selectedEquationPlot.equation}
-              job={plotJobs[selectedEquationPlot.id]}
-              onChange={(rawText) => updatePlotEquationText(selectedEquationPlot.id, rawText)}
-            />
+            <Suspense fallback={<div className="equation-editor" role="status">Loading editor…</div>}>
+              <EquationEditor
+                equation={selectedEquationPlot.equation}
+                job={plotJobs[selectedEquationPlot.id]}
+                onChange={(rawText) => updatePlotEquationText(selectedEquationPlot.id, rawText)}
+              />
+            </Suspense>
           ) : (
             <div className="equation-dock__blank" aria-hidden="true" />
           )}

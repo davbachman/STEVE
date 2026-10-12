@@ -34,7 +34,55 @@ export const supportedFunctionNames: readonly string[] = Object.keys(unaryFns);
 export const supportedConstantNames: readonly string[] = Object.keys(constants);
 
 export function compileNumericExpression(expr: Expression): CompiledNumericFn {
-  return (vars) => evaluateNumericExpression(expr, vars);
+  const cached = compiledExpressions.get(expr);
+  if (cached) return cached;
+  const fn = compileNode(expr);
+  compiledExpressions.set(expr, fn);
+  return fn;
+}
+
+const compiledExpressions = new WeakMap<Expression, CompiledNumericFn>();
+
+// Compile the operation tree once; no parsing, operator dispatch, or code generation at sample time.
+function compileNode(expr: Expression): CompiledNumericFn {
+  switch (expr.type) {
+    case 'number': { const value = expr.value; return () => value; }
+    case 'identifier': {
+      const name = expr.name;
+      const fallback = Object.hasOwn(constants, name) ? constants[name] : undefined;
+      return (vars) => {
+        if (Object.hasOwn(vars, name)) return vars[name];
+        if (fallback !== undefined) return fallback;
+        throw new Error(`Unknown variable or constant: ${name}`);
+      };
+    }
+    case 'unary': {
+      const fn = compileNumericExpression(expr.argument);
+      return expr.operator === '-' ? (vars) => -fn(vars) : fn;
+    }
+    case 'binary': {
+      const left = compileNumericExpression(expr.left);
+      const right = compileNumericExpression(expr.right);
+      switch (expr.operator) {
+        case '+': return (vars) => left(vars) + right(vars);
+        case '-': return (vars) => left(vars) - right(vars);
+        case '*': return (vars) => left(vars) * right(vars);
+        case '/': return (vars) => left(vars) / right(vars);
+        case '^': return (vars) => left(vars) ** right(vars);
+      }
+      break;
+    }
+    case 'call': {
+      const name = expr.callee.name;
+      if (!Object.hasOwn(unaryFns, name)) throw new Error(`Unsupported function: ${name}`);
+      if (expr.args.length !== 1) throw new Error(`Function ${name} expects 1 argument`);
+      const fn = unaryFns[name];
+      const argument = compileNumericExpression(expr.args[0]);
+      return (vars) => fn(argument(vars));
+    }
+    case 'tuple': throw new Error('Tuple cannot be evaluated as a scalar');
+    case 'equality': throw new Error('Equality cannot be evaluated as a scalar');
+  }
 }
 
 export function evaluateNumericExpression(expr: Expression, vars: EvalContext): number {

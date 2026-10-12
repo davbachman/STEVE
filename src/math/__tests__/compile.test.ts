@@ -80,3 +80,13 @@ describe('plot compilation with parameters', () => {
     expect(compiled.fn(0, Math.PI)[0]).toBeCloseTo(1.3, 12);
   });
 });
+
+it('reuses operation trees without sharing parameter values or sample variables', () => {
+  const a = compilePlotObject(explicitPlot('A = a*x\nz = A + y', [{ name: 'a', value: 2 }]));
+  const b = compilePlotObject(explicitPlot('A = a*x\nz = A + y', [{ name: 'a', value: 7 }]));
+  if (a.kind !== 'surface' || b.kind !== 'surface') throw new Error('Expected surfaces');
+  expect(a.fn(3, 1)).toEqual([3, 1, 7]);
+  expect(b.fn(3, 1)).toEqual([3, 1, 22]);
+  expect(a.fn(-2, 4)).toEqual([-2, 4, 0]);
+  expect(b.fn(0, 0)).toEqual([0, 0, 0]);
+});

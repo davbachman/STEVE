@@ -15,6 +15,7 @@ import {
   clearRuntimePlotMesh,
   clearAllRuntimePlotMeshes,
   getRuntimePlotMesh,
+  runtimeMeshKey,
   setRuntimePlotMesh,
 } from '../workers/runtimeMeshCache';
 
@@ -23,18 +24,16 @@ type PlotSignatures = {
   mesh: string;
 };
 
-type JobKind = 'parse' | 'mesh_preview' | 'mesh_final';
+type JobKind = 'mesh_preview' | 'mesh_final';
 
 type JobMeta = {
   objectId: UUID;
   kind: JobKind;
   startedAt: number;
-  rawText?: string;
   derivedIntersection?: boolean;
 };
 
 type WorkersRef = {
-  math: Worker | null;
   mesh: LatestMeshWorker | null;
   intersection: LatestMeshWorker | null;
 };
@@ -62,18 +61,15 @@ export function useWorkerPipeline(): void {
   const objects = useAppStore((s) => s.objects);
   const plotJobs = useAppStore((s) => s.plotJobs);
   const activeEquationParameterDrag = useAppStore((s) => s.activeEquationParameterDrag);
-  const workersRef = useRef<WorkersRef>({ math: null, mesh: null, intersection: null });
+  const workersRef = useRef<WorkersRef>({ mesh: null, intersection: null });
   const sigsRef = useRef<Map<UUID, PlotSignatures>>(new Map());
-  const parseTimerRef = useRef<Map<UUID, number>>(new Map());
   const meshTimerRef = useRef<Map<UUID, MeshTimerEntry>>(new Map());
   const intersectionScheduleRef = useRef<Map<UUID, IntersectionScheduleEntry>>(new Map());
-  const latestParseJobRef = useRef<Map<UUID, string>>(new Map());
   const latestMeshPreviewJobRef = useRef<Map<UUID, string>>(new Map());
   const latestMeshFinalJobRef = useRef<Map<UUID, string>>(new Map());
   const jobMetaRef = useRef<Map<string, JobMeta>>(new Map());
 
   useEffect(() => {
-    const mathWorker = new Worker(new URL('../workers/mathWorker.ts', import.meta.url), { type: 'module' });
     const createQueuedWorker = () => new LatestMeshWorker(
       () => new Worker(new URL('../workers/meshWorker.ts', import.meta.url), { type: 'module' }),
       (message) => handleMeshWorkerMessage(
@@ -102,47 +98,31 @@ export function useWorkerPipeline(): void {
     );
     const meshWorker = createQueuedWorker();
     const intersectionWorker = createQueuedWorker();
-    workersRef.current = { math: mathWorker, mesh: meshWorker, intersection: intersectionWorker };
-    const parseTimers = parseTimerRef.current;
+    workersRef.current = { mesh: meshWorker, intersection: intersectionWorker };
     const meshTimers = meshTimerRef.current;
     const intersectionSchedules = intersectionScheduleRef.current;
     const plotSignatures = sigsRef.current;
-    const latestParseJobs = latestParseJobRef.current;
     const latestPreviewJobs = latestMeshPreviewJobRef.current;
     const latestFinalJobs = latestMeshFinalJobRef.current;
     const jobMeta = jobMetaRef.current;
 
-    mathWorker.onmessage = (event: MessageEvent<WorkerResponse>) => {
-      handleMathWorkerMessage(
-        event.data,
-        latestParseJobRef.current,
-        jobMetaRef.current,
-      );
-    };
-
     return () => {
-      for (const timer of parseTimers.values()) {
-        window.clearTimeout(timer);
-      }
       for (const timer of meshTimers.values()) {
         window.clearTimeout(timer.timer);
       }
       for (const entry of intersectionSchedules.values()) {
         if (entry.timer !== null) window.clearTimeout(entry.timer);
       }
-      parseTimers.clear();
       meshTimers.clear();
       intersectionSchedules.clear();
       plotSignatures.clear();
-      latestParseJobs.clear();
       latestPreviewJobs.clear();
       latestFinalJobs.clear();
       jobMeta.clear();
       clearAllRuntimePlotMeshes();
-      mathWorker.terminate();
       meshWorker.terminate();
       intersectionWorker.terminate();
-      workersRef.current = { math: null, mesh: null, intersection: null };
+      workersRef.current = { mesh: null, intersection: null };
     };
   }, []);
 
@@ -155,19 +135,16 @@ export function useWorkerPipeline(): void {
     for (const objectId of [...sigsRef.current.keys()]) {
       if (renderableIds.has(objectId)) continue;
       sigsRef.current.delete(objectId);
-      clearTimer(parseTimerRef.current, objectId);
       clearTimer(meshTimerRef.current, objectId);
       clearIntersectionSchedule(intersectionScheduleRef.current, objectId);
       clearRuntimePlotMesh(objectId);
       useAppStore.getState().clearPlotJobStatus(objectId);
       invalidateObjectJobs(
         objectId,
-        latestParseJobRef.current,
         latestMeshPreviewJobRef.current,
         latestMeshFinalJobRef.current,
         jobMetaRef.current,
       );
-      postCancel(workersRef.current.math, objectId);
       postCancel(workersRef.current.mesh, objectId);
       postCancel(workersRef.current.intersection, objectId);
     }
@@ -188,7 +165,7 @@ export function useWorkerPipeline(): void {
       };
       const prev = sigsRef.current.get(object.id);
       if (needsInitialBuild || !prev || prev.parse !== nextSigs.parse) {
-        scheduleParse(workersRef.current, parseTimerRef.current, latestParseJobRef.current, jobMetaRef.current, object);
+        syncParseStatus(object);
       }
       if (needsInitialBuild || !prev || prev.mesh !== nextSigs.mesh) {
         scheduleMesh(
@@ -223,6 +200,7 @@ export function useWorkerPipeline(): void {
         parse: object.sourceSurfaceIds.join('|'),
         mesh: JSON.stringify({
           interactive: sourcesInteractive,
+          curveStyle: object.curveStyle,
           sourceA: isSurfacePlot(sourceA) ? {
             equation: sourceA.equation,
             transform: sourceA.transform,
@@ -397,19 +375,20 @@ function requestIntersectionBuild(
       message: finalBuild ? 'Building intersection' : 'Building intersection preview',
     });
 
-    const positionsA = new Float32Array(meshA.positions);
-    const indicesA = new Uint32Array(meshA.indices);
-    const positionsB = new Float32Array(meshB.positions);
-    const indicesB = new Uint32Array(meshB.indices);
+    const positionsA = meshA.positions;
+    const indicesA = meshA.indices;
+    const positionsB = meshB.positions;
+    const indicesB = meshB.indices;
     const req: WorkerRequest = {
       type: 'build_surface_intersection_mesh',
+      curveStyle: current.curveStyle,
       jobId,
       objectId: current.id,
-      sourceA: { positions: positionsA, indices: indicesA, translation: currentA.transform.position },
-      sourceB: { positions: positionsB, indices: indicesB, translation: currentB.transform.position },
+      sourceA: { cacheKey: runtimeMeshKey(meshA), positions: positionsA, indices: indicesA, translation: currentA.transform.position },
+      sourceB: { cacheKey: runtimeMeshKey(meshB), positions: positionsB, indices: indicesB, translation: currentB.transform.position },
       priority: finalBuild ? 'refine' : 'preview',
     };
-    workers.intersection?.postMessage(req, [positionsA.buffer, indicesA.buffer, positionsB.buffer, indicesB.buffer]);
+    workers.intersection?.postMessage(req);
   }, interactive
     ? INTERACTIVE_INTERSECTION_THROTTLE_MS
     : sourcesReady ? SETTLED_INTERSECTION_THROTTLE_MS : INTERACTIVE_MESH_THROTTLE_MS);
@@ -496,41 +475,11 @@ function emptyCurveMesh(): SerializedMesh {
   };
 }
 
-function scheduleParse(
-  workers: WorkersRef,
-  timerMap: Map<UUID, number>,
-  latestParseJobRef: Map<UUID, string>,
-  jobMetaRef: Map<string, JobMeta>,
-  plot: PlotObject,
-): void {
-  clearTimer(timerMap, plot.id);
+function syncParseStatus(plot: PlotObject): void {
+  // The store already performs authoritative classification for immediate editor feedback.
   useAppStore.getState().upsertPlotJobStatus(plot.id, {
-    parsePhase: 'queued',
-    progress: 0.02,
-    message: 'Parse queued',
+    parsePhase: plot.equation.source.parseStatus === 'ok' ? 'ready' : 'error',
   });
-
-  const timer = window.setTimeout(() => {
-    postCancel(workers.math, plot.id);
-    const jobId = newJobId();
-    latestParseJobRef.set(plot.id, jobId);
-    jobMetaRef.set(jobId, { objectId: plot.id, kind: 'parse', startedAt: performance.now(), rawText: plot.equation.source.rawText });
-    useAppStore.getState().upsertPlotJobStatus(plot.id, {
-      parsePhase: 'parsing',
-      progress: 0.08,
-      message: 'Parsing',
-    });
-    const req: WorkerRequest = {
-      type: 'parse_and_classify',
-      jobId,
-      objectId: plot.id,
-      rawText: plot.equation.source.rawText,
-      graphExpression: plot.equation.kind === 'explicit_surface' && plot.equation.graphExpression,
-    };
-    workers.math?.postMessage(req);
-  }, 120);
-
-  timerMap.set(plot.id, timer);
 }
 
 function scheduleMesh(
@@ -684,55 +633,6 @@ function buildMeshRequest(
   }
 }
 
-function handleMathWorkerMessage(
-  msg: WorkerResponse,
-  latestParseJobs: Map<UUID, string>,
-  jobMeta: Map<string, JobMeta>,
-): void {
-  const actions = useAppStore.getState();
-  switch (msg.type) {
-    case 'parse_progress': {
-      if (latestParseJobs.get(msg.objectId) !== msg.jobId) return;
-      actions.upsertPlotJobStatus(msg.objectId, {
-        parsePhase: 'parsing',
-        progress: Math.min(0.45, 0.05 + msg.progress * 0.4),
-        message: `Parsing: ${msg.phase}`,
-      });
-      return;
-    }
-    case 'parse_result': {
-      if (latestParseJobs.get(msg.objectId) !== msg.jobId) return;
-      const meta = jobMeta.get(msg.jobId);
-      actions.applyAsyncPlotSource(msg.objectId, meta?.rawText ?? msg.result.source.rawText, msg.result.source);
-      actions.upsertPlotJobStatus(msg.objectId, {
-        parsePhase: 'ready',
-        progress: 1,
-        message: 'Parse ready',
-      });
-      jobMeta.delete(msg.jobId);
-      return;
-    }
-    case 'job_error': {
-      const meta = jobMeta.get(msg.jobId);
-      if (!meta || meta.kind !== 'parse') return;
-      if (latestParseJobs.get(msg.objectId) !== msg.jobId) return;
-      actions.upsertPlotJobStatus(msg.objectId, {
-        parsePhase: 'error',
-        progress: 0,
-        message: msg.message,
-        lastError: msg.message,
-      });
-      jobMeta.delete(msg.jobId);
-      return;
-    }
-    case 'cancel_ack':
-    case 'mesh_preview':
-    case 'mesh_final':
-    case 'mesh_progress':
-      return;
-  }
-}
-
 function handleMeshWorkerMessage(
   msg: WorkerResponse,
   latestPreviewJobs: Map<UUID, string>,
@@ -832,14 +732,10 @@ function invalidateMeshJobs(
 
 function invalidateObjectJobs(
   objectId: UUID,
-  latestParseJobs: Map<UUID, string>,
   latestPreviewJobs: Map<UUID, string>,
   latestFinalJobs: Map<UUID, string>,
   jobMeta: Map<string, JobMeta>,
 ): void {
-  const parseJobId = latestParseJobs.get(objectId);
-  latestParseJobs.delete(objectId);
-  if (parseJobId) jobMeta.delete(parseJobId);
   invalidateMeshJobs(objectId, latestPreviewJobs, latestFinalJobs, jobMeta);
   for (const [jobId, meta] of jobMeta) {
     if (meta.objectId === objectId) jobMeta.delete(jobId);

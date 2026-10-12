@@ -1,3 +1,4 @@
+import { buildCurveGeometry } from './curveGeometry';
 import { compileEquationSpec, expandEquationSpecVariants } from '../compile';
 import type { EquationSpec, PlotObject, SerializedMesh } from '../../types/contracts';
 import { buildImplicitMeshFromScalarField } from './implicitMarchingTetra';
@@ -17,6 +18,11 @@ export function buildSerializedEquationMesh(
     wireframeReferenceSamples?: { uSamples: number; vSamples: number };
   } = {},
 ): SerializedMesh {
+  const mesh = buildSampledEquationMesh(spec, options);
+  return spec.kind === 'parametric_curve' ? buildCurveGeometry(mesh, spec) : mesh;
+}
+
+function buildSampledEquationMesh(spec: EquationSpec, options: { wireframeCellSize?: number; wireframeReferenceSamples?: { uSamples: number; vSamples: number } }): SerializedMesh {
   const variants = expandEquationSpecVariants(spec);
   if (variants.length <= 1) {
     return buildSerializedEquationMeshSingle(variants[0] ?? spec, options);

@@ -1,3 +1,4 @@
+import { buildCurveGeometry } from '../math/mesh/curveGeometry';
 /// <reference lib="webworker" />
 
 import { buildSerializedEquationMesh } from '../math/mesh/plotMesh';
@@ -66,7 +67,8 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
       case 'build_surface_intersection_mesh': {
         emitMeshProgress(req.jobId, req.objectId, 'intersect_surface_bounds', 0.12);
         if (isCanceled(req.objectId)) return;
-        const mesh = intersectSurfaceMeshes(req.sourceA, req.sourceB);
+        const paths = intersectSurfaceMeshes(req.sourceA, req.sourceB);
+        const mesh = buildCurveGeometry(paths, req.curveStyle ?? { tubeRadius: 0.05, renderAsTube: false });
         if (isCanceled(req.objectId)) return;
         emitMeshProgress(req.jobId, req.objectId, 'stitch_intersection_paths', 0.86);
         postMesh(meshResponseTypeForPriority(req.priority), req.jobId, req.objectId, mesh);
@@ -197,7 +199,7 @@ function collectTransferables(mesh: SerializedMesh): Transferable[] {
 }
 
 function pushTransferableBuffer(target: Transferable[], buffer: ArrayBufferLike): void {
-  if (buffer instanceof ArrayBuffer) {
+  if (buffer instanceof ArrayBuffer && !target.includes(buffer)) {
     target.push(buffer);
   }
 }

@@ -25,6 +25,7 @@ export class LatestMeshWorker {
   private pending = new Map<string, MeshRequest[]>();
   private transfers = new Map<string, Transferable[]>();
   private disposed = false;
+  private intersectionSources = new Set<string>();
 
   constructor(
     private createWorker: () => MeshWorkerTransport,
@@ -150,7 +151,20 @@ export class LatestMeshWorker {
       const transfer = this.transfers.get(request.jobId);
       this.transfers.delete(request.jobId);
       this.activeTransferred = Boolean(transfer?.length);
-      this.worker.postMessage(request, transfer);
+      if (request.type === 'build_surface_intersection_mesh' && request.sourceA.cacheKey && request.sourceB.cacheKey) {
+        const copies: Transferable[] = [];
+        const source = (input: typeof request.sourceA) => {
+          if (this.intersectionSources.has(input.cacheKey!)) return { ...input, positions: new Float32Array(0), indices: new Uint32Array(0) };
+          const positions = new Float32Array(input.positions), indices = new Uint32Array(input.indices);
+          copies.push(positions.buffer, indices.buffer);
+          return { ...input, positions, indices };
+        };
+        const message = { ...request, sourceA: source(request.sourceA), sourceB: source(request.sourceB) };
+        this.worker.postMessage(message, copies);
+        // Original inputs remain intact, so a restarted worker can replay this request.
+        this.activeTransferred = false;
+        this.intersectionSources = new Set([request.sourceA.cacheKey, request.sourceB.cacheKey]);
+      } else this.worker.postMessage(request, transfer);
     } catch (error) {
       this.fail(this.worker, workerFailureMessage(error instanceof Error ? error.message : undefined));
     }
@@ -169,6 +183,7 @@ export class LatestMeshWorker {
     this.worker.onmessageerror = null;
     this.worker.terminate();
     this.worker = null;
+    this.intersectionSources.clear();
   }
 
   private discard(request: MeshRequest): void {

@@ -62,7 +62,7 @@ describe('worker pipeline scheduling', () => {
 
   it('shows completed animation frames while keeping only the latest pending value, then refines on pause', () => {
     act(() => vi.advanceTimersByTime(32));
-    const firstWorker = ControlledWorker.instances[1];
+    const firstWorker = ControlledWorker.instances[0];
     const first = firstWorker.requests[0];
     expect(first.type).toBe('build_curve_mesh');
     for (let value = 2; value <= 8; value++) {
@@ -95,7 +95,7 @@ describe('worker pipeline scheduling', () => {
 
   it('clears runtime meshes and prevents late results after an object is deleted', () => {
     act(() => vi.advanceTimersByTime(32));
-    const worker = ControlledWorker.instances[1];
+    const worker = ControlledWorker.instances[0];
     const request = worker.requests[0];
     act(() => useAppStore.getState().deleteObject(plotId));
     expect(worker.terminated).toBe(true);
@@ -103,14 +103,14 @@ describe('worker pipeline scheduling', () => {
     expect(getRuntimePlotMesh(plotId)).toBeUndefined();
     expect(useAppStore.getState().plotJobs[plotId]).toBeUndefined();
     act(() => vi.advanceTimersByTime(1000));
-    expect(ControlledWorker.instances).toHaveLength(2);
+    expect(ControlledWorker.instances).toHaveLength(1);
     expect(worker.requests).toHaveLength(1);
   });
 
   it('rebuilds after reopening a project with the same object IDs and equations', () => {
     act(() => useAppStore.getState().setParameterAnimation(plotId, 'a', { animating: false }));
     act(() => vi.advanceTimersByTime(140));
-    const worker = ControlledWorker.instances[1];
+    const worker = ControlledWorker.instances[0];
     act(() => worker.finish(worker.requests[0], 1));
     act(() => worker.finish(worker.requests[1], 2));
     expect(useAppStore.getState().plotJobs[plotId]?.meshPhase).toBe('ready');
@@ -130,14 +130,14 @@ describe('worker pipeline scheduling', () => {
     intersection.sourceSurfaceIds = [sourceA.id, sourceB.id];
     act(() => useAppStore.getState().replaceProject({ schemaVersion: 1, appVersion: 'test', scene: defaultSceneSettings(), render: defaultRenderSettings(), objects: [sourceA, sourceB, intersection] }));
     act(() => vi.advanceTimersByTime(140));
-    const surfaceWorker = ControlledWorker.instances[1];
+    const surfaceWorker = ControlledWorker.instances[0];
     for (let index = 0; index < 4; index++) {
       const request = surfaceWorker.requests[index];
       expect(request.type).toBe('build_parametric_mesh');
       act(() => surfaceWorker.finish(request, index + 1));
     }
     act(() => vi.advanceTimersByTime(140));
-    const intersectionWorker = ControlledWorker.instances[2];
+    const intersectionWorker = ControlledWorker.instances[1];
     const request = intersectionWorker.requests[0];
     if (request.type !== 'build_surface_intersection_mesh') throw new Error('Expected intersection request');
     expect(intersectionWorker.transfers[0]).toEqual([
@@ -148,14 +148,20 @@ describe('worker pipeline scheduling', () => {
 
     act(() => intersectionWorker.onerror?.({ preventDefault: vi.fn() } as unknown as ErrorEvent));
     expect(intersectionWorker.terminated).toBe(true);
-    expect(useAppStore.getState().plotJobs[intersection.id]?.meshPhase).toBe('error');
-    act(() => useAppStore.getState().setObjectPosition(sourceA.id, { x: 1, y: 0, z: 0 }));
-    act(() => vi.advanceTimersByTime(140));
+    expect(useAppStore.getState().plotJobs[intersection.id]?.meshPhase).not.toBe('error');
     const replacement = ControlledWorker.instances.at(-1)!;
     expect(replacement).not.toBe(intersectionWorker);
     expect(replacement.requests[0]).toMatchObject({ type: 'build_surface_intersection_mesh', objectId: intersection.id });
     act(() => replacement.finish(replacement.requests[0], 42));
     expect(useAppStore.getState().plotJobs[intersection.id]?.meshPhase).toBe('ready');
     expect(getRuntimePlotMesh(intersection.id)?.positions[0]).toBe(42);
+    act(() => useAppStore.getState().setObjectPosition(sourceA.id, { x: 1, y: 0, z: 0 }));
+    act(() => vi.advanceTimersByTime(140));
+    const translated = replacement.requests[1];
+    if (translated.type !== 'build_surface_intersection_mesh') throw new Error('Expected intersection request');
+    expect(translated.sourceA.positions).toHaveLength(0);
+    expect(translated.sourceB.positions).toHaveLength(0);
+    expect(translated.sourceA.translation.x).toBe(1);
+    expect(replacement.transfers[1]).toHaveLength(0);
   });
 });

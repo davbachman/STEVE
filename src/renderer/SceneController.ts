@@ -25,7 +25,7 @@ import {
   shouldRenderPointLightGizmo,
 } from './pointLightVisibility';
 import { shadowVisibilityGlsl } from './shadowVisibility';
-import { resolveInteractiveRenderBudget, resolvePngExportBudget, type RenderBudget } from './renderBudget';
+import { resolveInteractiveRenderBudget, resolvePngExportBudget, resolvePngExportScale, type RenderBudget } from './renderBudget';
 import { fitDirectionalShadow, type ShadowBounds } from './shadowFrustum';
 import {
   buildPlotGeometry,
@@ -69,6 +69,9 @@ export interface ViewportApi {
 interface GpuMeshBuffers {
   vao: WebGLVertexArrayObject | null;
   indexBuffer: WebGLBuffer | null;
+  positionBuffer: WebGLBuffer;
+  normalBuffer: WebGLBuffer;
+  capacities: number[];
   indexCount: number;
   boundaryLines: GpuLineBuffer | null;
   featureLines: GpuLineBuffer | null;
@@ -79,6 +82,7 @@ interface GpuLineBuffer {
   vao: WebGLVertexArrayObject | null;
   vertexBuffer: WebGLBuffer | null;
   vertexCount: number;
+  capacity?: number;
   primitive: number;
 }
 
@@ -348,6 +352,8 @@ export class SceneController {
   private frameIndex = 0;
   private pendingProbeRefresh = false;
   private shadowSceneKey = '';
+  private directionalShadowKey = '';
+  private pointShadowKeys = new Map<number, string>();
   private pngExportBudget: RenderBudget | null = null;
   private directionalShadowTexelDepth = 0;
   private whiteShadowTexture: WebGLTexture | null = null;
@@ -375,6 +381,12 @@ export class SceneController {
   private latestSnapshot: RendererSceneSnapshot | null = null;
   private disposed = false;
   private animationFrame = 0;
+  private readonly contextMenuListener = (event: Event) => event.preventDefault();
+  private readonly doubleClickListener = (event: MouseEvent) => {
+    if (this.recordingGif || !this.gl) return;
+    const hit = this.pickSceneObject(event.clientX, event.clientY);
+    this.frameObject(hit?.id ?? null);
+  };
   private pointerDownListener?: (event: PointerEvent) => void;
   private pointerMoveListener?: (event: PointerEvent) => void;
   private pointerUpListener?: (event: PointerEvent) => void;
@@ -417,6 +429,7 @@ export class SceneController {
   constructor(
     private readonly canvas: HTMLCanvasElement,
     private readonly onObjectDragChange?: (dragging: boolean) => void,
+    private readonly onGraphicsStatus?: (message: string | null) => void,
   ) {}
 
   async init(): Promise<void> {
@@ -442,7 +455,9 @@ export class SceneController {
 
     this.renderPrograms = createPrograms(gl);
     this.createFullscreenResources(gl);
-    this.attachInputHandlers();
+    if (!this.pointerDownListener) this.attachInputHandlers();
+    this.canvas.addEventListener('webglcontextlost', this.handleContextLost);
+    this.canvas.addEventListener('webglcontextrestored', this.handleContextRestored);
     this.resizeViewport();
     this.requestRender();
     useAppStore.getState().setRenderDiagnostics({
@@ -454,8 +469,50 @@ export class SceneController {
     }
   }
 
+  private readonly handleContextLost = (event: Event): void => {
+    event.preventDefault();
+    cancelAnimationFrame(this.animationFrame);
+    this.animationFrame = 0;
+    clearTimeout(this.cameraSaveTimer);
+    this.gifAbortController?.abort();
+    this.gl = null;
+    if (this.dragState) useAppStore.getState().commitObjectDragHistory(this.dragState.objectId);
+    this.dragState = null;
+    this.cameraDrag = null;
+    this.onObjectDragChange?.(false);
+    useAppStore.getState().setRenderDiagnostics({ webglReady: false });
+    this.onGraphicsStatus?.('Graphics paused. Restoring the drawing…');
+  };
+
+  private readonly handleContextRestored = (): void => {
+    if (this.disposed) return;
+    // All old handles are invalid. CPU meshes and the document remain available.
+    this.renderTargets = emptyRenderTargets();
+    this.shadowResources = emptyShadowResources();
+    this.probeRenderResources = emptyProbeRenderResources();
+    this.planarReflection = emptyPlanarReflectionTargets();
+    this.plotVisuals.clear(); this.probePool.clear();
+    this.shadowSceneKey = ''; this.planarReflectionSceneKey = ''; this.environmentKey = '';
+    this.planarReflectionReady = false;
+    this.environmentCubemap = null;
+    this.axesLineBuffer = null; this.gridLineBuffer = null; this.axisLabels = null;
+    this.gizmoPointBuffer = null; this.directionalGizmoLineBuffer = null;
+    this.pngExportBudget = null;
+    void this.init().then(() => {
+      if (this.disposed) return;
+      this.sync(useAppStore.getState());
+      this.onGraphicsStatus?.(null);
+    }).catch((error: unknown) => {
+      this.onGraphicsStatus?.(error instanceof Error ? error.message : 'Graphics could not be restored. Please reload.');
+    });
+  };
+
   dispose(): void {
     this.disposed = true;
+    this.canvas.removeEventListener('contextmenu', this.contextMenuListener);
+    this.canvas.removeEventListener('dblclick', this.doubleClickListener);
+    this.canvas.removeEventListener('webglcontextlost', this.handleContextLost);
+    this.canvas.removeEventListener('webglcontextrestored', this.handleContextRestored);
     clearTimeout(this.cameraSaveTimer);
     if (this.dragState) {
       this.dragState = null;
@@ -548,7 +605,13 @@ export class SceneController {
         const baseWidth = this.canvas.width;
         const baseHeight = this.canvas.height;
         const maxDimension = Math.min(MAX_EXPORT_DIMENSION, gl.getParameter(gl.MAX_TEXTURE_SIZE), gl.getParameter(gl.MAX_RENDERBUFFER_SIZE));
-        const safeScale = Math.max(1, Math.min(scale, maxDimension / Math.max(baseWidth, baseHeight)));
+        const safeScale = resolvePngExportScale(baseWidth, baseHeight, scale, maxDimension, {
+          hdr: this.supportsFloatColorBuffers,
+          bloom: (this.latestSnapshot?.render.bloomEnabled ?? true) && (this.latestSnapshot?.render.bloomStrength ?? 0.65) > 0,
+          refraction: this.latestSnapshot?.plots.some(({ plot, isRenderable }) => plot.visible && isRenderable && plotUsesRefraction(plot)) ?? false,
+          selection: !!this.latestSnapshot?.selectedId,
+          mirror: !!this.latestSnapshot?.scene.groundPlaneVisible && !!this.latestSnapshot?.scene.groundPlaneReflective,
+        });
         const snapshot = this.latestSnapshot;
         let encoding: Promise<void>;
         try {
@@ -1174,7 +1237,8 @@ export class SceneController {
   }
 
   private renderScene(): void {
-    const gl = this.gl!;
+    if (!this.gl || this.disposed) return;
+    const gl = this.gl;
     const snapshot = this.latestSnapshot;
     const programs = this.renderPrograms!;
     if (!snapshot) {
@@ -1187,7 +1251,9 @@ export class SceneController {
     this.probeRefreshesThisFrame = 0;
     this.pendingProbeRefresh = false;
     const budget = this.pngExportBudget ?? resolveInteractiveRenderBudget(snapshot.render.interactiveQuality, window.devicePixelRatio);
-    this.ensureProbeResources(budget.probeSize);
+    if (snapshot.plots.some(({ plot, isRenderable }) => plot.visible && isRenderable && this.shouldUseProbeReflections(plot.material.reflectiveness))) {
+      this.ensureProbeResources(budget.probeSize);
+    } else if (this.probeRenderResources.framebuffer) this.deleteProbeResources(gl);
     this.pruneProbePool(snapshot);
     const pointLights = this.collectRenderablePointLights(snapshot);
     const pointShadowLights = this.collectActivePointShadowLights(snapshot, pointLights);
@@ -1198,19 +1264,26 @@ export class SceneController {
       pointShadowLights.length,
       hasTransparentCasters,
     );
-    const shadowSceneKey = JSON.stringify([
-      this.shadowResources.size,
-      this.activeDirectionalShadowLight(snapshot)?.light,
-      pointShadowLights.map(({ light }) => light),
-      snapshot.scene.groundPlaneVisible,
-      snapshot.scene.groundPlaneSize,
-      snapshot.plots.filter(({ plot, isRenderable }) => plot.visible && isRenderable)
-        .map(({ plot, meshVersion }) => [plot.id, meshVersion, plot.transform, plot.castShadows, plot.material, curveGeometryStyleKey(plot)]),
-    ]);
-    if (this.shadowSceneKey !== shadowSceneKey) {
+    if (!this.shadowSceneKey) {
+      this.directionalShadowKey = '';
+      this.pointShadowKeys.clear();
+      this.shadowSceneKey = 'allocated';
+    }
+    const shadowGeometry = snapshot.plots.filter(({ plot, isRenderable }) => plot.visible && isRenderable)
+      .map(({ plot, meshVersion, interactiveShadowMode }) => [plot.id, meshVersion, plot.transform, plot.castShadows,
+        interactiveShadowMode, interactiveShadowMode === 'attenuated' ? [plot.material.opacity, plot.material.baseColor] : null]);
+    const commonShadowKey = JSON.stringify([this.shadowResources.size, shadowGeometry]);
+    const directionalKey = JSON.stringify([commonShadowKey, this.activeDirectionalShadowLight(snapshot)?.light.direction,
+      snapshot.scene.groundPlaneVisible, snapshot.scene.groundPlaneSize]);
+    if (this.directionalShadowKey !== directionalKey) {
       this.renderDirectionalShadowMaps(snapshot);
-      this.renderPointShadowMaps(snapshot, pointShadowLights);
-      this.shadowSceneKey = shadowSceneKey;
+      this.directionalShadowKey = directionalKey;
+    }
+    for (const active of pointShadowLights) {
+      const key = JSON.stringify([commonShadowKey, active.light.id, active.light.position, active.light.range]);
+      if (this.pointShadowKeys.get(active.shadowSlot) === key) continue;
+      this.renderPointShadowMaps(snapshot, [active]);
+      this.pointShadowKeys.set(active.shadowSlot, key);
     }
     this.renderPlanarReflection(snapshot, pointLights);
     this.renderOpaqueScene(snapshot, pointLights, pointShadowLights);
@@ -1410,11 +1483,8 @@ export class SceneController {
       seen.add(plot.id);
       const existing = this.plotVisuals.get(plot.id);
       if (!existing || existing.meshVersion !== meshVersion || existing.geometryStyleKey !== geometryStyleKey) {
-        if (existing) {
-          this.disposePlotBuffers(existing.buffers);
-        }
         const geometry = buildPlotGeometry(plot);
-        const buffers = this.createPlotBuffers(geometry);
+        const buffers = existing ? this.updatePlotBuffers(existing.buffers, geometry) : this.createPlotBuffers(geometry);
         this.plotVisuals.set(plot.id, {
           plotId: plot.id,
           geometry,
@@ -1453,9 +1523,9 @@ export class SceneController {
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, geometry.indices, gl.STATIC_DRAW);
     gl.bindVertexArray(null);
-    gl.deleteBuffer(positionBuffer);
-    gl.deleteBuffer(normalBuffer);
     return {
+      positionBuffer, normalBuffer,
+      capacities: [geometry.positions.byteLength, geometry.normals.byteLength, geometry.indices.byteLength],
       vao,
       indexBuffer,
       indexCount: geometry.indices.length,
@@ -1465,6 +1535,31 @@ export class SceneController {
     };
   }
 
+  private updatePlotBuffers(buffers: GpuMeshBuffers, geometry: PlotGeometry): GpuMeshBuffers {
+    const gl = this.gl!;
+    gl.bindVertexArray(buffers.vao);
+    const handles = [buffers.positionBuffer, buffers.normalBuffer, buffers.indexBuffer];
+    const arrays = [geometry.positions, geometry.normals, geometry.indices];
+    arrays.forEach((array, index) => {
+      const target = index === 2 ? gl.ELEMENT_ARRAY_BUFFER : gl.ARRAY_BUFFER;
+      gl.bindBuffer(target, handles[index]);
+      if (array.byteLength > buffers.capacities[index]) {
+        buffers.capacities[index] = Math.ceil(array.byteLength * 1.25);
+        gl.bufferData(target, buffers.capacities[index], gl.DYNAMIC_DRAW);
+      }
+      gl.bufferSubData(target, 0, array);
+    });
+    gl.bindVertexArray(null);
+    buffers.indexCount = geometry.indices.length;
+    buffers.boundaryLines = updateLineBuffer(gl, buffers.boundaryLines, geometry.boundaryEdges, gl.LINES);
+    buffers.featureLines = updateLineBuffer(gl, buffers.featureLines, geometry.featureEdges, gl.LINES);
+    const oldLines = buffers.wireLines;
+    buffers.wireLines = geometry.wireLines.map((line, index) => updateLineBuffer(gl, oldLines[index] ?? null, line, gl.LINE_STRIP))
+      .filter((line): line is GpuLineBuffer => !!line);
+    oldLines.slice(geometry.wireLines.length).forEach((line) => deleteLineBuffer(gl, line));
+    return buffers;
+  }
+
   private disposePlotBuffers(buffers: GpuMeshBuffers): void {
     const gl = this.gl;
     if (!gl) {
@@ -1472,6 +1567,8 @@ export class SceneController {
     }
     deleteVertexArray(gl, buffers.vao);
     deleteBuffer(gl, buffers.indexBuffer);
+    deleteBuffer(gl, buffers.positionBuffer);
+    deleteBuffer(gl, buffers.normalBuffer);
     deleteLineBuffer(gl, buffers.boundaryLines);
     deleteLineBuffer(gl, buffers.featureLines);
     buffers.wireLines.forEach((line) => deleteLineBuffer(gl, line));
@@ -1507,6 +1604,7 @@ export class SceneController {
     gl.bindFramebuffer(gl.FRAMEBUFFER, shadow.directionalFramebuffer);
     gl.colorMask(false, false, false, false);
     gl.clearDepth(1);
+    gl.depthMask(true);
     gl.clear(gl.DEPTH_BUFFER_BIT);
     gl.disable(gl.CULL_FACE);
     gl.useProgram(this.renderPrograms!.shadow.program);
@@ -1770,6 +1868,7 @@ export class SceneController {
     const cameraAbovePlane = this.getCameraPosition()[2] > 0.05;
     this.planarReflectionReady = false;
     if (!scene.groundPlaneVisible || !scene.groundPlaneReflective || !cameraAbovePlane) {
+      if (!scene.groundPlaneVisible || !scene.groundPlaneReflective) this.deletePlanarReflectionTargets(gl);
       this.planarReflectionSceneKey = '';
       return;
     }
@@ -1803,6 +1902,7 @@ export class SceneController {
     gl.viewport(0, 0, targets.width, targets.height);
     gl.clearColor(0, 0, 0, 0);
     gl.clearDepth(1);
+    gl.depthMask(true);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST);
     gl.depthMask(true);
@@ -1815,7 +1915,7 @@ export class SceneController {
     this.bindSceneUniforms(this.renderPrograms!.mesh, snapshot, pointLights, [], false, true, true);
     // The planar texture is this pass's render target; point its sampler unit
     // at another 2D texture so no rendering feedback loop forms.
-    bindTexture(gl, this.renderTargets.refractionTexture, PLANAR_REFLECTION_TEXTURE_UNIT, gl.TEXTURE_2D);
+    bindTexture(gl, this.renderTargets.refractionTexture ?? this.whiteShadowTexture, PLANAR_REFLECTION_TEXTURE_UNIT, gl.TEXTURE_2D);
     gl.uniform1i(this.renderPrograms!.mesh.uniforms.u_clipWorldZAbove, 1);
     const mirror = mat4.fromScaling(mat4.create(), vec3.fromValues(1, 1, -1));
     for (const plotSnapshot of snapshot.plots) {
@@ -1899,6 +1999,7 @@ export class SceneController {
     gl.viewport(0, 0, targets.width, targets.height);
     gl.clearColor(0, 0, 0, 0);
     gl.clearDepth(1);
+    gl.depthMask(true);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     this.bindOpaqueMeshPass(snapshot, pointLights, pointShadowLights);
     for (const plotSnapshot of snapshot.plots) {
@@ -2169,7 +2270,7 @@ export class SceneController {
     gl.bindVertexArray(this.fullscreenVao);
     bindTexture(gl, targets.sceneColor, 0, gl.TEXTURE_2D);
     gl.uniform1i(this.renderPrograms!.composite.uniforms.u_sceneColor, 0);
-    bindTexture(gl, targets.bloomTextureA, 1, gl.TEXTURE_2D);
+    bindTexture(gl, targets.bloomTextureA ?? targets.sceneColor, 1, gl.TEXTURE_2D);
     gl.uniform1i(this.renderPrograms!.composite.uniforms.u_bloomColor, 1);
     gl.uniform1i(
       this.renderPrograms!.composite.uniforms.u_bloomEnabled,
@@ -2197,17 +2298,22 @@ export class SceneController {
     );
     gl.uniform1i(this.renderPrograms!.composite.uniforms.u_toneMapping, toneMappingMode(snapshot.render.toneMapping));
     gl.uniform1f(this.renderPrograms!.composite.uniforms.u_exposure, clamp(snapshot.render.exposure, 0.01, 5));
+    const exclusions = this.pointGizmoOverlayExclusions(snapshot);
+    gl.uniform1i(this.renderPrograms!.composite.uniforms.u_gizmoExclusionCount, exclusions.count);
+    gl.uniform3fv(this.renderPrograms!.composite.uniforms['u_gizmoExclusions[0]'], exclusions.values);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
   }
 
   private renderSelectionMask(snapshot: RendererSceneSnapshot): void {
+    if (!this.renderTargets.maskFramebuffer) return;
     const gl = this.gl!;
     const selected = snapshot.selectedId ? snapshot.objects.find((object) => object.id === snapshot.selectedId) : null;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.renderTargets.maskFramebuffer);
     gl.viewport(0, 0, this.renderTargets.width, this.renderTargets.height);
     gl.clearColor(0, 0, 0, 0);
     gl.clearDepth(1);
+    gl.depthMask(true);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     if (!selected || !isRenderableObject(selected) || !selected.visible) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -2238,6 +2344,7 @@ export class SceneController {
   }
 
   private renderSelectionOutline(snapshot: RendererSceneSnapshot): void {
+    if (!this.renderTargets.maskTexture) return;
     const gl = this.gl!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, this.renderTargets.width, this.renderTargets.height);
@@ -2568,7 +2675,7 @@ export class SceneController {
 
   private pointGizmoOverlayExclusions(
     snapshot: RendererSceneSnapshot,
-    sourceCurveId: string,
+    sourceCurveId?: string,
   ): { count: number; values: Float32Array } {
     const values = new Float32Array(MAX_POINT_GIZMO_OVERLAY_EXCLUSIONS * 3);
     let count = 0;
@@ -2576,8 +2683,7 @@ export class SceneController {
       if (
         count >= MAX_POINT_GIZMO_OVERLAY_EXCLUSIONS
         || !shouldRenderPointLightGizmo(light)
-        || !light.curvePin.enabled
-        || light.curvePin.curveId !== sourceCurveId
+        || (sourceCurveId !== undefined && (!light.curvePin.enabled || light.curvePin.curveId !== sourceCurveId))
       ) {
         continue;
       }
@@ -2913,6 +3019,7 @@ export class SceneController {
     gl.colorMask(false, false, false, false);
     gl.depthMask(true);
     gl.clearDepth(1);
+    gl.depthMask(true);
     gl.clear(gl.DEPTH_BUFFER_BIT);
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.LESS);
@@ -3285,7 +3392,7 @@ export class SceneController {
     // Unit 4 holds the per-plot probe; bind the environment as a safe default
     // so the sampler always sees a complete cube texture.
     bindTexture(gl, this.environmentCubemap, 4, gl.TEXTURE_CUBE_MAP);
-    bindTexture(gl, this.renderTargets.refractionTexture, REFRACTION_TEXTURE_UNIT, gl.TEXTURE_2D);
+    bindTexture(gl, this.renderTargets.refractionTexture ?? this.whiteShadowTexture, REFRACTION_TEXTURE_UNIT, gl.TEXTURE_2D);
     gl.uniform1i(program.uniforms.u_refractionSource, REFRACTION_TEXTURE_UNIT);
     bindTexture(gl, this.planarReflection.colorTexture ?? this.whiteShadowTexture, PLANAR_REFLECTION_TEXTURE_UNIT, gl.TEXTURE_2D);
     gl.uniform1i(program.uniforms.u_planarReflection, PLANAR_REFLECTION_TEXTURE_UNIT);
@@ -3592,7 +3699,7 @@ export class SceneController {
     gl.uniform1i(program.uniforms.u_clipWorldZAbove, 0);
     bindTexture(gl, this.environmentCubemap, 3, gl.TEXTURE_CUBE_MAP);
     bindTexture(gl, this.environmentCubemap, 4, gl.TEXTURE_CUBE_MAP);
-    bindTexture(gl, this.renderTargets.refractionTexture, REFRACTION_TEXTURE_UNIT, gl.TEXTURE_2D);
+    bindTexture(gl, this.renderTargets.refractionTexture ?? this.whiteShadowTexture, REFRACTION_TEXTURE_UNIT, gl.TEXTURE_2D);
     bindTexture(gl, this.planarReflection.colorTexture ?? this.whiteShadowTexture, PLANAR_REFLECTION_TEXTURE_UNIT, gl.TEXTURE_2D);
     gl.uniform1i(program.uniforms.u_environment, 3);
     gl.uniform1i(program.uniforms.u_probe, 4);
@@ -3788,12 +3895,8 @@ export class SceneController {
   }
 
   private attachInputHandlers(): void {
-    this.canvas.addEventListener('contextmenu', (event) => event.preventDefault());
-    this.canvas.addEventListener('dblclick', (event) => {
-      if (this.recordingGif) return;
-      const hit = this.pickSceneObject(event.clientX, event.clientY);
-      this.frameObject(hit?.id ?? null);
-    });
+    this.canvas.addEventListener('contextmenu', this.contextMenuListener);
+    this.canvas.addEventListener('dblclick', this.doubleClickListener);
     this.pointerDownListener = (event) => this.handlePointerDown(event);
     this.pointerMoveListener = (event) => this.handlePointerMove(event);
     this.pointerUpListener = (event) => this.handlePointerUp(event);
@@ -4080,6 +4183,7 @@ export class SceneController {
   private ensureRenderTargets(width: number, height: number): void {
     const gl = this.gl!;
     if (this.renderTargets.width === width && this.renderTargets.height === height && this.renderTargets.sceneFramebuffer) {
+      this.ensureOptionalRenderTargets();
       return;
     }
     this.deleteRenderTargets(gl);
@@ -4092,100 +4196,117 @@ export class SceneController {
       { attachment: gl.COLOR_ATTACHMENT0, texture: sceneColor, target: gl.TEXTURE_2D },
       { attachment: gl.DEPTH_ATTACHMENT, texture: sceneDepth, target: gl.TEXTURE_2D },
     ]);
-    const pointGizmoColor = createColorTexture(
-      gl,
-      POINT_GIZMO_TARGET_SIZE,
-      POINT_GIZMO_TARGET_SIZE,
-      hdrColorFormat.internalFormat,
-      hdrColorFormat.format,
-      hdrColorFormat.type,
-      gl.NEAREST,
-    );
-    const pointGizmoDepth = createDepthStencilRenderbuffer(gl, POINT_GIZMO_TARGET_SIZE, POINT_GIZMO_TARGET_SIZE);
-    const pointGizmoFramebuffer = createFramebuffer(gl, [
-      { attachment: gl.COLOR_ATTACHMENT0, texture: pointGizmoColor, target: gl.TEXTURE_2D },
-    ]);
-    attachDepthStencilRenderbuffer(gl, pointGizmoFramebuffer, pointGizmoDepth);
-    const pointGizmoSourceColor = createColorTexture(
-      gl,
-      POINT_GIZMO_TARGET_SIZE,
-      POINT_GIZMO_TARGET_SIZE,
-      gl.RGBA8,
-      gl.RGBA,
-      gl.UNSIGNED_BYTE,
-      gl.NEAREST,
-    );
-    const pointGizmoSourceDepth = createDepthStencilRenderbuffer(
-      gl,
-      POINT_GIZMO_TARGET_SIZE,
-      POINT_GIZMO_TARGET_SIZE,
-    );
-    const pointGizmoSourceFramebuffer = createFramebuffer(gl, [
-      { attachment: gl.COLOR_ATTACHMENT0, texture: pointGizmoSourceColor, target: gl.TEXTURE_2D },
-    ]);
-    attachDepthStencilRenderbuffer(gl, pointGizmoSourceFramebuffer, pointGizmoSourceDepth);
-    const bloomWidth = Math.max(1, Math.ceil(width / 2));
-    const bloomHeight = Math.max(1, Math.ceil(height / 2));
-    const bloomTextureA = createColorTexture(
-      gl,
-      bloomWidth,
-      bloomHeight,
-      hdrColorFormat.internalFormat,
-      hdrColorFormat.format,
-      hdrColorFormat.type,
-    );
-    const bloomFramebufferA = createFramebuffer(gl, [
-      { attachment: gl.COLOR_ATTACHMENT0, texture: bloomTextureA, target: gl.TEXTURE_2D },
-    ]);
-    const bloomTextureB = createColorTexture(
-      gl,
-      bloomWidth,
-      bloomHeight,
-      hdrColorFormat.internalFormat,
-      hdrColorFormat.format,
-      hdrColorFormat.type,
-    );
-    const bloomFramebufferB = createFramebuffer(gl, [
-      { attachment: gl.COLOR_ATTACHMENT0, texture: bloomTextureB, target: gl.TEXTURE_2D },
-    ]);
-    const refractionTexture = createColorTexture(gl, width, height, hdrColorFormat.internalFormat, hdrColorFormat.format, hdrColorFormat.type);
-    gl.bindTexture(gl.TEXTURE_2D, refractionTexture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-    gl.generateMipmap(gl.TEXTURE_2D);
-    gl.bindTexture(gl.TEXTURE_2D, null);
-    const refractionFramebuffer = createFramebuffer(gl, [
-      { attachment: gl.COLOR_ATTACHMENT0, texture: refractionTexture, target: gl.TEXTURE_2D },
-    ]);
-    const maskTexture = createColorTexture(gl, width, height, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, gl.NEAREST);
-    const maskDepth = createDepthTexture(gl, width, height);
-    const maskFramebuffer = createFramebuffer(gl, [
-      { attachment: gl.COLOR_ATTACHMENT0, texture: maskTexture, target: gl.TEXTURE_2D },
-      { attachment: gl.DEPTH_ATTACHMENT, texture: maskDepth, target: gl.TEXTURE_2D },
-    ]);
     this.renderTargets = {
+      ...emptyRenderTargets(),
       width,
       height,
       sceneFramebuffer,
       sceneColor,
       sceneDepth,
-      pointGizmoFramebuffer,
-      pointGizmoColor,
-      pointGizmoDepth,
-      pointGizmoSourceFramebuffer,
-      pointGizmoSourceColor,
-      pointGizmoSourceDepth,
-      bloomWidth,
-      bloomHeight,
-      bloomFramebufferA,
-      bloomTextureA,
-      bloomFramebufferB,
-      bloomTextureB,
-      refractionFramebuffer,
-      refractionTexture,
-      maskFramebuffer,
-      maskTexture,
-      maskDepth,
     };
+    this.ensureOptionalRenderTargets();
+  }
+
+  private ensureOptionalRenderTargets(): void {
+    const gl = this.gl!;
+    const t = this.renderTargets;
+    const snapshot = this.latestSnapshot;
+    const effects = {
+      bloom: !!snapshot && (snapshot.render.bloomEnabled ?? true) && (snapshot.render.bloomStrength ?? 0.65) > 0,
+      refraction: !!snapshot?.plots.some(({ plot, isRenderable }) => plot.visible && isRenderable && plotUsesRefraction(plot)),
+      mask: !!snapshot?.plots.some(({ plot }) => plot.visible && plot.id === snapshot.selectedId),
+    };
+    const color = (w: number, h: number) => createColorTexture(gl, w, h,
+      this.supportsFloatColorBuffers ? gl.RGBA16F : gl.RGBA8, gl.RGBA,
+      this.supportsFloatColorBuffers ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE);
+    const framebuffer = (texture: WebGLTexture | null) => createFramebuffer(gl, [
+      { attachment: gl.COLOR_ATTACHMENT0, texture, target: gl.TEXTURE_2D },
+    ]);
+    const gizmos = snapshot?.pointLights.some(({ light }) => shouldRenderPointLightGizmo(light));
+    if (gizmos && !t.pointGizmoFramebuffer) {
+      const hdrColorFormat = this.supportsFloatColorBuffers
+        ? { internalFormat: gl.RGBA16F, format: gl.RGBA, type: gl.HALF_FLOAT }
+        : { internalFormat: gl.RGBA8, format: gl.RGBA, type: gl.UNSIGNED_BYTE };
+      const pointGizmoColor = createColorTexture(
+        gl,
+        POINT_GIZMO_TARGET_SIZE,
+        POINT_GIZMO_TARGET_SIZE,
+        hdrColorFormat.internalFormat,
+        hdrColorFormat.format,
+        hdrColorFormat.type,
+        gl.NEAREST,
+      );
+      const pointGizmoDepth = createDepthStencilRenderbuffer(gl, POINT_GIZMO_TARGET_SIZE, POINT_GIZMO_TARGET_SIZE);
+      const pointGizmoFramebuffer = createFramebuffer(gl, [
+        { attachment: gl.COLOR_ATTACHMENT0, texture: pointGizmoColor, target: gl.TEXTURE_2D },
+      ]);
+      attachDepthStencilRenderbuffer(gl, pointGizmoFramebuffer, pointGizmoDepth);
+      const pointGizmoSourceColor = createColorTexture(
+        gl,
+        POINT_GIZMO_TARGET_SIZE,
+        POINT_GIZMO_TARGET_SIZE,
+        gl.RGBA8,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        gl.NEAREST,
+      );
+      const pointGizmoSourceDepth = createDepthStencilRenderbuffer(
+        gl,
+        POINT_GIZMO_TARGET_SIZE,
+        POINT_GIZMO_TARGET_SIZE,
+      );
+      const pointGizmoSourceFramebuffer = createFramebuffer(gl, [
+        { attachment: gl.COLOR_ATTACHMENT0, texture: pointGizmoSourceColor, target: gl.TEXTURE_2D },
+      ]);
+      attachDepthStencilRenderbuffer(gl, pointGizmoSourceFramebuffer, pointGizmoSourceDepth);
+      Object.assign(t, {
+        pointGizmoFramebuffer,
+        pointGizmoColor,
+        pointGizmoDepth,
+        pointGizmoSourceFramebuffer,
+        pointGizmoSourceColor,
+        pointGizmoSourceDepth,
+      });
+    } else if (!gizmos && t.pointGizmoFramebuffer) {
+      deleteFramebuffer(gl, t.pointGizmoFramebuffer); deleteFramebuffer(gl, t.pointGizmoSourceFramebuffer);
+      deleteTexture(gl, t.pointGizmoColor); deleteTexture(gl, t.pointGizmoSourceColor);
+      if (t.pointGizmoDepth) gl.deleteRenderbuffer(t.pointGizmoDepth);
+      if (t.pointGizmoSourceDepth) gl.deleteRenderbuffer(t.pointGizmoSourceDepth);
+      t.pointGizmoFramebuffer = t.pointGizmoSourceFramebuffer = null;
+      t.pointGizmoColor = t.pointGizmoSourceColor = null;
+      t.pointGizmoDepth = t.pointGizmoSourceDepth = null;
+    }
+    if (effects.bloom && !t.bloomTextureA) {
+      t.bloomWidth = Math.max(1, Math.ceil(t.width / 2)); t.bloomHeight = Math.max(1, Math.ceil(t.height / 2));
+      t.bloomTextureA = color(t.bloomWidth, t.bloomHeight); t.bloomTextureB = color(t.bloomWidth, t.bloomHeight);
+      t.bloomFramebufferA = framebuffer(t.bloomTextureA); t.bloomFramebufferB = framebuffer(t.bloomTextureB);
+    } else if (!effects.bloom && t.bloomTextureA) {
+      deleteTexture(gl, t.bloomTextureA); deleteTexture(gl, t.bloomTextureB);
+      deleteFramebuffer(gl, t.bloomFramebufferA); deleteFramebuffer(gl, t.bloomFramebufferB);
+      t.bloomTextureA = t.bloomTextureB = null; t.bloomFramebufferA = t.bloomFramebufferB = null;
+    }
+    if (effects.refraction && !t.refractionTexture) {
+      t.refractionTexture = color(t.width, t.height);
+      gl.bindTexture(gl.TEXTURE_2D, t.refractionTexture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      t.refractionFramebuffer = framebuffer(t.refractionTexture);
+    } else if (!effects.refraction && t.refractionTexture) {
+      deleteTexture(gl, t.refractionTexture); deleteFramebuffer(gl, t.refractionFramebuffer);
+      t.refractionTexture = null; t.refractionFramebuffer = null;
+    }
+    if (effects.mask && !t.maskTexture) {
+      t.maskTexture = createColorTexture(gl, t.width, t.height, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, gl.NEAREST);
+      t.maskDepth = createDepthTexture(gl, t.width, t.height);
+      t.maskFramebuffer = createFramebuffer(gl, [
+        { attachment: gl.COLOR_ATTACHMENT0, texture: t.maskTexture, target: gl.TEXTURE_2D },
+        { attachment: gl.DEPTH_ATTACHMENT, texture: t.maskDepth, target: gl.TEXTURE_2D },
+      ]);
+    } else if (!effects.mask && t.maskTexture) {
+      deleteTexture(gl, t.maskTexture); deleteTexture(gl, t.maskDepth); deleteFramebuffer(gl, t.maskFramebuffer);
+      t.maskTexture = t.maskDepth = null; t.maskFramebuffer = null;
+    }
   }
 
   private deleteRenderTargets(gl: WebGL2RenderingContext): void {
@@ -4524,6 +4645,8 @@ function createPrograms(gl: WebGL2RenderingContext): RenderPrograms {
       'u_gradientBottom',
       'u_toneMapping',
       'u_exposure',
+      'u_gizmoExclusionCount',
+      'u_gizmoExclusions[0]',
     ]),
     outline: createProgramBundle(gl, fullscreenVertexShaderSource, outlineFragmentShaderSource, [
       'u_mask',
@@ -5308,6 +5431,8 @@ uniform vec3 u_gradientTop;
 uniform vec3 u_gradientBottom;
 uniform int u_toneMapping;
 uniform float u_exposure;
+uniform int u_gizmoExclusionCount;
+uniform vec3 u_gizmoExclusions[${MAX_POINT_GIZMO_OVERLAY_EXCLUSIONS}];
 in vec2 v_uv;
 out vec4 outColor;
 
@@ -5321,17 +5446,46 @@ vec3 toneMap(vec3 color) {
   return color;
 }
 
-void main() {
-  vec4 scene = texture(u_sceneColor, v_uv);
-  vec3 bloom = u_bloomEnabled == 1 ? texture(u_bloomColor, v_uv).rgb * u_bloomStrength : vec3(0.0);
+vec3 colorAt(vec2 uv) {
+  vec4 scene = texture(u_sceneColor, uv);
+  vec3 bloom = u_bloomEnabled == 1 ? texture(u_bloomColor, uv).rgb * u_bloomStrength : vec3(0.0);
   vec3 background = u_backgroundMode == 1
-    ? mix(u_gradientBottom, u_gradientTop, clamp(v_uv.y, 0.0, 1.0))
+    ? mix(u_gradientBottom, u_gradientTop, clamp(uv.y, 0.0, 1.0))
     : u_backgroundColor;
   vec3 mappedScene = toneMap(scene.rgb);
   vec3 mappedWithBloom = toneMap(scene.rgb + bloom);
   vec3 bloomContribution = max(mappedWithBloom - mappedScene, vec3(0.0));
   vec3 color = mix(background, mappedScene, clamp(scene.a, 0.0, 1.0)) + bloomContribution;
-  outColor = vec4(clamp(color, 0.0, 1.0), 1.0);
+  return clamp(color, 0.0, 1.0);
+}
+
+void main() {
+  // Edge-directed antialiasing on the actual offscreen scene, after tone mapping.
+  vec2 texel = 1.0 / vec2(textureSize(u_sceneColor, 0));
+  vec3 center = colorAt(v_uv);
+  // Light handles already have analytic coverage and must stay legible over their source curves.
+  for (int i = 0; i < ${MAX_POINT_GIZMO_OVERLAY_EXCLUSIONS}; i++) {
+    if (i >= u_gizmoExclusionCount) break;
+    if (distance(gl_FragCoord.xy, u_gizmoExclusions[i].xy) <= u_gizmoExclusions[i].z) {
+      outColor = vec4(center, 1.0); return;
+    }
+  }
+  vec3 nw = colorAt(v_uv + vec2(-1.0, -1.0) * texel);
+  vec3 ne = colorAt(v_uv + vec2(1.0, -1.0) * texel);
+  vec3 sw = colorAt(v_uv + vec2(-1.0, 1.0) * texel);
+  vec3 se = colorAt(v_uv + vec2(1.0, 1.0) * texel);
+  vec3 weights = vec3(0.299, 0.587, 0.114);
+  float m = dot(center, weights), a = dot(nw, weights), b = dot(ne, weights);
+  float c = dot(sw, weights), d = dot(se, weights);
+  float low = min(m, min(min(a,b), min(c,d))), high = max(m, max(max(a,b), max(c,d)));
+  if (high-low < max(0.025, high*0.125)) { outColor = vec4(center, 1.0); return; }
+  vec2 direction = vec2(-((a+b)-(c+d)), (a+c)-(b+d));
+  float reduce = max((a+b+c+d)*0.03125, 0.0078125);
+  direction = clamp(direction / (min(abs(direction.x), abs(direction.y))+reduce), vec2(-8.0), vec2(8.0)) * texel;
+  vec3 narrow = 0.5 * (colorAt(v_uv-direction/6.0) + colorAt(v_uv+direction/6.0));
+  vec3 wide = narrow*0.5 + 0.25*(colorAt(v_uv-direction*0.5)+colorAt(v_uv+direction*0.5));
+  float wideLuma = dot(wide, weights);
+  outColor = vec4(wideLuma < low || wideLuma > high ? narrow : wide, 1.0);
 }
 `;
 
@@ -5424,6 +5578,20 @@ function compileShader(gl: WebGL2RenderingContext, type: number, source: string)
   return shader;
 }
 
+function updateLineBuffer(gl: WebGL2RenderingContext, buffer: GpuLineBuffer | null, positions: Float32Array, primitive: number): GpuLineBuffer | null {
+  if (!positions.length) { deleteLineBuffer(gl, buffer); return null; }
+  if (!buffer) return createLineBuffer(gl, positions, primitive);
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffer.vertexBuffer);
+  if (positions.byteLength > (buffer.capacity ?? buffer.vertexCount * 12)) {
+    buffer.capacity = Math.ceil(positions.byteLength * 1.25);
+    gl.bufferData(gl.ARRAY_BUFFER, buffer.capacity, gl.DYNAMIC_DRAW);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, positions);
+  }
+  else gl.bufferSubData(gl.ARRAY_BUFFER, 0, positions);
+  buffer.vertexCount = positions.length / 3;
+  return buffer;
+}
+
 function createLineBuffer(gl: WebGL2RenderingContext, positions: Float32Array, primitive: number): GpuLineBuffer | null {
   if (positions.length < 6) {
     return null;
@@ -5439,7 +5607,7 @@ function createLineBuffer(gl: WebGL2RenderingContext, positions: Float32Array, p
   gl.enableVertexAttribArray(0);
   gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
   gl.bindVertexArray(null);
-  return { vao, vertexBuffer, vertexCount: positions.length / 3, primitive };
+  return { vao, vertexBuffer, capacity: positions.byteLength, vertexCount: positions.length / 3, primitive };
 }
 
 function createPointBuffer(gl: WebGL2RenderingContext): GpuLineBuffer | null {
@@ -6476,6 +6644,7 @@ function captureCanvasRgba(
   gl: WebGL2RenderingContext,
   scene: AppState['scene'],
   surface: CanvasFrameCaptureSurface,
+  readOutput = true,
 ): Uint8ClampedArray {
   gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   gl.finish();
@@ -6490,7 +6659,7 @@ function captureCanvasRgba(
   surface.imageContext.putImageData(surface.imageData, 0, 0);
   paintExportBackground(surface.outputContext, scene, surface.width, surface.height);
   surface.outputContext.drawImage(surface.imageContext.canvas, 0, 0);
-  return surface.outputContext.getImageData(0, 0, surface.width, surface.height).data;
+  return readOutput ? surface.outputContext.getImageData(0, 0, surface.width, surface.height).data : surface.imageData.data;
 }
 
 async function exportCanvasPng(
@@ -6502,7 +6671,7 @@ async function exportCanvasPng(
   const width = Math.max(1, canvas.width);
   const height = Math.max(1, canvas.height);
   const surface = createCanvasFrameCaptureSurface(width, height);
-  captureCanvasRgba(gl, scene, surface);
+  captureCanvasRgba(gl, scene, surface, false);
   const blob = await new Promise<Blob | null>((resolve) => surface.outputCanvas.toBlob(resolve, 'image/png'));
   if (!blob) {
     throw new Error('Failed to export PNG');

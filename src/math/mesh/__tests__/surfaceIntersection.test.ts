@@ -194,3 +194,17 @@ describe('surface mesh intersections', () => {
     }
   });
 });
+
+it('reuses cached local geometry across translations and replaces changed versions', () => {
+  const a = { ...xyPlane(2), cacheKey: 'cache-a:1' }, b = { ...yzPlane(2), cacheKey: 'cache-b:1' };
+  intersectSurfaceMeshes(a, b);
+  const translated = intersectSurfaceMeshes(
+    { ...a, positions: new Float32Array(), indices: new Uint32Array(), translation: { x: 0, y: 0, z: 0.5 } },
+    { ...b, positions: new Float32Array(), indices: new Uint32Array(), translation: { x: 0.75, y: 0, z: 0 } },
+  );
+  const points = pathPoints(translated.curvePaths![0]);
+  expect(points.length).toBeGreaterThan(1);
+  for (const p of points) { expect(p.x).toBeCloseTo(0.75); expect(p.z).toBeCloseTo(0.5); }
+  const replaced = intersectSurfaceMeshes({ ...a, cacheKey: 'cache-a:2', translation: { x: 0, y: 0, z: 10 } }, b);
+  expect(replaced.curvePaths).toHaveLength(0);
+});

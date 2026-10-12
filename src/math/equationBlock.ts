@@ -134,7 +134,7 @@ export function blockIdentifierCollector(definitions: readonly EquationDefinitio
   return collect;
 }
 
-/** Compute only definitions reachable from the plot, once each in a fresh sample's context. */
+/** Compute only definitions reachable from the plot, once each per sample in its reusable context. */
 export function compileBlockContext(ast: Expression, definitions: readonly EquationDefinition[]): (vars: EvalContext) => EvalContext {
   const needed = collectIdentifiers(ast);
   const active: EquationDefinition[] = [];

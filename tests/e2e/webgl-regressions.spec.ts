@@ -161,6 +161,9 @@ test.describe('WebGL Regressions', () => {
 
     await page.getByRole('button', { name: /Pinned Gizmo Curve/i }).click();
     await page.getByRole('button', { name: 'Appearance' }).click();
+    // The equation editor is loaded on first selection; wait for its final layout before sampling pixels.
+    await expect(page.locator('.cm-content')).toBeVisible();
+    await page.evaluate(() => document.fonts.ready.then(() => undefined));
     await page.waitForTimeout(150);
     const selectedGizmoCenter = await findPointLightGizmoCenter(page);
     const withSelectedOpaqueCurve = await readCanvasDiscPixels(page, selectedGizmoCenter);

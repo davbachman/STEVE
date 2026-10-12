@@ -36,6 +36,8 @@ Except for `Esc`, shortcuts apply when focus is not inside a text or number fiel
 | `Command/Ctrl` + `Shift` + `Z` | Redo |
 | `Command/Ctrl` + `Y` | Redo |
 
+One Undo step reverses a slider gesture or a short burst of equation typing. A pause in typing, leaving the editor, or another edit starts a new typing step.
+
 ---
 
 [Previous: Appearance, Lighting, and Scene Controls](appearance.md) · [Table of contents](../README.md#table-of-contents) · [Next: Files, Recovery, and Exports](files-and-exports.md)

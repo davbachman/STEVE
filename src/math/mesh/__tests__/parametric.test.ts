@@ -178,3 +178,22 @@ describe('discontinuity-aware curve sampling', () => {
     expect(mesh.curvePaths?.every((path) => path.length >= 6)).toBe(true);
   });
 });
+
+it('smooths both periodic torus seams, including their shared corner', () => {
+  const n = 25;
+  const mesh = buildSurfaceMesh({ uMin: 0, uMax: Math.PI*2, vMin: 0, vMax: Math.PI*2, uSamples: n, vSamples: n },
+    (u,v) => [(2+Math.cos(v))*Math.cos(u), (2+Math.cos(v))*Math.sin(u), Math.sin(v)]);
+  const normal = (i: number) => Array.from(mesh.normals!.slice(i*3, i*3+3));
+  for (let i = 0; i < n; i++) {
+    expect(normal(i*n)).toEqual(normal(i*n+n-1));
+    expect(normal(i)).toEqual(normal((n-1)*n+i));
+  }
+});
+
+it('preserves a crease where coincident boundaries have different tangent planes', () => {
+  const n = 25;
+  const mesh = buildSurfaceMesh({ uMin: -1, uMax: 1, vMin: 0, vMax: 1, uSamples: n, vSamples: n },
+    (u,v) => [1-u*u, u*(1-u*u), v]);
+  const normal = (i: number) => Array.from(mesh.normals!.slice(i*3, i*3+3));
+  expect(normal(12*n)).not.toEqual(normal(12*n+n-1));
+});

@@ -1,3 +1,4 @@
+import { useAppStore } from '../../state/store';
 import { useId, useMemo, useState } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { javascript } from '@codemirror/lang-javascript';
@@ -58,6 +59,7 @@ export function EquationEditor({ equation, onChange, job }: EquationEditorProps)
       <div id={contentId} className="equation-editor__content" hidden={collapsed}>
         <div className="equation-editor__input">
           <CodeMirror
+            onBlur={() => useAppStore.getState().endHistoryGroup()}
             value={source.rawText}
             minHeight="46px"
             theme="dark"

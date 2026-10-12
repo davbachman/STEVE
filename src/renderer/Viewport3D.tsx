@@ -22,6 +22,7 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const controllerRef = useRef<SceneController | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [graphicsStatus, setGraphicsStatus] = useState<string | null>(null);
   const [controllerReady, setControllerReady] = useState(false);
   const [hintVisible, setHintVisible] = useState(() => !readHintDismissed());
   const [objectDragging, setObjectDragging] = useState(false);
@@ -49,7 +50,7 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
     let disposed = false;
     let controller: SceneController;
     try {
-      controller = new SceneController(canvas, setObjectDragging);
+      controller = new SceneController(canvas, setObjectDragging, setGraphicsStatus);
     } catch (err) {
       // The controller is created only after the canvas mounts, so initialization failures surface here.
       setError(err instanceof Error ? err.message : 'Failed to initialize viewport');
@@ -152,6 +153,7 @@ export function Viewport3D({ onApiReady }: Viewport3DProps) {
       className={`viewport-shell${intersectionSourcePick || lightCurveSourcePick ? ' viewport-shell--surface-pick' : ''}`}
     >
       <canvas ref={canvasRef} className="viewport-canvas" aria-label="3D equation plot" />
+      {graphicsStatus ? <div className="viewport-overlay viewport-overlay--error" role="status"><p>{graphicsStatus}</p></div> : null}
       {!error && controllerReady && showingPreviousPlot ? (
         <div className="viewport-previous-plot" role="status">Showing last valid equation</div>
       ) : null}

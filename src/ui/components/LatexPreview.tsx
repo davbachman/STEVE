@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import katex from 'katex';
 
 interface LatexPreviewProps {
@@ -6,7 +7,7 @@ interface LatexPreviewProps {
   className?: string;
 }
 
-export function LatexPreview({ latex, fallbackText, className }: LatexPreviewProps) {
+export const LatexPreview = memo(function LatexPreview({ latex, fallbackText, className }: LatexPreviewProps) {
   let html = '';
   if (latex) {
     try {
@@ -21,4 +22,4 @@ export function LatexPreview({ latex, fallbackText, className }: LatexPreviewPro
       {html ? <div dangerouslySetInnerHTML={{ __html: html }} /> : <span className="latex-preview__fallback">{fallbackText ?? ''}</span>}
     </div>
   );
-}
+});

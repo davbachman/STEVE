@@ -339,6 +339,7 @@ export interface ParseClassifyResult {
 }
 
 export interface SurfaceMeshWorkerInput {
+  cacheKey?: string;
   positions: Float32Array;
   indices: Uint32Array;
   translation: Vec3;
@@ -360,6 +361,7 @@ export type WorkerRequest =
   | { type: 'build_implicit_mesh'; jobId: UUID; objectId: UUID; spec: ImplicitSurfaceSpec; priority: WorkerJobPriority }
   | {
       type: 'build_surface_intersection_mesh';
+      curveStyle?: { tubeRadius: number; renderAsTube: boolean };
       jobId: UUID;
       objectId: UUID;
       sourceA: SurfaceMeshWorkerInput;

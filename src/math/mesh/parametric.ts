@@ -179,6 +179,7 @@ export function buildSurfaceMesh(
   }
 
   const normals = computeVertexNormals(positions, indices);
+  smoothPeriodicNormals(positions, normals, used, uValues, vValues, fn);
   const edgeData = extractMeshEdges(positions, indices);
 
   const lines: Float32Array[] = [];
@@ -226,6 +227,54 @@ export function buildSurfaceMesh(
     featureEdges: edgeData.featureEdges,
     topology: edgeData.topology,
   };
+}
+
+/** Join normals only across matching boundaries whose one-sided tangent planes agree.
+ * Keep the duplicated positions/UVs and preserve intentional creases and discontinuities.
+ */
+function smoothPeriodicNormals(
+  positions: number[], normals: Float32Array, used: Uint8Array,
+  us: number[], vs: number[], fn: (u: number, v: number) => [number, number, number],
+): void {
+  const width = us.length;
+  const joined = new Set<number>();
+  const parent = Array.from({ length: used.length }, (_, i) => i);
+  const root = (i: number): number => { while (parent[i] !== i) i = parent[i]; return i; };
+  const epsU = (us[us.length - 1] - us[0]) * 1e-5;
+  const epsV = (vs[vs.length - 1] - vs[0]) * 1e-5;
+  const normalAt = (index: number): number[] => {
+    const u = us[index % width], v = vs[Math.floor(index / width)];
+    const u0 = Math.max(us[0], u - epsU), u1 = Math.min(us[us.length - 1], u + epsU);
+    const v0 = Math.max(vs[0], v - epsV), v1 = Math.min(vs[vs.length - 1], v + epsV);
+    const a = fn(u0, v), b = fn(u1, v), c = fn(u, v0), d = fn(u, v1);
+    const x = b.map((n, i) => n - a[i]), y = d.map((n, i) => n - c[i]);
+    const n = [x[1]*y[2]-x[2]*y[1], x[2]*y[0]-x[0]*y[2], x[0]*y[1]-x[1]*y[0]];
+    const length = Math.hypot(...n);
+    return n.map((value) => value / length);
+  };
+  const joinBoundary = (pairs: number[][]) => {
+    if (!pairs.every(([a, b]) => used[a] && used[b] && [0, 1, 2].every((axis) => {
+      const x = positions[3*a+axis], y = positions[3*b+axis];
+      return Math.abs(x-y) <= 1e-9 + 32 * Number.EPSILON * Math.max(Math.abs(x), Math.abs(y));
+    }))) return;
+    for (const [a,b] of pairs) {
+      const na = normalAt(a), nb = normalAt(b);
+      if (na.reduce((dot, n, i) => dot + n * nb[i], 0) > 0.9999) { parent[root(b)] = root(a); joined.add(a); joined.add(b); }
+    }
+  };
+  joinBoundary(vs.map((_, j) => [j*width, j*width+width-1]));
+  joinBoundary(us.map((_, i) => [i, (vs.length-1)*width+i]));
+  const sums = new Map<number, number[]>();
+  for (const i of joined) {
+    const r = root(i);
+    if (!sums.has(r)) sums.set(r, [0,0,0]);
+    const sum = sums.get(r)!;
+    for (let axis = 0; axis < 3; axis++) sum[axis] += normals[i*3+axis];
+  }
+  for (const i of joined) {
+    const sum = sums.get(root(i))!, length = Math.hypot(...sum);
+    if (length > 0) for (let axis = 0; axis < 3; axis++) normals[i*3+axis] = sum[axis]/length;
+  }
 }
 
 function buildAxisSampling(

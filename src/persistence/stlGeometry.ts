@@ -1,3 +1,4 @@
+import { buildCurveGeometry } from '../math/mesh/curveGeometry';
 import { buildSerializedPlotMesh } from '../math/mesh/plotMesh';
 import { intersectSurfaceMeshes } from '../math/mesh/surfaceIntersection';
 import { toPlotGeometry, type PlotGeometry } from '../renderer/plotGeometry';
@@ -31,5 +32,5 @@ export function buildStlExportGeometry(plot: RenderableObject, objects: SceneObj
     { positions: meshA.positions, indices: meshA.indices, translation: a.transform.position },
     { positions: meshB.positions, indices: meshB.indices, translation: b.transform.position },
   );
-  return toPlotGeometry(plot, mesh);
+  return toPlotGeometry(plot, buildCurveGeometry(mesh, plot.curveStyle));
 }

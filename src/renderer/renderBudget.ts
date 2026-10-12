@@ -47,3 +47,23 @@ export function resolvePngExportBudget(
 export function resolveShadowUpVector(direction: Vec3): [number, number, number] {
   return Math.abs(direction.z) > 0.99 ? [0, 1, 0] : [0, 0, 1];
 }
+
+/** Bound total capture working memory, including GPU targets, mipmaps and CPU
+ * readback/encoding copies. Reserve 256 MiB for shadows and 80 MiB for probes,
+ * fixed resources and the retained preview; spend the rest of 768 MiB on pixels.
+ * Geometry is retained, not duplicated by capture, and is outside this budget.
+ */
+export function resolvePngExportScale(
+  width: number, height: number, requestedScale: number, maxDimension: number,
+  effects: { hdr: boolean; bloom: boolean; refraction: boolean; selection: boolean; mirror: boolean },
+): number {
+  const color = effects.hdr ? 8 : 4;
+  const bytesPerPixel = color + 4 + 24
+    + (effects.bloom ? color / 2 : 0)
+    + (effects.refraction ? color * 4 / 3 : 0)
+    + (effects.selection ? 8 : 0)
+    + (effects.mirror ? color * 4 / 3 + 4 : 0);
+  const pixelBudget = (768 - 256 - 80) * 1024 * 1024 / bytesPerPixel;
+  return Math.max(1 / Math.max(width, height), Math.min(requestedScale,
+    maxDimension / Math.max(width, height), Math.sqrt(pixelBudget / Math.max(1, width * height))));
+}

@@ -69,6 +69,8 @@ interface AppStateShape {
   renderDiagnostics: RenderDiagnostics;
   plotJobs: Record<UUID, PlotJobStatus>;
   historyPast: HistorySnapshot[];
+  historyGroup?: { key: string; start: HistorySnapshot[] };
+  lastEquationEdit?: { id: UUID; time: number; history: HistorySnapshot[] };
   historyFuture: HistorySnapshot[];
   activeObjectDragHistory: {
     objectId: UUID;
@@ -90,6 +92,8 @@ interface AppStateShape {
 
 interface AppActions {
   setInspectorTab: (tab: AppState['ui']['inspectorTab']) => void;
+  beginHistoryGroup: (key: string) => void;
+  endHistoryGroup: () => void;
   selectObject: (id: UUID | null) => void;
   addPlot: (template?: 'curve' | 'graph' | 'surface' | 'implicit') => void;
   addIntersection: () => void;
@@ -201,6 +205,8 @@ function initialState(): AppStateShape {
     },
     renderDiagnostics: defaultRenderDiagnostics(),
     plotJobs: {},
+    historyGroup: undefined,
+    lastEquationEdit: undefined,
     historyPast: [],
     historyFuture: [],
     activeObjectDragHistory: null,
@@ -211,6 +217,11 @@ function initialState(): AppStateShape {
 
 // Each entry is a whole-document snapshot; bound retention during long sessions.
 const MAX_HISTORY_STEPS = 100;
+
+function historyForChange(state: AppStateShape): HistorySnapshot[] {
+  if (state.historyGroup && state.historyGroup.start !== state.historyPast) return state.historyPast;
+  return appendHistory(state.historyPast, snapshotOf(state));
+}
 
 function appendHistory(history: HistorySnapshot[], snapshot: HistorySnapshot): HistorySnapshot[] {
   return [...history.slice(-(MAX_HISTORY_STEPS - 1)), snapshot];
@@ -631,7 +642,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     },
   })),
 
+  beginHistoryGroup: (key) => set((state) => state.historyGroup?.key === key ? state : ({
+    historyGroup: { key, start: state.historyPast },
+  })),
+  endHistoryGroup: () => set({ historyGroup: undefined, lastEquationEdit: undefined }),
   selectObject: (id) => set((state) => ({
+    lastEquationEdit: undefined,
+    historyGroup: undefined,
     ...state,
     selectedId: id,
     ui: {
@@ -647,7 +664,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   addPlot: (template) =>
     set((state) => {
-      const past = appendHistory(state.historyPast, snapshotOf(state));
+      const past = historyForChange(state);
       const actualPlot =
         template === 'curve'
           ? createDefaultCurve(`Curve ${countPlotsByKind(state.objects, 'curve') + 1}`)
@@ -676,7 +693,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         objects: [...state.objects, intersection],
         selectedId: intersection.id,
         ui: { ...state.ui, inspectorTab: 'object', intersectionSourcePick: null, lightCurveSourcePick: null },
-        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+        historyPast: historyForChange(state),
         historyFuture: [],
       };
     }),
@@ -689,7 +706,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         objects: [...state.objects, light],
         selectedId: light.id,
         ui: { ...state.ui, intersectionSourcePick: null, lightCurveSourcePick: null },
-        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+        historyPast: historyForChange(state),
         historyFuture: [],
       };
     }),
@@ -702,7 +719,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         objects: [...state.objects, light],
         selectedId: light.id,
         ui: { ...state.ui, inspectorTab: 'object', intersectionSourcePick: null, lightCurveSourcePick: null },
-        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+        historyPast: historyForChange(state),
         historyFuture: [],
       };
     }),
@@ -763,7 +780,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         ...next,
         ui: clearsActivePick ? { ...next.ui, intersectionSourcePick: null } : next.ui,
-        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+        historyPast: historyForChange(state),
         historyFuture: [],
       };
     }),
@@ -792,7 +809,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           ...next.ui,
           lightCurveSourcePick: enabled ? next.ui.lightCurveSourcePick : null,
         },
-        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+        historyPast: historyForChange(state),
         historyFuture: [],
       };
     }),
@@ -848,7 +865,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         ...next,
         ui: clearsActivePick ? { ...next.ui, lightCurveSourcePick: null } : next.ui,
-        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+        historyPast: historyForChange(state),
         historyFuture: [],
       };
     }),
@@ -904,7 +921,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (state.activeLightCurveParameterDrag?.lightId === lightId) return next;
       return {
         ...next,
-        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+        historyPast: historyForChange(state),
         historyFuture: [],
       };
     }),
@@ -964,7 +981,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       return {
         ...next,
-        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+        historyPast: historyForChange(state),
         historyFuture: [],
       };
     }),
@@ -973,6 +990,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => {
       const idx = state.objects.findIndex((obj) => obj.id === id && obj.type === 'plot');
       if (idx === -1) return state;
+      if ((state.objects[idx] as PlotObject).equation.source.rawText === rawText) return state;
+      const time = Date.now();
+      const edit = state.lastEquationEdit;
+      const history = edit?.id === id && edit.history === state.historyPast && time - edit.time < 750
+        ? state.historyPast : historyForChange(state);
       const next = produce(state, (draft) => {
         const plot = draft.objects[idx] as PlotObject;
         plot.equation = coerceEquationSpec(plot.equation, rawText);
@@ -980,7 +1002,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       return {
         ...next,
         objects: clearInvalidIntersectionSources(next.objects, state.objects),
-        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+        historyPast: history,
+        lastEquationEdit: { id, time, history },
         historyFuture: [],
       };
     }),
@@ -1002,7 +1025,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       return {
         ...nextWithValidReferences,
-        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+        historyPast: historyForChange(state),
         historyFuture: [],
       };
     }),
@@ -1017,7 +1040,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       return {
         ...next,
-        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+        historyPast: historyForChange(state),
         historyFuture: [],
       };
     }),
@@ -1037,7 +1060,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       return {
         ...next,
-        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+        historyPast: historyForChange(state),
         historyFuture: [],
       };
     }),
@@ -1052,7 +1075,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       return {
         ...next,
-        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+        historyPast: historyForChange(state),
         historyFuture: [],
       };
     }),
@@ -1068,7 +1091,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       return {
         ...next,
-        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+        historyPast: historyForChange(state),
         historyFuture: [],
       };
     }),
@@ -1077,7 +1100,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({
       ...state,
       scene: { ...state.scene, ...patch },
-      historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+      historyPast: historyForChange(state),
       historyFuture: [],
     })),
 
@@ -1088,7 +1111,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => ({
       ...state,
       render: { ...state.render, ...patch },
-      historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+      historyPast: historyForChange(state),
       historyFuture: [],
     })),
 
@@ -1104,8 +1127,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       return {
         ...next,
-        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+        historyPast: historyForChange(state),
         historyFuture: [],
+        historyGroup: undefined,
+        lastEquationEdit: undefined,
         activeObjectDragHistory: null,
       };
     }),
@@ -1120,7 +1145,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       return {
         ...next,
-        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+        historyPast: historyForChange(state),
         historyFuture: [],
       };
     }),
@@ -1134,7 +1159,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       });
       return {
         ...next,
-        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+        historyPast: historyForChange(state),
         historyFuture: [],
       };
     }),
@@ -1198,6 +1223,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
       return {
         ...state,
+        historyGroup: undefined,
+        lastEquationEdit: undefined,
         activeObjectDragHistory: null,
         historyPast: appendHistory(state.historyPast, active.before),
         historyFuture: [],
@@ -1299,7 +1326,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         objects,
         selectedId: null,
         ui: { ...state.ui, intersectionSourcePick: null, lightCurveSourcePick: null },
-        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+        historyPast: historyForChange(state),
         historyFuture: [],
       };
     }),
@@ -1324,7 +1351,7 @@ export const useAppStore = create<AppState>((set, get) => ({
             ? null
             : state.ui.lightCurveSourcePick,
         },
-        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+        historyPast: historyForChange(state),
         historyFuture: [],
       };
     }),
@@ -1340,7 +1367,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...state,
         objects,
         selectedId: cloned.id,
-        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+        historyPast: historyForChange(state),
         historyFuture: [],
       };
     }),
@@ -1369,7 +1396,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...s,
         objects: clearInvalidIntersectionSources([...s.objects, cloned]),
         selectedId: cloned.id,
-        historyPast: appendHistory(s.historyPast, snapshotOf(s)),
+        historyPast: historyForChange(s),
         historyFuture: [],
       }));
     };
@@ -1423,6 +1450,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       selectedId: null,
       renderDiagnostics: defaultRenderDiagnostics(),
       plotJobs: {},
+      historyGroup: undefined,
+      lastEquationEdit: undefined,
       historyPast: [],
       historyFuture: [],
       activeObjectDragHistory: null,
@@ -1445,6 +1474,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         ui: { ...state.ui, intersectionSourcePick: null, lightCurveSourcePick: null },
         historyPast: state.historyPast.slice(0, -1),
         historyFuture: [snapshotOf(state), ...state.historyFuture.slice(0, MAX_HISTORY_STEPS - 1)],
+        historyGroup: undefined,
+        lastEquationEdit: undefined,
         activeObjectDragHistory: null,
         activeEquationParameterDrag: null,
         activeLightCurveParameterDrag: null,
@@ -1460,8 +1491,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...base,
         clipboardObject: state.clipboardObject,
         ui: { ...state.ui, intersectionSourcePick: null, lightCurveSourcePick: null },
-        historyPast: appendHistory(state.historyPast, snapshotOf(state)),
+        historyPast: historyForChange(state),
         historyFuture: state.historyFuture.slice(1),
+        historyGroup: undefined,
+        lastEquationEdit: undefined,
         activeObjectDragHistory: null,
         activeEquationParameterDrag: null,
         activeLightCurveParameterDrag: null,

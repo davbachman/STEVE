@@ -3,6 +3,7 @@ import { computeMeshBounds } from './geometry';
 
 /** A triangulated surface and the translation that places it in world space. */
 export interface SurfaceMeshInput {
+  cacheKey?: string;
   positions: Float32Array;
   indices: Uint32Array;
   translation: Vec3;
@@ -64,15 +65,13 @@ export function intersectSurfaceMeshes(
   a: SurfaceMeshInput,
   b: SurfaceMeshInput,
 ): SerializedMesh {
-  const trianglesA = buildTriangles(a);
-  const trianglesB = buildTriangles(b);
-  if (trianglesA.length === 0 || trianglesB.length === 0) {
-    return emptyIntersectionMesh();
-  }
-
-  const bvhA = buildBvh(trianglesA);
-  const bvhB = buildBvh(trianglesB);
-  const combinedBounds = unionBounds(bvhA.bounds, bvhB.bounds);
+  const bvhA = preparedSurface(a);
+  const bvhB = preparedSurface(b);
+  // Keep only this pair: bounded lifetime and no stale mesh versions retained.
+  for (const key of preparedSources.keys()) if (key !== a.cacheKey && key !== b.cacheKey) preparedSources.delete(key);
+  if (!bvhA || !bvhB) return emptyIntersectionMesh();
+  const offsetA = a.translation, offsetB = b.translation;
+  const combinedBounds = unionBounds(translatedBounds(bvhA.bounds, offsetA), translatedBounds(bvhB.bounds, offsetB));
   const scale = Math.max(
     combinedBounds.maxX - combinedBounds.minX,
     combinedBounds.maxY - combinedBounds.minY,
@@ -82,7 +81,7 @@ export function intersectSurfaceMeshes(
   const weldTolerance = Math.max(scale * 2e-7, 1e-9);
   const planeTolerance = Math.max(scale * 1e-9, 1e-11);
 
-  if (!boundsOverlap(bvhA.bounds, bvhB.bounds, weldTolerance)) {
+  if (!boundsOverlap(translatedBounds(bvhA.bounds, offsetA), translatedBounds(bvhB.bounds, offsetB), weldTolerance)) {
     return emptyIntersectionMesh();
   }
 
@@ -92,19 +91,19 @@ export function intersectSurfaceMeshes(
     const pair = pending.pop();
     if (!pair) break;
     const [nodeA, nodeB] = pair;
-    if (!boundsOverlap(nodeA.bounds, nodeB.bounds, weldTolerance)) {
+    if (!boundsOverlap(translatedBounds(nodeA.bounds, offsetA), translatedBounds(nodeB.bounds, offsetB), weldTolerance)) {
       continue;
     }
 
     if (nodeA.triangles && nodeB.triangles) {
       for (const triangleA of nodeA.triangles) {
         for (const triangleB of nodeB.triangles) {
-          if (!boundsOverlap(triangleA.bounds, triangleB.bounds, weldTolerance)) {
+          if (!boundsOverlap(translatedBounds(triangleA.bounds, offsetA), translatedBounds(triangleB.bounds, offsetB), weldTolerance)) {
             continue;
           }
           const segment = intersectTriangles(
-            triangleA,
-            triangleB,
+            translatedTriangle(triangleA, offsetA),
+            translatedTriangle(triangleB, offsetB),
             planeTolerance,
             weldTolerance,
           );
@@ -165,6 +164,25 @@ export function intersectSurfaceMeshes(
     featureEdges: new Float32Array(0),
     topology: emptyCurveTopology(),
   };
+}
+
+const preparedSources = new Map<string, BvhNode | null>();
+function preparedSurface(input: SurfaceMeshInput): BvhNode | null {
+  if (input.cacheKey && preparedSources.has(input.cacheKey)) return preparedSources.get(input.cacheKey)!;
+  const triangles = buildTriangles({ ...input, translation: { x: 0, y: 0, z: 0 } });
+  const bvh = triangles.length ? buildBvh(triangles) : null;
+  if (input.cacheKey) preparedSources.set(input.cacheKey, bvh);
+  return bvh;
+}
+function translatedBounds(bounds: Bounds, offset: Vec3): Bounds {
+  const x = finiteOrZero(offset.x), y = finiteOrZero(offset.y), z = finiteOrZero(offset.z);
+  return { minX: bounds.minX+x, minY: bounds.minY+y, minZ: bounds.minZ+z,
+    maxX: bounds.maxX+x, maxY: bounds.maxY+y, maxZ: bounds.maxZ+z };
+}
+function translatedTriangle(triangle: Triangle, offset: Vec3): Triangle {
+  const x = finiteOrZero(offset.x), y = finiteOrZero(offset.y), z = finiteOrZero(offset.z);
+  return { ...triangle, vertices: triangle.vertices.map((p) => ({ x: p.x+x, y: p.y+y, z: p.z+z })) as [Vec3, Vec3, Vec3],
+    bounds: translatedBounds(triangle.bounds, offset) };
 }
 
 function buildTriangles(input: SurfaceMeshInput): Triangle[] {

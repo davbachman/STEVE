@@ -21,7 +21,7 @@ Current product direction is interactive rendering only. The Babylon and legacy 
 - Interactive PBR materials, lighting, shadows, reflections (per-plot probes plus a planar ground mirror), and screen-space refraction
 - Object selection/dragging and inspector editing
 - Local save/load and PNG/STL export
-- Worker-based parse/meshing pipeline for responsiveness
+- Worker-based meshing (including curve tubes/ribbons), with one authoritative equation analysis for editor feedback
 
 ## Tech Stack
 - React + TypeScript + Vite
@@ -50,12 +50,12 @@ Current product direction is interactive rendering only. The Babylon and legacy 
     - `mesh/`: parametric and implicit meshing code
 
   - `workers/`
-    - `mathWorker.ts`: parse/classify worker
+    - `mathWorker.ts`: standalone parse/classify entry point (not launched by the active UI pipeline)
     - `meshWorker.ts`: meshing worker
     - `runtimeMeshCache.ts`: runtime mesh handoff cache
 
   - `hooks/`
-    - `useWorkerPipeline.ts`: parse/mesh job orchestration
+    - `useWorkerPipeline.ts`: mesh job orchestration and editor parse-status synchronization
     - `useParameterAnimation.ts`: rAF driver for animated equation constants
 
   - `renderer/`

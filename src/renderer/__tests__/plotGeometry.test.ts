@@ -1,3 +1,6 @@
+import { buildCurveGeometry } from '../../math/mesh/curveGeometry';
+import { buildSerializedPlotMesh } from '../../math/mesh/plotMesh';
+import { setRuntimePlotMesh, clearRuntimePlotMesh } from '../../workers/runtimeMeshCache';
 import { describe, expect, it } from 'vitest';
 import { createDefaultCurve, createDefaultIntersection } from '../../state/defaults';
 import type { SerializedMesh } from '../../types/contracts';
@@ -14,7 +17,11 @@ function intersectionCurveMesh(curvePaths: Float32Array[]): SerializedMesh {
 describe('plotGeometry', () => {
   it('builds curve tubes with outward-facing winding', () => {
     const curve = createDefaultCurve('Tube Curve');
+    expect(buildPlotGeometry(curve).indices.length).toBe(0);
+    setRuntimePlotMesh(curve.id, buildSerializedPlotMesh(curve));
     const geometry = buildPlotGeometry(curve);
+    clearRuntimePlotMesh(curve.id);
+    expect(geometry.indices.length).toBeGreaterThan(0);
 
     let inwardTriangles = 0;
     for (let i = 0; i + 2 < geometry.indices.length; i += 3) {
@@ -63,7 +70,7 @@ describe('plotGeometry', () => {
       0.5, 2, 1,
     ]);
 
-    const geometry = toPlotGeometry(intersection, intersectionCurveMesh([firstPath, secondPath]));
+    const geometry = toPlotGeometry(intersection, buildCurveGeometry(intersectionCurveMesh([firstPath, secondPath]), intersection.curveStyle));
 
     // Each three-point open path produces three 12-vertex rings, two cap
     // centers, and two ring-to-ring spans plus both cap fans.
@@ -84,7 +91,7 @@ describe('plotGeometry', () => {
       0, 0, 0,
     ]);
 
-    const geometry = toPlotGeometry(intersection, intersectionCurveMesh([closedSquare]));
+    const geometry = toPlotGeometry(intersection, buildCurveGeometry(intersectionCurveMesh([closedSquare]), intersection.curveStyle));
 
     // The repeated endpoint is removed. Four rings are joined cyclically;
     // there are no extra cap-center vertices and no open seam edges.

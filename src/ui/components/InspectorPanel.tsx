@@ -1334,12 +1334,15 @@ export function RangeField({
           value={value}
           disabled={disabled}
           onChange={(e) => {
-            onDragStart?.();
+            if (onDragStart) onDragStart();
+            else useAppStore.getState().beginHistoryGroup(`slider:${label}`);
             onChange(Number(e.target.value));
           }}
-          onPointerUp={onDragEnd}
-          onPointerCancel={onDragEnd}
-          onBlur={onDragEnd}
+          onKeyUp={() => { onDragEnd?.(); useAppStore.getState().endHistoryGroup(); }}
+          onPointerDown={(event) => event.currentTarget.setPointerCapture(event.pointerId)}
+          onPointerUp={() => { onDragEnd?.(); useAppStore.getState().endHistoryGroup(); }}
+          onPointerCancel={() => { onDragEnd?.(); useAppStore.getState().endHistoryGroup(); }}
+          onBlur={() => { onDragEnd?.(); useAppStore.getState().endHistoryGroup(); }}
         />
         <BoundEditingNumberInput
           value={value}

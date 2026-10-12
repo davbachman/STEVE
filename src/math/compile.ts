@@ -37,13 +37,22 @@ export function compilePlotObject(plot: PlotObject): CompiledPlot {
   return compileEquationSpec(plot.equation);
 }
 
+const programs = new Map<string, { parsed: ReturnType<typeof parseEquationBlock>; prepareContext: PrepareContext }>();
+
 export function compileEquationSpec(spec: EquationSpec): CompiledPlot {
-  const parsed = parseEquationBlock(spec.source.rawText);
+  let program = programs.get(spec.source.rawText);
+  if (!program) {
+    const parsed = parseEquationBlock(spec.source.rawText);
+    if (!parsed.ast || parsed.status === 'error') throw new Error(parsed.diagnostics[0]?.message ?? 'Invalid equation');
+    program = { parsed, prepareContext: compileBlockContext(parsed.ast, parsed.definitions) };
+    if (programs.size >= 64) programs.delete(programs.keys().next().value!);
+    programs.set(spec.source.rawText, program);
+  }
+  const { parsed, prepareContext } = program;
   if (!parsed.ast || parsed.status === 'error') {
     throw new Error(parsed.diagnostics[0]?.message ?? 'Invalid equation');
   }
 
-  const prepareContext = compileBlockContext(parsed.ast, parsed.definitions);
   switch (spec.kind) {
     case 'parametric_curve':
       return {
@@ -83,7 +92,7 @@ export function expandEquationSpecVariants(spec: EquationSpec): EquationSpec[] {
 function compileCurveFunction(_spec: ParametricCurveSpec, ast: Expression, prepareContext: PrepareContext): (t: number) => [number, number, number] {
   const tuple = compileTuple3(ast);
   const parameterVars = equationParameterContext(_spec.parameters);
-  return (t) => tuple(prepareContext({ ...parameterVars, t }));
+  return (t) => { parameterVars.t = t; return tuple(prepareContext(parameterVars)); };
 }
 
 function compileParametricSurfaceFunction(
@@ -93,7 +102,7 @@ function compileParametricSurfaceFunction(
 ): (u: number, v: number) => [number, number, number] {
   const tuple = compileTuple3(ast);
   const parameterVars = equationParameterContext(_spec.parameters);
-  return (u, v) => tuple(prepareContext({ ...parameterVars, u, v }));
+  return (u, v) => { parameterVars.u = u; parameterVars.v = v; return tuple(prepareContext(parameterVars)); };
 }
 
 function compileExplicitSurfaceFunction(
@@ -112,11 +121,9 @@ function compileExplicitSurfaceFunction(
   const parameterVars = equationParameterContext(spec.parameters);
   return (u, v) => {
     const [a1, a2] = spec.domainAxes;
-    const vars: Record<string, number> = {
-      ...parameterVars,
-      [a1]: u,
-      [a2]: v,
-    };
+    const vars = parameterVars;
+    vars[a1] = u;
+    vars[a2] = v;
     const solved = rhs(prepareContext(vars));
 
     if (spec.solvedAxis === 'x') {
@@ -137,5 +144,5 @@ function compileImplicitSurfaceFunction(
   const normalized = normalizeEqualityToImplicit(ast);
   const scalar = compileNumericExpression(normalized);
   const parameterVars = equationParameterContext(spec.parameters);
-  return (x, y, z) => scalar(prepareContext({ ...parameterVars, x, y, z }));
+  return (x, y, z) => { parameterVars.x = x; parameterVars.y = y; parameterVars.z = z; return scalar(prepareContext(parameterVars)); };
 }

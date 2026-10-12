@@ -1,7 +1,8 @@
+import type { PlotGeometry } from '../plotGeometry';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mat4, vec3 } from 'gl-matrix';
 import { SceneController } from '../SceneController';
-import { resolveInteractiveRenderBudget, resolvePngExportBudget, resolveShadowUpVector, type RenderBudget } from '../renderBudget';
+import { resolveInteractiveRenderBudget, resolvePngExportBudget, resolvePngExportScale, resolveShadowUpVector, type RenderBudget } from '../renderBudget';
 import { createRendererSceneSnapshot, type RendererSceneSnapshot } from '../renderSnapshot';
 import { createDefaultGraph, createDirectionalLight, createPointLight, defaultRenderSettings, defaultSceneSettings } from '../../state/defaults';
 import type { CameraState } from '../../types/contracts';
@@ -26,6 +27,12 @@ function mockGl() {
     bindTexture: vi.fn(),
     texImage2D: vi.fn(),
     texParameteri: vi.fn(),
+    generateMipmap: vi.fn(),
+    createBuffer: vi.fn(() => ({ id: ++id })),
+    createVertexArray: vi.fn(() => ({ id: ++id })),
+    bindBuffer: vi.fn(), bindVertexArray: vi.fn(), bufferData: vi.fn(), bufferSubData: vi.fn(),
+    enableVertexAttribArray: vi.fn(), vertexAttribPointer: vi.fn(),
+    deleteBuffer: vi.fn(), deleteVertexArray: vi.fn(),
     drawBuffers: vi.fn(),
     readBuffer: vi.fn(),
   };
@@ -34,6 +41,7 @@ function mockGl() {
 type ControllerInternals = {
   gl: WebGL2RenderingContext;
   renderPrograms: object;
+  maxFragmentTextureUnits: number;
   latestSnapshot: RendererSceneSnapshot;
   pendingProbeRefresh: boolean;
   pngExportBudget: RenderBudget | null;
@@ -189,8 +197,11 @@ describe('render invalidation and saved camera', () => {
     const { internal } = controllerFixture();
     const object = createDefaultGraph();
     const light = createDirectionalLight();
+    internal.maxFragmentTextureUnits = 16;
+    const pointA = createPointLight(), pointB = createPointLight();
+    pointA.castShadows = pointB.castShadows = true;
     internal.latestSnapshot = createRendererSceneSnapshot({
-      scene: defaultSceneSettings(), render: defaultRenderSettings(), objects: [object, light],
+      scene: defaultSceneSettings(), render: defaultRenderSettings(), objects: [object, light, pointA, pointB],
       selectedId: null, plotJobs: {},
     }, null);
     internal.renderPrograms = {};
@@ -217,6 +228,15 @@ describe('render invalidation and saved camera', () => {
     expect(stubs.renderDirectionalShadowMaps).toHaveBeenCalledTimes(1);
     internal.latestSnapshot.plots[0].meshVersion += 1;
     internal.renderScene();
+    expect(stubs.renderDirectionalShadowMaps).toHaveBeenCalledTimes(2);
+    object.material.roughness = 0.83;
+    internal.renderScene();
+    expect(stubs.renderDirectionalShadowMaps).toHaveBeenCalledTimes(2);
+    const pointCalls = stubs.renderPointShadowMaps.mock.calls.length;
+    pointA.position.x += 1;
+    internal.renderScene();
+    expect(stubs.renderPointShadowMaps).toHaveBeenCalledTimes(pointCalls + 1);
+    expect(stubs.renderPointShadowMaps.mock.lastCall?.[1][0].light.id).toBe(pointA.id);
     expect(stubs.renderDirectionalShadowMaps).toHaveBeenCalledTimes(2);
     object.castShadows = false;
     internal.renderScene();
@@ -353,4 +373,75 @@ describe('PNG export quality', () => {
     expect(internal.pngExportBudget).toBeNull();
     expect(internal.latestSnapshot.render.interactiveQuality).toBe('balanced');
   });
+});
+
+
+describe('capture memory and optional effects', () => {
+  it('keeps small 4x exports and reduces oversized captures using the active effects', () => {
+    const effects = { hdr: true, bloom: true, refraction: true, selection: true, mirror: true };
+    expect(resolvePngExportScale(300, 200, 4, 8192, effects)).toBe(4);
+    const heavy = resolvePngExportScale(3840, 2160, 4, 8192, effects);
+    const simple = resolvePngExportScale(3840, 2160, 4, 8192, { hdr: false, bloom: false, refraction: false, selection: false, mirror: false });
+    expect(heavy).toBeLessThan(simple);
+    expect(3840 * heavy).toBeLessThan(8192);
+    expect(resolvePngExportScale(10000, 10000, 1, 8192, effects)).toBeLessThan(1);
+  });
+
+  it('allocates and releases refraction, bloom and selection independently', () => {
+    const { gl, controller, internal } = controllerFixture();
+    const object = createDefaultGraph();
+    object.material.refractionEnabled = false;
+    internal.latestSnapshot = createRendererSceneSnapshot({
+      scene: defaultSceneSettings(), render: { ...defaultRenderSettings(), bloomEnabled: false },
+      objects: [object], selectedId: null, plotJobs: {},
+    }, null);
+    const target = controller as unknown as {
+      renderTargets: { width: number; height: number; sceneColor: unknown; refractionTexture: unknown; bloomTextureA: unknown; maskTexture: unknown };
+      ensureOptionalRenderTargets: () => void;
+    };
+    target.renderTargets.width = 100; target.renderTargets.height = 100;
+    const sceneColor = target.renderTargets.sceneColor = {};
+    target.ensureOptionalRenderTargets(); expect(gl.createTexture).not.toHaveBeenCalled();
+    object.material.refractionEnabled = true; object.material.opacity = 0.5;
+    target.ensureOptionalRenderTargets(); expect(target.renderTargets.refractionTexture).not.toBeNull();
+    expect(gl.createTexture).toHaveBeenCalledTimes(1);
+    internal.latestSnapshot.render.bloomEnabled = true;
+    internal.latestSnapshot.selectedId = object.id;
+    target.ensureOptionalRenderTargets(); expect(gl.createTexture).toHaveBeenCalledTimes(5);
+    target.ensureOptionalRenderTargets(); expect(gl.createTexture).toHaveBeenCalledTimes(5);
+    object.material.refractionEnabled = false;
+    internal.latestSnapshot.render.bloomEnabled = false; internal.latestSnapshot.selectedId = null;
+    target.ensureOptionalRenderTargets(); expect(gl.deleteTexture).toHaveBeenCalledTimes(5);
+    expect(target.renderTargets.sceneColor).toBe(sceneColor);
+  });
+});
+
+
+it('retains mesh handles and capacity across animation updates and topology changes', () => {
+  const { gl, controller } = controllerFixture();
+  const internal = controller as unknown as {
+    createPlotBuffers: (mesh: PlotGeometry) => { indexCount: number };
+    updatePlotBuffers: (buffers: { indexCount: number }, mesh: PlotGeometry) => unknown;
+    disposePlotBuffers: (buffers: { indexCount: number }) => void;
+  };
+  const mesh: PlotGeometry = {
+    positions: new Float32Array([0,0,0, 1,0,0, 0,1,0]),
+    normals: new Float32Array([0,0,1, 0,0,1, 0,0,1]), indices: new Uint32Array([0,1,2]),
+    bounds: { min: {x:0,y:0,z:0}, max: {x:1,y:1,z:0}, center: {x:0.5,y:0.5,z:0}, radius: 1 },
+    boundaryEdges: new Float32Array(), featureEdges: new Float32Array(), wireLines: [], curvePath: null,
+    topology: { isClosedManifold: false, hasBoundaryEdges: true, hasFeatureEdges: false, boundaryEdgeCount: 3, featureEdgeCount: 0 },
+  };
+  const buffers = internal.createPlotBuffers(mesh);
+  expect(gl.createBuffer).toHaveBeenCalledTimes(3);
+  expect(gl.bufferData).toHaveBeenCalledTimes(3);
+  const moved = { ...mesh, positions: new Float32Array([0,0,1, 1,0,1, 0,1,1]) };
+  expect(internal.updatePlotBuffers(buffers, moved)).toBe(buffers);
+  expect(gl.bufferSubData).toHaveBeenCalledTimes(3);
+  expect(gl.bufferData).toHaveBeenCalledTimes(3);
+  internal.updatePlotBuffers(buffers, { ...moved, indices: new Uint32Array([2,1,0, 0,1,2]) });
+  expect(buffers.indexCount).toBe(6);
+  expect(gl.bufferData).toHaveBeenCalledTimes(4);
+  expect(gl.createBuffer).toHaveBeenCalledTimes(3);
+  internal.disposePlotBuffers(buffers);
+  expect(gl.deleteBuffer).toHaveBeenCalledTimes(3);
 });
